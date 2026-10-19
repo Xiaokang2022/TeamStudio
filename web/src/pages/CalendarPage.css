@@ -4,6 +4,18 @@
    Uses shared tokens/classes from styles.css.
    ============================================================ */
 
+/* Out-of-month cells are tinted a step darker than the current month so the
+   boundary between months reads immediately in both themes. */
+:root {
+  --cal-outside-bg: color-mix(in srgb, var(--surface-3) 68%, var(--surface));
+  --cal-outside-weekend-bg: color-mix(in srgb, var(--surface-3) 84%, var(--surface));
+}
+
+:root[data-theme="dark"] {
+  --cal-outside-bg: color-mix(in srgb, var(--surface-3) 72%, var(--surface));
+  --cal-outside-weekend-bg: color-mix(in srgb, var(--surface-3) 90%, var(--surface));
+}
+
 .cal-page {
   display: flex;
   flex-direction: column;
@@ -143,16 +155,16 @@
 }
 
 .cal-cell.is-outside {
-  background: color-mix(in srgb, var(--surface-2) 62%, var(--surface));
+  background: var(--cal-outside-bg);
 }
 
 .cal-cell.is-outside .cal-day-number {
   color: var(--text-3);
-  opacity: 0.7;
+  opacity: 0.62;
 }
 
 .cal-cell.is-outside .cal-chip {
-  opacity: 0.55;
+  opacity: 0.5;
 }
 
 .cal-cell.is-weekend {
@@ -160,7 +172,7 @@
 }
 
 .cal-cell.is-weekend.is-outside {
-  background: color-mix(in srgb, var(--surface-2) 74%, var(--surface));
+  background: var(--cal-outside-weekend-bg);
 }
 
 .cal-cell.is-selected {

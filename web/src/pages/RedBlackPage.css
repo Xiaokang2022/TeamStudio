@@ -202,11 +202,11 @@
 /* Column headers use a flat tint: light red for the red board, light grey for
    the black board, with deeper tones in the dark theme. */
 .rb-column-red .rb-column-head {
-  background: color-mix(in srgb, var(--red) 10%, var(--surface));
+  background: color-mix(in srgb, var(--red) 14%, var(--surface));
 }
 
 .rb-column-black .rb-column-head {
-  background: color-mix(in srgb, var(--text) 6%, var(--surface));
+  background: color-mix(in srgb, var(--text) 9%, var(--surface));
 }
 
 :root[data-theme="dark"] .rb-column-red .rb-column-head {
