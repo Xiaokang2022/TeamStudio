@@ -1987,6 +1987,84 @@ ol {
   box-shadow: var(--shadow-sm);
 }
 
+/* Shared motion for segmented / pill controls across pages. */
+.segmented button,
+.ins-range-btn,
+.scope-option,
+.tasks-range-btn,
+.tasks-seg,
+.tasks-health-btn,
+.tasks-priority-btn,
+.tasks-tag-filter,
+.td-priority button,
+.tasks-dialog-choices button,
+.tasks-dialog-health button,
+.tasks-dialog-levels button {
+  transition:
+    background-color 0.18s var(--ease),
+    color 0.18s var(--ease),
+    border-color 0.18s var(--ease),
+    box-shadow 0.18s var(--ease),
+    transform 0.18s var(--ease);
+}
+
+.segmented button:active,
+.ins-range-btn:active,
+.scope-option:active,
+.tasks-range-btn:active,
+.tasks-seg:active,
+.tasks-health-btn:active,
+.tasks-priority-btn:active,
+.tasks-tag-filter:active {
+  transform: scale(0.96);
+}
+
+.segmented button.active,
+.ins-range-btn.active,
+.scope-option.is-active,
+.tasks-range-btn.active,
+.tasks-seg.active,
+.tasks-health-btn.active,
+.tasks-priority-btn.active,
+.tasks-tag-filter.active {
+  animation: seg-pop 0.24s var(--ease);
+}
+
+@keyframes seg-pop {
+  0% {
+    transform: scale(0.94);
+  }
+  62% {
+    transform: scale(1.035);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* Content entrance for lists that remount when a view/filter/period changes. */
+.links-grid,
+.ann-list,
+.mx-table-wrap,
+.mx-cards,
+.mx-network,
+.cal-grid,
+.cal-side,
+.rb-columns {
+  animation: content-in 0.32s var(--ease) backwards;
+}
+
+@keyframes content-in {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .toolbar {
   display: flex;
   align-items: center;

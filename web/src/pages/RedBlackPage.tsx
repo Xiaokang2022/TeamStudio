@@ -624,7 +624,7 @@ export default function RedBlackPage() {
               }
             />
           ) : (
-            <div className="rb-columns">
+            <div className="rb-columns" key={month}>
               <BoardColumn
                 side="red"
                 label={redLabel}

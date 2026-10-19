@@ -15,7 +15,6 @@ import {
   CalendarDays,
   CheckCircle2,
   Clock,
-  Gauge,
   Layers3,
   ListTodo,
   Megaphone,
@@ -177,7 +176,6 @@ export default function OverviewPage() {
   const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
 
   const workloads = useMemo(() => overview?.workloads ?? [], [overview?.workloads]);
-  const workloadSummary = overview?.workloadSummary ?? null;
   const workloadByMember = useMemo(
     () => new Map(workloads.map((workload) => [workload.memberId, workload])),
     [workloads],
@@ -554,7 +552,7 @@ export default function OverviewPage() {
                   ? WORKLOAD_LEVEL_META[workloadLevel(memberWorkload.currentLoadPercent)] ??
                     WORKLOAD_LEVEL_META.balanced
                   : null;
-                const visibleWorks = member.currentWorks.slice(0, 3);
+                const visibleWorks = member.currentWorks.slice(0, 1);
                 const hiddenWorkCount = Math.max(0, member.currentWorks.length - visibleWorks.length);
                 return (
                   <article
@@ -597,7 +595,7 @@ export default function OverviewPage() {
 
                     {member.tags.length ? (
                       <div className="tag-list ov-member-tags">
-                        {member.tags.slice(0, 4).map((tag) => (
+                        {member.tags.slice(0, 2).map((tag) => (
                           <span className="chip" key={tag}>
                             #{tag}
                           </span>
@@ -808,88 +806,6 @@ export default function OverviewPage() {
             <button className="btn btn-secondary btn-sm" onClick={() => navigate("calendar")}>
               打开
             </button>
-          </section>
-
-          <section className="panel ov-workload-panel" aria-labelledby="ov-workload-title">
-            <header className="panel-header">
-              <h2 id="ov-workload-title">
-                <Gauge size={15} /> 工作量负载
-              </h2>
-              <button type="button" className="section-link" onClick={() => navigate("tasks")}>
-                任务总览 <ArrowRight size={12} />
-              </button>
-            </header>
-            <div className="panel-body">
-              {loading && !overview ? (
-                <LoadingBlock label="加载负载数据…" rows={3} />
-              ) : workloads.length ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  {workloads.map((workload) => {
-                    const meta =
-                      WORKLOAD_LEVEL_META[workloadLevel(workload.currentLoadPercent)] ??
-                      WORKLOAD_LEVEL_META.balanced;
-                    return (
-                      <div className="workload" key={workload.memberId}>
-                        <div className="workload-head">
-                          <span className="workload-title">{workload.memberName}</span>
-                          <span className={cn("load-pill", meta.className)}>
-                            {meta.label} · {formatPercent(workload.currentLoadPercent)}
-                          </span>
-                        </div>
-                        <div
-                          className="workload-bar"
-                          role="img"
-                          aria-label={`${workload.memberName} 当前负载 ${formatPercent(workload.currentLoadPercent)}`}
-                        >
-                          <span
-                            className={cn("workload-fill", meta.className)}
-                            style={{
-                              width: `${Math.min(100, Math.max(0, workload.currentLoadPercent))}%`,
-                            }}
-                          />
-                        </div>
-                        <div className="workload-meta">
-                          <span>
-                            {workload.openTasks} 项未完成 ·{" "}
-                            {formatPoints(workload.currentPoints)} /{" "}
-                            {formatPoints(workload.capacityPoints)}
-                          </span>
-                          <span>
-                            近 {workload.windowWeeks} 周平均{" "}
-                            {formatPoints(workload.averagePoints)} ·{" "}
-                            {formatPercent(workload.averageLoadPercent)}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <EmptyState
-                  compact
-                  title="还没有负载数据"
-                  description="成员登记任务后，这里会显示当前负载与近 4 周平均。"
-                />
-              )}
-              {workloadSummary ? (
-                <div
-                  className="workload-meta"
-                  style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--border)" }}
-                >
-                  <span>
-                    <Gauge size={12} /> 团队平均负载{" "}
-                    {formatPercent(workloadSummary.averageLoadPercent)} · 人均{" "}
-                    {formatPoints(workloadSummary.averagePoints)}
-                  </span>
-                  <span>
-                    当前合计 {formatPoints(workloadSummary.currentPoints)} · 周容量{" "}
-                    {formatPoints(
-                      workloadSummary.capacityPoints * Math.max(1, workloadSummary.members),
-                    )}
-                  </span>
-                </div>
-              ) : null}
-            </div>
           </section>
 
           {me?.source === "guest" ? (

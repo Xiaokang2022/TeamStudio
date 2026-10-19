@@ -1,0 +1,23 @@
+﻿import { chromium } from "playwright";
+const BASE = "http://127.0.0.1:5173";
+const browser = await chromium.launch({ channel: "msedge", headless: true });
+const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+await ctx.addInitScript(() => { localStorage.setItem("teamstudio.theme", "light"); localStorage.setItem("teamstudio.scope", "group"); });
+const page = await ctx.newPage();
+const errors = []; page.on("console", m => m.type()==="error" && errors.push(m.text())); page.on("pageerror", e=>errors.push(String(e)));
+await page.goto(`${BASE}/#/overview`, { waitUntil: "networkidle" });
+await page.waitForTimeout(1500);
+await page.screenshot({ path: "../artifacts/v2-overview-full.png", fullPage: true, animations: "disabled" });
+const cards = await page.evaluate(() => [...document.querySelectorAll(".ov-member-card")].map(el => {
+  const r = el.getBoundingClientRect();
+  return { h: Math.round(r.height), w: Math.round(r.width), overflow: el.scrollHeight > el.clientHeight + 2, text: el.innerText.slice(0, 60).replace(/\n/g, "|") };
+}));
+console.log(JSON.stringify(cards));
+const mob = await browser.newContext({ viewport: { width: 390, height: 844 } });
+await mob.addInitScript(() => { localStorage.setItem("teamstudio.theme", "light"); localStorage.setItem("teamstudio.scope", "group"); });
+const mp = await mob.newPage();
+await mp.goto(`${BASE}/#/overview`, { waitUntil: "networkidle" });
+await mp.waitForTimeout(900);
+await mp.screenshot({ path: "../artifacts/v2-overview-mobile-full.png", fullPage: true, animations: "disabled" });
+console.log("ERRORS", JSON.stringify(errors.slice(0,5)));
+await browser.close();

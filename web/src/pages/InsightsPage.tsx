@@ -11,7 +11,16 @@
  * follows the sidebar scope switcher and displays the scope badge returned by
  * the API (falling back to `scopeLabel` while the payload loads).
  */
-import { useCallback, useEffect, useMemo, useState, type ComponentType, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentType,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   ArrowDown,
@@ -175,9 +184,9 @@ function SortableTable<T>({
             })}
           </tr>
         </thead>
-        <tbody>
-          {sorted.map((row) => (
-            <tr key={rowKey(row)}>
+        <tbody key={`${sort.key}-${sort.direction}-${rows.length}`}>
+          {sorted.map((row, index) => (
+            <tr key={rowKey(row)} style={{ "--row-i": index } as CSSProperties}>
               {columns.map((column) => (
                 <td key={column.key} className={cn(column.numeric && "is-numeric")}>
                   {column.render ? column.render(row) : column.value(row)}
@@ -243,10 +252,14 @@ type KpiItem = {
 function KpiStrip({ kpis }: { kpis: KpiItem[] }) {
   return (
     <div className="ins-kpis">
-      {kpis.map((kpi) => {
+      {kpis.map((kpi, index) => {
         const Icon = kpi.icon;
         return (
-          <article className={cn("ins-kpi", `is-${kpi.tone}`)} key={kpi.key}>
+          <article
+            className={cn("ins-kpi", `is-${kpi.tone}`)}
+            key={kpi.key}
+            style={{ "--kpi-i": index } as CSSProperties}
+          >
             <div className="ins-kpi-top">
               <span className="ins-kpi-icon">
                 <Icon size={15} />
@@ -280,6 +293,11 @@ export default function InsightsPage() {
   const [memberSort, setMemberSort] = useState<SortState>({ key: "tasks", direction: "desc" });
   const [groupSort, setGroupSort] = useState<SortState>({ key: "tasks", direction: "desc" });
   const [teamSort, setTeamSort] = useState<SortState>({ key: "tasks", direction: "desc" });
+  const [chartTip, setChartTip] = useState<{
+    bucket: InsightsData["trend"]["buckets"][number];
+    x: number;
+    y: number;
+  } | null>(null);
 
   const range = useMemo(
     () => INSIGHTS_RANGES.find((option) => option.key === rangeKey) ?? INSIGHTS_RANGES[2],
@@ -328,6 +346,33 @@ export default function InsightsPage() {
       Math.max(1, ...buckets.flatMap((bucket) => [bucket.created, bucket.completed, bucket.todos])),
     [buckets],
   );
+
+  // Floating tooltip: rendered in a portal so the chart scroller / panel overflow
+  // can never clip it. Position is fixed above the hovered column.
+  const showChartTip = useCallback(
+    (
+      element: HTMLElement,
+      bucket: InsightsData["trend"]["buckets"][number],
+    ) => {
+      const rect = element.getBoundingClientRect();
+      const half = 76;
+      const x = Math.min(window.innerWidth - half, Math.max(half, rect.left + rect.width / 2));
+      const y = Math.max(10, rect.top - 6);
+      setChartTip({ bucket, x, y });
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!chartTip) return;
+    const hide = () => setChartTip(null);
+    window.addEventListener("scroll", hide, true);
+    window.addEventListener("resize", hide);
+    return () => {
+      window.removeEventListener("scroll", hide, true);
+      window.removeEventListener("resize", hide);
+    };
+  }, [chartTip]);
 
   const isEmpty = useMemo(() => {
     if (!payload) return false;
@@ -803,7 +848,10 @@ export default function InsightsPage() {
                     <span />
                     <span />
                   </div>
-                  <div className="ins-chart-cols">
+                  <div
+                    className="ins-chart-cols"
+                    key={`${range.key}-${buckets.length}-${buckets[0]?.start ?? ""}`}
+                  >
                     {buckets.map((bucket, index) => {
                       const created = Math.max(0, bucket.created);
                       const completed = Math.max(0, bucket.completed);
@@ -814,8 +862,13 @@ export default function InsightsPage() {
                         <div
                           key={`${bucket.start}-${index}`}
                           className="ins-chart-col"
+                          style={{ "--bucket-i": index } as CSSProperties}
                           tabIndex={0}
                           aria-label={`${bucket.label}：新建任务 ${created}，完成任务 ${completed}，新建待办 ${todos}`}
+                          onPointerEnter={(event) => showChartTip(event.currentTarget, bucket)}
+                          onPointerLeave={() => setChartTip(null)}
+                          onFocus={(event) => showChartTip(event.currentTarget, bucket)}
+                          onBlur={() => setChartTip(null)}
                         >
                           <div className="ins-chart-bars">
                             <i
@@ -832,18 +885,6 @@ export default function InsightsPage() {
                             />
                           </div>
                           <span className="ins-chart-label">{bucket.label}</span>
-                          <span className="ins-chart-tip" role="tooltip">
-                            <strong>{bucket.label}</strong>
-                            <span>
-                              <i className="is-created" /> 新建任务 <b>{created}</b>
-                            </span>
-                            <span>
-                              <i className="is-completed" /> 完成任务 <b>{completed}</b>
-                            </span>
-                            <span>
-                              <i className="is-todos" /> 新建待办 <b>{todos}</b>
-                            </span>
-                          </span>
                         </div>
                       );
                     })}
@@ -942,6 +983,27 @@ export default function InsightsPage() {
     <div className="insights-page">
       {header}
       {body}
+      {chartTip
+        ? createPortal(
+            <div
+              className="ins-chart-tip is-floating"
+              role="tooltip"
+              style={{ left: chartTip.x, top: chartTip.y }}
+            >
+              <strong>{chartTip.bucket.label}</strong>
+              <span>
+                <i className="is-created" /> 新建任务 <b>{chartTip.bucket.created}</b>
+              </span>
+              <span>
+                <i className="is-completed" /> 完成任务 <b>{chartTip.bucket.completed}</b>
+              </span>
+              <span>
+                <i className="is-todos" /> 新建待办 <b>{chartTip.bucket.todos}</b>
+              </span>
+            </div>,
+            document.body,
+          )
+        : null}
       <p className="ins-page-note">
         <ChartNoAxesColumn size={12} /> 完成率 = 已完成任务 / 范围内任务；待办完成率 = 已完成待办 /
         范围内待办。数据随浏览视角「{scopeLabelText}」与时间范围「{range.label}」变化

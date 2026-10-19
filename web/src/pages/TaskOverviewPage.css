@@ -1648,3 +1648,110 @@
     display: none;
   }
 }
+
+/* Member filter uses the same self-drawn Select as the rest of the app. */
+.tasks-filter-select.tasks-filter-select-custom {
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  gap: 6px;
+}
+
+.tasks-filter-select-custom > svg {
+  flex: none;
+  color: var(--text-3);
+}
+
+.tasks-filter-select-custom .ts-select {
+  width: 158px;
+}
+
+.tasks-filter-select-custom .ts-select-trigger {
+  min-height: 34px;
+  border-radius: 10px;
+  border-color: var(--border);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* ---- Shared motion: segmented controls + list refresh ---- */
+.tasks-range-btn,
+.tasks-seg,
+.tasks-health-btn,
+.tasks-priority-btn,
+.tasks-tag-filter,
+.ins-range-btn,
+.td-priority button,
+.tasks-dialog-choices button,
+.tasks-dialog-health button,
+.tasks-dialog-levels button,
+.scope-option {
+  transition:
+    background-color 0.18s var(--ease),
+    color 0.18s var(--ease),
+    border-color 0.18s var(--ease),
+    box-shadow 0.18s var(--ease),
+    transform 0.18s var(--ease);
+}
+
+.tasks-range-btn:active,
+.tasks-seg:active,
+.tasks-health-btn:active,
+.tasks-priority-btn:active,
+.tasks-tag-filter:active,
+.ins-range-btn:active,
+.scope-option:active {
+  transform: scale(0.96);
+}
+
+.tasks-range-btn.active,
+.tasks-seg.active,
+.tasks-health-btn.active,
+.tasks-priority-btn.active,
+.tasks-tag-filter.active {
+  animation: seg-pop 0.24s var(--ease);
+}
+
+@keyframes seg-pop {
+  0% {
+    transform: scale(0.94);
+  }
+  62% {
+    transform: scale(1.035);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* Filter/range/sort changes remount the keyed table body so rows can re-enter. */
+.tasks-table tbody tr,
+.tasks-card {
+  animation: list-row-in 0.3s var(--ease) backwards;
+  animation-delay: calc(var(--row-i, 0) * 14ms);
+}
+
+@keyframes list-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tasks-range-btn,
+  .tasks-seg,
+  .tasks-health-btn,
+  .tasks-priority-btn,
+  .tasks-tag-filter,
+  .tasks-table tbody tr,
+  .tasks-card {
+    animation: none !important;
+    transition: none !important;
+  }
+}

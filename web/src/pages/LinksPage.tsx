@@ -393,7 +393,7 @@ export default function LinksPage() {
           }
         />
       ) : (
-        <div className="links-grid">
+        <div className="links-grid" key={`${activeCategory}|${query}|${filtered.length}`}>
           {filtered.map((link) => (
             <article
               className="links-card"

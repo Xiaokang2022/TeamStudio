@@ -166,7 +166,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
     await create.click();
     await page.waitForSelector(".modal-panel", { timeout: 5000 });
     await page.waitForTimeout(350);
-    const trigger = page.locator(".ts-select-trigger").first();
+    const trigger = page.locator(".modal-panel .ts-select-trigger").first();
     const hasSelect = (await trigger.count()) > 0;
     if (hasSelect) {
       await trigger.click();

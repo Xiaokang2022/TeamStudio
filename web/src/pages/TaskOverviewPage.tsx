@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import {
   AlertTriangle,
   ArrowDown,
@@ -33,6 +33,7 @@ import type { TaskMemberOption } from "../components/TaskDialog";
 import { TagChips, TagLibraryDialog } from "../components/TagPicker";
 import type { TagLibraryGroupOption } from "../components/TagPicker";
 import { WorkloadMeter } from "../components/WorkloadMeter";
+import { Select } from "../components/Select";
 import { cn, formatDate, formatDateTime } from "../lib/utils";
 import { TASK_RANGES, isWithinRange, rangeStartISO } from "../lib/scope";
 import {
@@ -752,21 +753,19 @@ export default function TaskOverviewPage() {
           ) : null}
         </label>
 
-        <label className="tasks-filter-select">
+        <div className="tasks-filter-select tasks-filter-select-custom">
           <UserRound size={13} aria-hidden="true" />
-          <select
+          <Select
             value={memberFilter}
-            onChange={(event) => setMemberFilter(event.target.value)}
-            aria-label="按成员筛选"
-          >
-            <option value="all">全部成员</option>
-            {memberOptions.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.name}
-              </option>
-            ))}
-          </select>
-        </label>
+            onChange={setMemberFilter}
+            ariaLabel="按成员筛选"
+            className="tasks-member-select"
+            options={[
+              { value: "all", label: "全部成员" },
+              ...memberOptions.map((option) => ({ value: option.id, label: option.name })),
+            ]}
+          />
+        </div>
 
         <div className="tasks-segmented" role="group" aria-label="按进度状态筛选">
           {PROGRESS_FILTERS.map((option) => (
@@ -894,8 +893,22 @@ export default function TaskOverviewPage() {
     return <TagChips tags={tags} max={3} className="tasks-task-tag-chips" />;
   };
 
+  const listKey = [
+    rangeKey,
+    scope,
+    memberFilter,
+    progressFilter,
+    healthFilter,
+    priorityFilter,
+    tagFilter,
+    showCompleted ? "1" : "0",
+    search,
+    sort.key,
+    sort.direction,
+  ].join("|");
+
   const table = (
-    <div className="table-wrap tasks-table-wrap">
+    <div className="table-wrap tasks-table-wrap" key={`table-${listKey}`}>
       <table className="data-table tasks-table">
         <thead>
           <tr>
@@ -920,7 +933,7 @@ export default function TaskOverviewPage() {
           </tr>
         </thead>
         <tbody>
-          {sortedTasks.map((task) => {
+          {sortedTasks.map((task, index) => {
             const progress = TASK_PROGRESS_META[task.progressStatus] ?? TASK_PROGRESS_META.pending;
             const health = TASK_HEALTH_META[task.healthStatus] ?? TASK_HEALTH_META.normal;
             const priorityKey: TaskPriority = task.priority ?? "normal";
@@ -932,6 +945,7 @@ export default function TaskOverviewPage() {
             return (
               <tr
                 key={task.id}
+                style={{ "--row-i": index } as CSSProperties}
                 className={cn(
                   "tasks-row",
                   `health-${task.healthStatus}`,
@@ -1068,8 +1082,8 @@ export default function TaskOverviewPage() {
   );
 
   const mobileCards = (
-    <div className="tasks-card-list">
-      {sortedTasks.map((task) => {
+    <div className="tasks-card-list" key={`cards-${listKey}`}>
+      {sortedTasks.map((task, index) => {
         const progress = TASK_PROGRESS_META[task.progressStatus] ?? TASK_PROGRESS_META.pending;
         const health = TASK_HEALTH_META[task.healthStatus] ?? TASK_HEALTH_META.normal;
         const priorityKey: TaskPriority = task.priority ?? "normal";
@@ -1081,6 +1095,7 @@ export default function TaskOverviewPage() {
         return (
           <article
             key={task.id}
+            style={{ "--row-i": index } as CSSProperties}
             className={cn(
               "tasks-card",
               `health-${task.healthStatus}`,

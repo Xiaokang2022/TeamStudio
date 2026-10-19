@@ -108,6 +108,19 @@
   border: 1px solid var(--border);
   background: var(--surface);
   box-shadow: var(--shadow-xs);
+  animation: ins-kpi-in 0.42s var(--ease) backwards;
+  animation-delay: calc(var(--kpi-i, 0) * 42ms);
+}
+
+@keyframes ins-kpi-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .ins-kpi::after {
@@ -346,7 +359,21 @@
   width: 9px;
   min-height: 2px;
   border-radius: 3px 3px 0 0;
+  transform-origin: center bottom;
+  animation: ins-bar-rise 0.62s var(--ease) backwards;
+  animation-delay: calc(var(--bucket-i, 0) * 24ms);
   transition: height 0.28s var(--ease, ease), filter 0.16s;
+}
+
+@keyframes ins-bar-rise {
+  from {
+    transform: scaleY(0.02);
+    opacity: 0.45;
+  }
+  to {
+    transform: scaleY(1);
+    opacity: 1;
+  }
 }
 
 .ins-bar.is-created {
@@ -376,7 +403,8 @@
   text-overflow: ellipsis;
 }
 
-/* Tooltip: opaque surface so it never blends into the chart. */
+/* Tooltip: opaque surface so it never blends into the chart. The live chart
+   renders a portal copy (`.is-floating`) so scroll containers cannot clip it. */
 .ins-chart-tip {
   position: absolute;
   bottom: calc(100% + 6px);
@@ -400,6 +428,29 @@
   pointer-events: none;
   transition: opacity 0.14s, transform 0.14s;
   z-index: 6;
+}
+
+.ins-chart-tip.is-floating {
+  position: fixed;
+  left: auto;
+  top: auto;
+  bottom: auto;
+  transform: translate(-50%, -100%);
+  opacity: 1;
+  visibility: visible;
+  z-index: 420;
+  animation: ins-tip-in 0.14s var(--ease);
+}
+
+@keyframes ins-tip-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-100% + 4px));
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -100%);
+  }
 }
 
 .ins-chart-tip strong {
@@ -470,6 +521,22 @@
   padding-top: 10px;
   padding-bottom: 10px;
   vertical-align: middle;
+}
+
+.ins-table tbody tr {
+  animation: ins-row-in 0.3s var(--ease) backwards;
+  animation-delay: calc(var(--row-i, 0) * 14ms);
+}
+
+@keyframes ins-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .ins-sort-btn {
@@ -625,6 +692,18 @@
   height: 100%;
   border-radius: 999px;
   background: var(--text-3);
+  transform-origin: left center;
+  animation: ins-rate-grow 0.6s var(--ease) backwards;
+  animation-delay: calc(var(--row-i, 0) * 18ms);
+}
+
+@keyframes ins-rate-grow {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
 }
 
 .ins-rate.is-good .ins-rate-track i {
@@ -750,7 +829,11 @@
   .ins-bar,
   .ins-chart-tip,
   .ins-range-btn,
-  .ins-sort-btn {
-    transition: none;
+  .ins-sort-btn,
+  .ins-kpi,
+  .ins-table tbody tr,
+  .ins-rate-track i {
+    animation: none !important;
+    transition: none !important;
   }
 }

@@ -547,6 +547,9 @@
   border: 0;
   background: transparent;
   gap: 10px;
+  /* The global toggle row paints an inset highlight; inside the module card it
+     reads as a stray hairline in the dark theme, so flatten it here. */
+  box-shadow: none;
 }
 
 .settings-module-toggle .settings-toggle-row:hover {

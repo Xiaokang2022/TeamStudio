@@ -557,7 +557,7 @@ export default function MatrixPage() {
             </div>
           ) : view === "table" ? (
             <>
-              <div className="table-wrap mx-table-wrap">
+              <div className="table-wrap mx-table-wrap" key={`table|${selectedMemberId}`}>
                 <table className="data-table mx-table">
                   <thead>
                     <tr>
@@ -633,7 +633,7 @@ export default function MatrixPage() {
                 </table>
               </div>
 
-              <div className="mx-cards">
+              <div className="mx-cards" key={`cards|${selectedMemberId}`}>
                 {visibleAreas.map((area, index) => (
                   <article className="mx-card" key={area.id}>
                     <header className="mx-card-head">
@@ -690,6 +690,7 @@ export default function MatrixPage() {
             </>
           ) : (
             <MatrixNetwork
+              key={`network|${selectedMemberId}`}
               areas={sortedAreas}
               selectedMemberId={selectedMemberId}
               onSelectMember={(memberId) => setSelectedMemberId((prev) => (prev === memberId ? "" : memberId))}

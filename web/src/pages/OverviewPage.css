@@ -448,11 +448,12 @@
   font-weight: 600;
 }
 
-/* ---------- Workspace: members get the full row (4-up cards), side rail below ---------- */
+/* ---------- Workspace: 4-up compact member cards + right activity rail ---------- */
 .ov-columns {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 286px;
+  gap: 18px;
+  align-items: start;
   min-width: 0;
 }
 
@@ -962,33 +963,16 @@
   margin-top: 4px;
 }
 
-/* ---------- Side rail (full-width row below the 4-up member grid) ---------- */
+/* ---------- Right rail: recent activity + calendar CTA ---------- */
 .ov-side {
-  display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: 14px;
-  align-items: start;
   min-width: 0;
 }
 
-.ov-side > .ov-cta {
-  grid-column: 1 / -1;
-  grid-row: 1;
-}
-
-.ov-side > .ov-activity-panel {
-  grid-column: 1;
-  grid-row: 2;
-}
-
-.ov-side > .ov-workload-panel {
-  grid-column: 2;
-  grid-row: 2;
-}
-
 .ov-side > .ov-guest-note {
-  grid-column: 1 / -1;
-  grid-row: 3;
+  order: 3;
 }
 
 .ov-activity-panel .panel-body {
@@ -2063,23 +2047,144 @@
   color: var(--text-3);
 }
 
+/* ---------- Compact card density (4-up beside the activity rail) ---------- */
+.ov-member-grid {
+  gap: 10px;
+}
+
+.ov-member-card {
+  gap: 7px;
+  padding: 12px;
+}
+
+.ov-member-card .avatar-lg {
+  width: 36px;
+  height: 36px;
+  font-size: 12px;
+}
+
+.ov-member-name-row h3 {
+  font-size: 12.5px;
+}
+
+.ov-member-title {
+  font-size: 10px;
+}
+
+.ov-member-role {
+  margin-top: 2px;
+  font-size: 9px;
+}
+
+.ov-member-bio {
+  min-height: 0;
+  font-size: 10.5px;
+  line-height: 1.55;
+  -webkit-line-clamp: 2;
+}
+
+.ov-member-tags {
+  gap: 3px;
+}
+
+.ov-member-tags .chip {
+  padding: 1px 5px;
+  font-size: 8.5px;
+}
+
+.ov-member-workload .workload-title {
+  font-size: 9.5px;
+}
+
+.ov-member-workload .load-pill {
+  padding: 1px 6px;
+  font-size: 8.5px;
+}
+
+.ov-member-workload .workload-bar {
+  height: 5px;
+}
+
+.ov-member-workload .workload-meta {
+  gap: 4px;
+  font-size: 8.5px;
+}
+
+.ov-member-workload .workload-meta span:last-child {
+  display: none;
+}
+
+.ov-member-work {
+  padding: 7px 8px 8px;
+  border-radius: 9px;
+}
+
+.ov-member-work-label,
+.ov-member-work-count {
+  font-size: 8.5px;
+}
+
+.ov-current-works {
+  gap: 4px;
+  margin-top: 5px;
+}
+
+.ov-current-work {
+  padding: 4px 6px 5px;
+}
+
+.ov-current-work-title {
+  font-size: 10px;
+}
+
+.ov-current-work-meta {
+  display: none;
+}
+
+.ov-current-work-value {
+  font-size: 8.5px;
+}
+
+.ov-current-work-more {
+  font-size: 9px;
+}
+
+.ov-member-foot {
+  gap: 6px;
+  padding-top: 7px;
+  font-size: 8.5px;
+}
+
+.ov-member-stat strong {
+  font-size: 10px;
+}
+
+.ov-member-open {
+  display: none;
+}
+
 /* ---------- Responsive ---------- */
-@media (max-width: 1260px) {
+@media (max-width: 1360px) and (min-width: 1181px) {
   .ov-member-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 1120px) {
-  .ov-side {
+@media (max-width: 1180px) {
+  .ov-columns {
     grid-template-columns: minmax(0, 1fr);
   }
-  .ov-side > .ov-cta,
-  .ov-side > .ov-activity-panel,
-  .ov-side > .ov-workload-panel,
-  .ov-side > .ov-guest-note {
-    grid-column: 1;
-    grid-row: auto;
+  .ov-member-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .ov-activity-panel .panel-body {
+    padding: 16px 18px 18px;
+  }
+}
+
+@media (max-width: 1000px) {
+  .ov-member-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 

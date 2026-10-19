@@ -434,6 +434,7 @@ export default function CalendarPage() {
             </div>
           ) : (
             <div
+              key={month}
               className={cn("cal-grid", !showWeekends && "is-compact")}
               style={{ gridTemplateColumns: `repeat(${weekdayDays.length}, minmax(0, 1fr))` }}
               role="grid"
@@ -474,7 +475,7 @@ export default function CalendarPage() {
           </footer>
         </section>
 
-        <aside className="cal-side panel" aria-labelledby="cal-side-title">
+        <aside className="cal-side panel" aria-labelledby="cal-side-title" key={selectedDate}>
           <header className="cal-side-head">
             <div>
               <span className="eyebrow">DAY PLAN</span>
