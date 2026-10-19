@@ -10,7 +10,14 @@ import {
 } from "react";
 import { api, ApiError } from "./api";
 import { useToast } from "./components/Toast";
-import type { BootstrapData, PublicConfig, TeamRef, GroupRef, ModuleFlags } from "./types";
+import type {
+  BootstrapData,
+  PublicConfig,
+  TeamRef,
+  GroupRef,
+  ModuleFlags,
+  ScopeKind,
+} from "./types";
 import { canManageGroup, hashRoute, navigate as navigateHash } from "./lib/utils";
 
 type ThemeMode = "light" | "dark";
@@ -23,6 +30,8 @@ interface AppContextValue {
   error: string;
   route: string;
   theme: ThemeMode;
+  scope: ScopeKind;
+  scopeLabel: string;
   canManageActiveGroup: boolean;
   canEditSelf: boolean;
   isAdmin: boolean;
@@ -32,6 +41,7 @@ interface AppContextValue {
   reload: (silent?: boolean) => Promise<void>;
   selectTeam: (teamId: string, groupId?: string) => Promise<void>;
   selectGroup: (groupId: string) => Promise<void>;
+  setScope: (scope: ScopeKind) => void;
   toggleTheme: () => void;
   navigate: (page: string, params?: Record<string, string>) => void;
 }
@@ -40,6 +50,17 @@ const AppContext = createContext<AppContextValue | null>(null);
 const STORAGE_TEAM = "teamstudio.team";
 const STORAGE_GROUP = "teamstudio.group";
 const STORAGE_THEME = "teamstudio.theme";
+const STORAGE_SCOPE = "teamstudio.scope";
+
+function readScope(): ScopeKind {
+  try {
+    const saved = localStorage.getItem(STORAGE_SCOPE);
+    if (saved === "group" || saved === "team" || saved === "all") return saved;
+  } catch {
+    // ignore storage failures
+  }
+  return "group";
+}
 
 function resolveTheme(preferred: PublicConfig["site"]["theme"] | undefined): ThemeMode {
   const saved = localStorage.getItem(STORAGE_THEME);
@@ -59,6 +80,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState("");
   const [route, setRoute] = useState(() => hashRoute().page);
   const [theme, setTheme] = useState<ThemeMode>(() => resolveTheme(undefined));
+  const [scope, setScopeState] = useState<ScopeKind>(readScope);
   const selectionRef = useRef({
     teamId: localStorage.getItem(STORAGE_TEAM) ?? "",
     groupId: localStorage.getItem(STORAGE_GROUP) ?? "",
@@ -183,6 +205,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const setScope = useCallback((next: ScopeKind) => {
+    setScopeState(next);
+    try {
+      localStorage.setItem(STORAGE_SCOPE, next);
+    } catch {
+      // ignore storage failures
+    }
+  }, []);
+
   const navigate = useCallback((page: string, params?: Record<string, string>) => {
     navigateHash(page, params);
   }, []);
@@ -190,6 +221,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const currentTeam = data?.active.team ?? null;
   const currentGroup = data?.active.group ?? null;
   const canManageActiveGroup = canManageGroup(data?.me, currentTeam?.id, currentGroup?.id);
+  const scopeLabel =
+    scope === "all"
+      ? "全部团队"
+      : scope === "team"
+        ? `${currentTeam?.name ?? "当前团队"} · 全团队`
+        : currentGroup?.name ?? "当前开发组";
 
   const value = useMemo<AppContextValue>(
     () => ({
@@ -200,6 +237,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       error,
       route,
       theme,
+      scope,
+      scopeLabel,
       canManageActiveGroup,
       canEditSelf: Boolean(data?.me.permissions.canEditSelf),
       isAdmin: Boolean(data?.me.isDeviceAdmin || data?.me.admin.role),
@@ -209,6 +248,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       reload: fetchBootstrap,
       selectTeam,
       selectGroup,
+      setScope,
       toggleTheme,
       navigate,
     }),
@@ -219,12 +259,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       error,
       route,
       theme,
+      scope,
+      scopeLabel,
       canManageActiveGroup,
       currentTeam,
       currentGroup,
       fetchBootstrap,
       selectTeam,
       selectGroup,
+      setScope,
       toggleTheme,
       navigate,
     ],

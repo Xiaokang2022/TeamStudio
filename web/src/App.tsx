@@ -8,6 +8,7 @@ import type { ModuleFlags } from "./types";
 
 const OverviewPage = lazy(() => import("./pages/OverviewPage"));
 const TasksPage = lazy(() => import("./pages/TaskOverviewPage"));
+const InsightsPage = lazy(() => import("./pages/InsightsPage"));
 const CalendarPage = lazy(() => import("./pages/CalendarPage"));
 const RedBlackPage = lazy(() => import("./pages/RedBlackPage"));
 const LinksPage = lazy(() => import("./pages/LinksPage"));
@@ -19,6 +20,7 @@ const LoginPage = lazy(() => import("./pages/LoginPage"));
 const PAGE_MODULES: Record<string, keyof ModuleFlags> = {
   overview: "overview",
   tasks: "tasks",
+  insights: "insights",
   calendar: "calendar",
   redblack: "redblack",
   links: "links",
@@ -30,6 +32,7 @@ const PAGE_MODULES: Record<string, keyof ModuleFlags> = {
 const PAGES: Record<string, React.LazyExoticComponent<() => React.JSX.Element | null>> = {
   overview: OverviewPage,
   tasks: TasksPage,
+  insights: InsightsPage,
   calendar: CalendarPage,
   redblack: RedBlackPage,
   links: LinksPage,

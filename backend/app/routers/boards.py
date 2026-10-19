@@ -19,12 +19,18 @@ from ..config import settings_service
 from ..db import db, new_id, now_iso, row, rows, scalar
 from ..http import fail, get_group, get_member, int_value, ok, parse_month, text
 from ..permissions import audit, require_admin, require_read_access
+from ..scope import resolve_scope
 
 router = APIRouter(prefix="/api/teams/{team_id}/groups/{group_id}", tags=["boards"])
 
 HEX_PATTERN = re.compile(r"^#[0-9a-fA-F]{6}$")
 ANNOUNCEMENT_LEVELS = {"info", "important", "celebration"}
 MAX_PINNED_HARD_CAP = 3
+
+
+def _in_clause(group_ids: list[str]) -> str:
+    """SQL ``IN`` placeholder list; an empty scope matches nothing."""
+    return ",".join("?" for _ in group_ids) if group_ids else "NULL"
 
 
 # --------------------------------------------------------------------------- shared helpers
@@ -340,6 +346,9 @@ def _link_payload(link: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": link["id"],
         "groupId": link.get("group_id", ""),
+        "groupName": link.get("group_name", ""),
+        "teamId": link.get("group_team_id", ""),
+        "teamName": link.get("team_name", ""),
         "title": link["title"],
         "url": link["url"],
         "description": link.get("description", ""),
@@ -358,7 +367,14 @@ def _validate_url(value: Any) -> str:
 
 
 def _get_link(conn, link_id: str, group_id: str) -> dict[str, Any]:
-    found = row(conn, "SELECT * FROM links WHERE id=? AND group_id=?", (link_id, group_id))
+    found = row(
+        conn,
+        "SELECT l.*, g.name AS group_name, g.team_id AS group_team_id, "
+        "tm.name AS team_name FROM links l "
+        "JOIN groups g ON g.id=l.group_id JOIN teams tm ON tm.id=g.team_id "
+        "WHERE l.id=? AND l.group_id=?",
+        (link_id, group_id),
+    )
     if not found:
         raise fail(404, "链接不存在", "link_not_found")
     return found
@@ -382,16 +398,26 @@ def _next_sort_order(conn, table: str, group_id: str) -> int:
 def list_links(
     team_id: str,
     group_id: str,
+    scope: str = Query(default="group"),
     user: CurrentUser = Depends(require_read_access),
 ):
     with db() as conn:
         get_group(conn, team_id, group_id)
+        ctx = resolve_scope(conn, team_id, group_id, scope)
+        group_ids = ctx["groupIds"]
+        placeholders = _in_clause(group_ids)
         items = rows(
             conn,
-            "SELECT * FROM links WHERE group_id=? ORDER BY sort_order, created_at",
-            (group_id,),
+            "SELECT l.*, g.name AS group_name, g.team_id AS group_team_id, "
+            "tm.name AS team_name FROM links l "
+            "JOIN groups g ON g.id=l.group_id JOIN teams tm ON tm.id=g.team_id "
+            f"WHERE l.group_id IN ({placeholders}) "
+            "ORDER BY g.sort_order, g.name, l.sort_order, l.created_at",
+            tuple(group_ids),
         )
-    return ok({"links": [_link_payload(link) for link in items]})
+    return ok(
+        {"links": [_link_payload(link) for link in items], "scope": ctx}
+    )
 
 
 @router.post("/links")
@@ -491,9 +517,11 @@ def delete_link(
 _MATRIX_SELECT = (
     "SELECT a.id, a.group_id, a.area, a.description, a.owner_member_id, o.name AS owner_name, "
     "o.avatar_color AS owner_color, a.backup_member_id, b.name AS backup_name, "
-    "b.avatar_color AS backup_color, a.channel, a.contact, a.sort_order "
+    "b.avatar_color AS backup_color, a.channel, a.contact, a.sort_order, "
+    "g.name AS group_name, g.team_id AS group_team_id, tm.name AS team_name "
     "FROM matrix_areas a LEFT JOIN members o ON o.id=a.owner_member_id "
     "LEFT JOIN members b ON b.id=a.backup_member_id "
+    "JOIN groups g ON g.id=a.group_id JOIN teams tm ON tm.id=g.team_id "
 )
 
 
@@ -501,6 +529,9 @@ def _area_payload(area: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": area["id"],
         "groupId": area.get("group_id", ""),
+        "groupName": area.get("group_name", ""),
+        "teamId": area.get("group_team_id", ""),
+        "teamName": area.get("team_name", ""),
         "area": area["area"],
         "description": area.get("description", ""),
         "ownerMemberId": area.get("owner_member_id"),
@@ -526,16 +557,21 @@ def _get_area_detail(conn, area_id: str, group_id: str) -> dict[str, Any]:
 def list_matrix(
     team_id: str,
     group_id: str,
+    scope: str = Query(default="group"),
     user: CurrentUser = Depends(require_read_access),
 ):
     with db() as conn:
         get_group(conn, team_id, group_id)
+        ctx = resolve_scope(conn, team_id, group_id, scope)
+        group_ids = ctx["groupIds"]
         items = rows(
             conn,
-            _MATRIX_SELECT + "WHERE a.group_id=? ORDER BY a.sort_order, a.created_at",
-            (group_id,),
+            _MATRIX_SELECT
+            + f"WHERE a.group_id IN ({_in_clause(group_ids)}) "
+            "ORDER BY g.sort_order, g.name, a.sort_order, a.created_at",
+            tuple(group_ids),
         )
-    return ok({"areas": [_area_payload(area) for area in items]})
+    return ok({"areas": [_area_payload(area) for area in items], "scope": ctx})
 
 
 @router.post("/matrix")
@@ -673,6 +709,9 @@ def _announcement_payload(announcement: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": announcement["id"],
         "groupId": announcement.get("group_id", ""),
+        "groupName": announcement.get("group_name", ""),
+        "teamId": announcement.get("group_team_id", ""),
+        "teamName": announcement.get("team_name", ""),
         "title": announcement["title"],
         "content": announcement.get("content", ""),
         "pinned": bool(announcement.get("pinned")),
@@ -694,7 +733,10 @@ def _validate_level(value: Any, default: str = "info") -> str:
 def _get_announcement(conn, announcement_id: str, group_id: str) -> dict[str, Any]:
     found = row(
         conn,
-        "SELECT * FROM announcements WHERE id=? AND group_id=?",
+        "SELECT a.*, g.name AS group_name, g.team_id AS group_team_id, "
+        "tm.name AS team_name FROM announcements a "
+        "JOIN groups g ON g.id=a.group_id JOIN teams tm ON tm.id=g.team_id "
+        "WHERE a.id=? AND a.group_id=?",
         (announcement_id, group_id),
     )
     if not found:
@@ -706,14 +748,21 @@ def _get_announcement(conn, announcement_id: str, group_id: str) -> dict[str, An
 def list_announcements(
     team_id: str,
     group_id: str,
+    scope: str = Query(default="group"),
     user: CurrentUser = Depends(require_read_access),
 ):
     with db() as conn:
         get_group(conn, team_id, group_id)
+        ctx = resolve_scope(conn, team_id, group_id, scope)
+        group_ids = ctx["groupIds"]
         items = rows(
             conn,
-            "SELECT * FROM announcements WHERE group_id=? ORDER BY pinned DESC, created_at DESC",
-            (group_id,),
+            "SELECT a.*, g.name AS group_name, g.team_id AS group_team_id, "
+            "tm.name AS team_name FROM announcements a "
+            "JOIN groups g ON g.id=a.group_id JOIN teams tm ON tm.id=g.team_id "
+            f"WHERE a.group_id IN ({_in_clause(group_ids)}) "
+            "ORDER BY a.pinned DESC, g.sort_order, g.name, a.created_at DESC",
+            tuple(group_ids),
         )
     pinned_count = sum(1 for item in items if item.get("pinned"))
     return ok(
@@ -721,6 +770,7 @@ def list_announcements(
             "announcements": [_announcement_payload(item) for item in items],
             "maxPinned": _pinned_cap(),
             "pinnedCount": pinned_count,
+            "scope": ctx,
         }
     )
 

@@ -476,6 +476,7 @@
 }
 
 .settings-module-toggle {
+  position: relative;
   display: flex;
   align-items: stretch;
   gap: 8px;
@@ -486,9 +487,21 @@
   transition: border-color 0.16s, background 0.16s;
 }
 
+/* 开启态：干净实色底 + 左侧 accent 细条，不再使用斜向渐变/雾状微光。 */
 .settings-module-toggle.is-on {
-  border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
-  background: linear-gradient(140deg, var(--accent-soft), var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+  background: var(--surface);
+}
+
+.settings-module-toggle.is-on::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 14px;
+  bottom: 14px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
 }
 
 .settings-module-icon {
@@ -501,13 +514,31 @@
   border-radius: 9px;
   background: var(--surface);
   border: 1px solid var(--border);
+  box-shadow: none;
   color: var(--text-3);
 }
 
+/* 图标用一个很小的实色 tint（与表面混合后不透明），避免 accent-soft 透底形成的发光感。 */
 .settings-module-toggle.is-on .settings-module-icon {
   color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
-  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+  box-shadow: none;
+}
+
+/* 开关也保持平面：去掉任何发光/渐变，只保留细边框与轻微滑块阴影。 */
+.settings-module-toggle .switch-track {
+  background-image: none;
+  box-shadow: none;
+}
+
+.settings-module-toggle .switch input:checked + .switch-track {
+  background-image: none;
+  box-shadow: none;
+}
+
+.settings-module-toggle .switch-track::after {
+  box-shadow: 0 1px 2px rgba(17, 18, 20, 0.2);
 }
 
 .settings-module-toggle .settings-toggle-row {
@@ -669,10 +700,8 @@
   padding: 20px;
   border-radius: var(--pv-radius, 18px);
   border: 1px solid var(--pv-border);
-  background:
-    radial-gradient(420px 220px at 92% -12%, color-mix(in srgb, var(--pv-accent) 10%, transparent), transparent 66%),
-    radial-gradient(360px 220px at -6% 108%, color-mix(in srgb, var(--pv-secondary) 8%, transparent), transparent 62%),
-    var(--pv-bg);
+  /* 纯实色底：去掉原来的两处 radial-gradient 光斑，避免亮色下出现雾状微光。 */
+  background: var(--pv-bg);
   color: var(--pv-text);
   overflow: hidden;
 }
@@ -704,7 +733,7 @@
   font-size: 14px;
   letter-spacing: -0.03em;
   background: linear-gradient(135deg, var(--pv-accent), var(--pv-secondary));
-  box-shadow: 0 10px 24px -12px color-mix(in srgb, var(--pv-accent) 85%, transparent);
+  box-shadow: 0 8px 18px -14px color-mix(in srgb, var(--pv-accent) 70%, transparent);
 }
 
 .settings-preview-brand > div {
@@ -1367,60 +1396,12 @@
 }
 
 .settings-json-editor {
-  display: grid;
-  grid-template-columns: 54px minmax(0, 1fr);
   height: clamp(320px, 52vh, 520px);
-  border: 1px solid var(--code-border);
-  border-radius: 12px;
-  background: var(--code-bg);
-  overflow: hidden;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+  min-width: 0;
 }
 
-.settings-json-gutter {
+.settings-json-editor .code-editor {
   height: 100%;
-  overflow: hidden;
-  padding: 14px 8px 14px 0;
-  border-right: 1px solid var(--code-border);
-  background: var(--code-surface);
-  color: var(--code-muted);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.7;
-  text-align: right;
-  user-select: none;
-}
-
-.settings-json-gutter span {
-  display: block;
-}
-
-.settings-json-textarea {
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  padding: 14px 16px;
-  border: 0;
-  outline: none;
-  resize: none;
-  overflow: auto;
-  background: transparent;
-  color: var(--code-text);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.7;
-  white-space: pre;
-  tab-size: 2;
-  caret-color: var(--accent-secondary);
-}
-
-.settings-json-textarea::selection {
-  background: rgba(10, 89, 247, 0.34);
-  color: #fff;
-}
-
-.settings-json-textarea:focus {
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
 }
 
 .settings-json-help {
@@ -1591,18 +1572,7 @@
   }
 
   .settings-json-editor {
-    grid-template-columns: 42px minmax(0, 1fr);
     height: 58vh;
-  }
-
-  .settings-json-gutter {
-    font-size: 10.5px;
-    padding-right: 6px;
-  }
-
-  .settings-json-textarea {
-    font-size: 11px;
-    padding: 12px;
   }
 
   .settings-inline-empty {

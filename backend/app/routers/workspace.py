@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, Query
 
 from ..auth import CurrentUser, get_current_user
 from ..config import EMAIL_PATTERN
@@ -23,6 +23,7 @@ from ..permissions import (
     require_member_writer,
     require_read_access,
 )
+from ..scope import resolve_scope
 from ..services.tasks_service import build_workload_section
 
 router = APIRouter(
@@ -91,10 +92,22 @@ def _email(value: Any) -> str:
     return email
 
 
-def _work_payload(work: dict[str, Any]) -> dict[str, Any]:
+def _in_clause(group_ids: list[str]) -> str:
+    """SQL ``IN`` placeholder list; an empty scope matches nothing."""
+    return ",".join("?" for _ in group_ids) if group_ids else "NULL"
+
+
+def _work_payload(
+    work: dict[str, Any], group: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    group = group or {}
     return {
         "id": work["id"],
         "memberId": work["member_id"],
+        "groupId": work.get("group_id", ""),
+        "groupName": work.get("group_name") or group.get("name", ""),
+        "teamId": work.get("group_team_id") or group.get("team_id", ""),
+        "teamName": work.get("team_name") or group.get("team_name", ""),
         "title": work["title"],
         "description": work.get("description", ""),
         "status": work.get("status", "current"),
@@ -110,7 +123,12 @@ def _member_payload(
     works: list[dict[str, Any]],
     open_todos: int = 0,
 ) -> dict[str, Any]:
-    work_items = [_work_payload(work) for work in works]
+    group = {
+        "name": member.get("group_name", ""),
+        "team_id": member.get("group_team_id") or member.get("team_id", ""),
+        "team_name": member.get("team_name", ""),
+    }
+    work_items = [_work_payload(work, group) for work in works]
     current = [work for work in work_items if work["status"] == "current"]
     history = [work for work in work_items if work["status"] == "done"]
     return {
@@ -121,6 +139,10 @@ def _member_payload(
         "role": member.get("role", ""),
         "avatarColor": member.get("avatar_color", "#5865f2"),
         "bio": member.get("bio", ""),
+        "groupId": member.get("group_id", ""),
+        "groupName": group["name"],
+        "teamId": group["team_id"],
+        "teamName": group["team_name"],
         "tags": _parsed_list(member.get("tags")),
         "skills": _parsed_list(member.get("skills")),
         # ``duties`` has no dedicated column yet; tolerate future schema additions.
@@ -148,6 +170,13 @@ def _member_detail(conn, member: dict[str, Any]) -> dict[str, Any]:
         )
         or 0
     )
+    meta = row(
+        conn,
+        "SELECT g.name AS group_name, g.team_id AS group_team_id, tm.name AS team_name "
+        "FROM groups g JOIN teams tm ON tm.id=g.team_id WHERE g.id=?",
+        (member["group_id"],),
+    )
+    member = {**member, **(meta or {})}
     return _member_payload(member, works, open_todos)
 
 
@@ -166,14 +195,23 @@ def _group_detail(group: dict[str, Any], member_count: int = 0) -> dict[str, Any
     }
 
 
-def _recent_activity(conn, group_id: str, limit: int = 12) -> list[dict[str, Any]]:
+def _recent_activity(
+    conn, group_ids: str | list[str], limit: int = 12
+) -> list[dict[str, Any]]:
+    groups = [group_ids] if isinstance(group_ids, str) else list(group_ids)
+    if not groups:
+        return []
+    placeholders = _in_clause(groups)
+    params = tuple(groups)
     entries: list[dict[str, Any]] = []
     for todo in rows(
         conn,
-        "SELECT t.id, t.title, t.status, t.updated_at, t.completed_at, m.name AS assignee_name "
+        "SELECT t.id, t.title, t.status, t.updated_at, t.completed_at, t.group_id, "
+        "m.name AS assignee_name, g.name AS group_name "
         "FROM todos t LEFT JOIN members m ON m.id=t.assignee_member_id "
-        "WHERE t.group_id=? ORDER BY t.updated_at DESC LIMIT 6",
-        (group_id,),
+        "JOIN groups g ON g.id=t.group_id "
+        f"WHERE t.group_id IN ({placeholders}) ORDER BY t.updated_at DESC LIMIT 6",
+        params,
     ):
         entries.append(
             {
@@ -183,14 +221,17 @@ def _recent_activity(conn, group_id: str, limit: int = 12) -> list[dict[str, Any
                 "description": "待办已完成" if todo["status"] == "done" else "待办更新",
                 "memberName": todo.get("assignee_name") or "",
                 "memberId": None,
+                "groupId": todo.get("group_id", ""),
+                "groupName": todo.get("group_name", ""),
                 "at": todo.get("completed_at") or todo.get("updated_at") or "",
             }
         )
     for announcement in rows(
         conn,
-        "SELECT id, title, author_name, created_at FROM announcements "
-        "WHERE group_id=? ORDER BY created_at DESC LIMIT 4",
-        (group_id,),
+        "SELECT a.id, a.title, a.author_name, a.created_at, a.group_id, g.name AS group_name "
+        "FROM announcements a JOIN groups g ON g.id=a.group_id "
+        f"WHERE a.group_id IN ({placeholders}) ORDER BY a.created_at DESC LIMIT 4",
+        params,
     ):
         entries.append(
             {
@@ -200,15 +241,19 @@ def _recent_activity(conn, group_id: str, limit: int = 12) -> list[dict[str, Any
                 "description": "发布公告",
                 "memberName": announcement.get("author_name", ""),
                 "memberId": None,
+                "groupId": announcement.get("group_id", ""),
+                "groupName": announcement.get("group_name", ""),
                 "at": announcement.get("created_at", ""),
             }
         )
     for work in rows(
         conn,
-        "SELECT w.id, w.title, w.status, w.updated_at, m.id AS member_id, m.name AS member_name "
+        "SELECT w.id, w.title, w.status, w.updated_at, w.group_id, "
+        "m.id AS member_id, m.name AS member_name, g.name AS group_name "
         "FROM works w JOIN members m ON m.id=w.member_id "
-        "WHERE w.group_id=? ORDER BY w.updated_at DESC LIMIT 4",
-        (group_id,),
+        "JOIN groups g ON g.id=w.group_id "
+        f"WHERE w.group_id IN ({placeholders}) ORDER BY w.updated_at DESC LIMIT 4",
+        params,
     ):
         entries.append(
             {
@@ -218,15 +263,19 @@ def _recent_activity(conn, group_id: str, limit: int = 12) -> list[dict[str, Any
                 "description": f"工作进展 · {work['status']}",
                 "memberName": work.get("member_name", ""),
                 "memberId": work.get("member_id"),
+                "groupId": work.get("group_id", ""),
+                "groupName": work.get("group_name", ""),
                 "at": work.get("updated_at", ""),
             }
         )
     for entry in rows(
         conn,
-        "SELECT e.id, e.side, e.title, e.reason, e.member_id, e.member_name, e.created_at "
+        "SELECT e.id, e.side, e.title, e.reason, e.member_id, e.member_name, "
+        "e.created_at, b.group_id, g.name AS group_name "
         "FROM redblack_entries e JOIN redblack_boards b ON b.id=e.board_id "
-        "WHERE b.group_id=? ORDER BY e.created_at DESC LIMIT 4",
-        (group_id,),
+        "JOIN groups g ON g.id=b.group_id "
+        f"WHERE b.group_id IN ({placeholders}) ORDER BY e.created_at DESC LIMIT 4",
+        params,
     ):
         side = "红榜" if entry["side"] == "red" else "黑榜"
         description = side + (f" · {entry['reason']}" if entry.get("reason") else "")
@@ -238,6 +287,8 @@ def _recent_activity(conn, group_id: str, limit: int = 12) -> list[dict[str, Any
                 "description": description,
                 "memberName": entry.get("member_name", ""),
                 "memberId": entry.get("member_id"),
+                "groupId": entry.get("group_id", ""),
+                "groupName": entry.get("group_name", ""),
                 "at": entry.get("created_at", ""),
             }
         )
@@ -260,36 +311,51 @@ def _work_status(value: Any, default: str = "current") -> str:
 def group_overview(
     team_id: str,
     group_id: str,
+    scope: str = Query(default="group"),
     user: CurrentUser = Depends(require_read_access),
 ):
     with db() as conn:
         group = get_group(conn, team_id, group_id)
+        ctx = resolve_scope(conn, team_id, group_id, scope)
+        group_ids = ctx["groupIds"]
+        placeholders = _in_clause(group_ids)
+        params = tuple(group_ids)
         member_rows = rows(
             conn,
-            "SELECT * FROM members WHERE group_id=? ORDER BY sort_order, created_at",
-            (group_id,),
+            "SELECT m.*, g.name AS group_name, g.team_id AS group_team_id, "
+            "tm.name AS team_name FROM members m "
+            "JOIN groups g ON g.id=m.group_id JOIN teams tm ON tm.id=g.team_id "
+            f"WHERE m.group_id IN ({placeholders}) "
+            "ORDER BY g.sort_order, g.name, m.sort_order, m.created_at, m.id",
+            params,
         )
         work_rows = rows(
             conn,
-            "SELECT * FROM works WHERE group_id=? ORDER BY member_id, sort_order, created_at",
-            (group_id,),
+            "SELECT w.*, g.name AS group_name, g.team_id AS group_team_id, "
+            "tm.name AS team_name FROM works w "
+            "JOIN groups g ON g.id=w.group_id JOIN teams tm ON tm.id=g.team_id "
+            f"WHERE w.group_id IN ({placeholders}) "
+            "ORDER BY g.sort_order, g.name, w.member_id, w.sort_order, w.created_at",
+            params,
         )
         todo_rows = rows(
             conn,
-            "SELECT id, assignee_member_id, status FROM todos WHERE group_id=?",
-            (group_id,),
+            "SELECT id, group_id, assignee_member_id, status FROM todos "
+            f"WHERE group_id IN ({placeholders})",
+            params,
         )
         pinned = int(
             scalar(
                 conn,
-                "SELECT COUNT(*) FROM announcements WHERE group_id=? AND pinned=1",
-                (group_id,),
+                "SELECT COUNT(*) FROM announcements "
+                f"WHERE group_id IN ({placeholders}) AND pinned=1",
+                params,
                 default=0,
             )
             or 0
         )
-        activity = _recent_activity(conn, group_id)
-        workload_section = build_workload_section(conn, group_id)
+        activity = _recent_activity(conn, group_ids)
+        workload_section = build_workload_section(conn, group_ids)
 
     works_by_member: dict[str, list[dict[str, Any]]] = {}
     for work in work_rows:
@@ -321,6 +387,7 @@ def group_overview(
     return ok(
         {
             "group": group_payload,
+            "scope": ctx,
             "members": members,
             "works": works,
             "recentActivity": activity,
@@ -479,17 +546,37 @@ def list_member_works(
     team_id: str,
     group_id: str,
     member_id: str,
+    scope: str = Query(default="group"),
     user: CurrentUser = Depends(require_read_access),
 ):
     with db() as conn:
         get_group(conn, team_id, group_id)
-        get_member(conn, member_id, group_id)
+        ctx = resolve_scope(conn, team_id, group_id, scope)
+        group_ids = ctx["groupIds"]
+        placeholders = _in_clause(group_ids)
+        member = row(
+            conn,
+            f"SELECT id FROM members WHERE id=? AND group_id IN ({placeholders})",
+            (member_id, *group_ids),
+        )
+        if not member:
+            raise fail(404, "成员不存在或不属于该开发组", "member_not_found")
         works = rows(
             conn,
-            "SELECT * FROM works WHERE member_id=? AND group_id=? ORDER BY sort_order, created_at",
-            (member_id, group_id),
+            "SELECT w.*, g.name AS group_name, g.team_id AS group_team_id, "
+            "tm.name AS team_name FROM works w "
+            "JOIN groups g ON g.id=w.group_id JOIN teams tm ON tm.id=g.team_id "
+            f"WHERE w.member_id=? AND w.group_id IN ({placeholders}) "
+            "ORDER BY w.sort_order, w.created_at",
+            (member_id, *group_ids),
         )
-    return ok({"memberId": member_id, "works": [_work_payload(work) for work in works]})
+    return ok(
+        {
+            "memberId": member_id,
+            "works": [_work_payload(work) for work in works],
+            "scope": ctx,
+        }
+    )
 
 
 def _get_work(conn, work_id: str, member_id: str, group_id: str) -> dict[str, Any]:
@@ -512,7 +599,7 @@ def create_work(
     user: CurrentUser = Depends(get_current_user),
 ):
     with db() as conn:
-        get_group(conn, team_id, group_id)
+        group = get_group(conn, team_id, group_id)
         get_member(conn, member_id, group_id)
         require_member_writer(user, team_id, group_id, member_id)
 
@@ -553,7 +640,7 @@ def create_work(
             ),
         )
         audit(conn, user, "work.create", "work", work_id, {"memberId": member_id, "title": title})
-        work = _work_payload(_get_work(conn, work_id, member_id, group_id))
+        work = _work_payload(_get_work(conn, work_id, member_id, group_id), group)
     return ok({"work": work})
 
 
@@ -567,7 +654,7 @@ def update_work(
     user: CurrentUser = Depends(get_current_user),
 ):
     with db() as conn:
-        get_group(conn, team_id, group_id)
+        group = get_group(conn, team_id, group_id)
         get_member(conn, member_id, group_id)
         work = _get_work(conn, work_id, member_id, group_id)
         require_member_writer(user, team_id, group_id, member_id)
@@ -596,7 +683,7 @@ def update_work(
                 (*updates.values(), work_id, member_id, group_id),
             )
             audit(conn, user, "work.update", "work", work_id, {"fields": sorted(payload)})
-        work = _work_payload(_get_work(conn, work_id, member_id, group_id))
+        work = _work_payload(_get_work(conn, work_id, member_id, group_id), group)
     return ok({"work": work})
 
 

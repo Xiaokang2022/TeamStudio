@@ -1,22 +1,27 @@
-"""Member task ledger routes: CRUD plus workload quantification payloads.
+"""Member task ledger routes: CRUD, workload payloads and the shared task tag library.
 
 Base path: ``/api/teams/{team_id}/groups/{group_id}``.
 
-Reads follow the shared guest-read gate. Writes require an authenticated identity: in-scope
-admins may manage every member's tasks, while a plain SSO-linked member may only manage tasks
-belonging to their linked member. Guests are always denied for writes.
+Reads follow the shared guest-read gate and honour the global browsing ``scope`` query
+parameter (``group`` default / ``team`` / ``all``). Writes require an authenticated identity:
+in-scope admins may manage every member's tasks, while a plain SSO-linked member may only
+manage tasks belonging to their linked member. Guests are always denied for writes. Tasks
+carry a per-group tag library that any signed-in user may manage.
 """
 
 from __future__ import annotations
 
+import re
+import sqlite3
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, Query
 
 from ..auth import CurrentUser, get_current_user
-from ..db import db, new_id, now_iso
+from ..db import db, json_dumps, json_loads, new_id, now_iso, row, rows
 from ..http import fail, get_group, get_member, ok, parse_date, text
 from ..permissions import audit, require_authenticated, require_read_access
+from ..scope import resolve_scope
 from ..services.tasks_service import (
     DIFFICULTIES,
     HEALTH_STATUSES,
@@ -24,10 +29,17 @@ from ..services.tasks_service import (
     PROGRESS_STATUSES,
     build_tasks_payload,
     get_task_row,
+    in_clause,
+    load_tag_map,
     task_payload,
 )
 
 router = APIRouter(prefix="/api/teams/{team_id}/groups/{group_id}", tags=["tasks"])
+
+HEX_PATTERN = re.compile(r"^#[0-9a-fA-F]{6}$")
+MAX_TAGS_PER_TASK = 8
+DEFAULT_TAG_NAMES = ("前端", "后端", "体验", "数据", "协作")
+DEFAULT_TAG_COLORS = ("#0a59f7", "#1d7a4d", "#9a6210", "#b3261e", "#7c3aed")
 
 
 # --------------------------------------------------------------------------- validation
@@ -81,6 +93,44 @@ def _expected_date(value: Any) -> str:
     return parse_date(cleaned, "预期完成日期")
 
 
+def _tag_ids(conn: sqlite3.Connection, group_id: str, value: Any) -> list[str]:
+    """Validate a task's tag ids: strings, max 8, unique, owned by the task's group."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise fail(422, "标签必须是字符串数组", "validation_error")
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise fail(422, "标签必须是字符串数组", "validation_error")
+        cleaned = item.strip()
+        if not cleaned:
+            continue
+        if cleaned not in result:
+            result.append(cleaned)
+    if len(result) > MAX_TAGS_PER_TASK:
+        raise fail(422, f"每个任务最多选择 {MAX_TAGS_PER_TASK} 个标签", "validation_error")
+    if result:
+        found = rows(
+            conn,
+            "SELECT id FROM task_tags WHERE group_id=? "
+            f"AND id IN ({in_clause(result)})",
+            (group_id, *result),
+        )
+        existing = {item["id"] for item in found}
+        if any(tag_id not in existing for tag_id in result):
+            raise fail(422, "标签不存在或不属于该开发组", "invalid_tag")
+    return result
+
+
+def _tag_color(value: Any, fallback: str = "#5865f2") -> str:
+    if value is None or value == "":
+        return fallback
+    if not isinstance(value, str) or not HEX_PATTERN.fullmatch(value):
+        raise fail(422, "标签颜色必须是 #RRGGBB 格式", "validation_error")
+    return value.lower()
+
+
 # --------------------------------------------------------------------------- permissions
 
 
@@ -123,18 +173,20 @@ def _resolve_created_member(
     return raw, is_admin
 
 
-# --------------------------------------------------------------------------- routes
+# --------------------------------------------------------------------------- task routes
 
 
 @router.get("/tasks")
 def list_tasks(
     team_id: str,
     group_id: str,
+    scope: str = Query(default="group"),
     user: CurrentUser = Depends(require_read_access),
 ):
     with db() as conn:
         get_group(conn, team_id, group_id)
-        payload = build_tasks_payload(conn, group_id)
+        ctx = resolve_scope(conn, team_id, group_id, scope)
+        payload = build_tasks_payload(conn, ctx["groupIds"], ctx)
     return ok(payload)
 
 
@@ -176,12 +228,14 @@ def create_task(
             else "medium"
         )
         expected_date = _expected_date(payload.get("expectedDate"))
+        tag_ids = _tag_ids(conn, group_id, payload.get("tagIds"))
         now = now_iso()
         task_id = new_id("task")
         conn.execute(
             "INSERT INTO member_tasks (id,group_id,member_id,title,description,"
-            "progress_status,health_status,priority,difficulty,expected_date,created_by,"
-            "created_at,updated_at,completed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "progress_status,health_status,priority,difficulty,expected_date,tags,"
+            "created_by,created_at,updated_at,completed_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 task_id,
                 group_id,
@@ -193,6 +247,7 @@ def create_task(
                 priority,
                 difficulty,
                 expected_date,
+                json_dumps(tag_ids),
                 user.name or user.id,
                 now,
                 now,
@@ -211,10 +266,13 @@ def create_task(
                 "progressStatus": progress_status,
                 "priority": priority,
                 "difficulty": difficulty,
+                "tagIds": tag_ids,
             },
         )
         task = get_task_row(conn, task_id, group_id)
-    return ok({"task": task_payload(task or {})})
+        tag_map = load_tag_map(conn, [group_id])
+        result = task_payload(task or {}, tag_map=tag_map)
+    return ok({"task": result})
 
 
 @router.patch("/tasks/{task_id}")
@@ -264,6 +322,8 @@ def update_task(
             updates["difficulty"] = _difficulty(payload.get("difficulty"))
         if "expectedDate" in payload:
             updates["expected_date"] = _expected_date(payload.get("expectedDate"))
+        if "tagIds" in payload:
+            updates["tags"] = json_dumps(_tag_ids(conn, group_id, payload.get("tagIds")))
         if updates:
             updates["updated_at"] = now_iso()
             assignments = ", ".join(f"{column}=?" for column in updates)
@@ -280,7 +340,9 @@ def update_task(
                 {"fields": sorted(payload)},
             )
         task = get_task_row(conn, task_id, group_id)
-    return ok({"task": task_payload(task or {})})
+        tag_map = load_tag_map(conn, [group_id])
+        result = task_payload(task or {}, tag_map=tag_map)
+    return ok({"task": result})
 
 
 @router.delete("/tasks/{task_id}")
@@ -309,3 +371,230 @@ def delete_task(
             {"memberId": task["member_id"], "title": task.get("title", "")},
         )
     return ok({"deleted": True, "id": task_id})
+
+
+# --------------------------------------------------------------------------- tag library
+
+
+def _ensure_default_tags(conn: sqlite3.Connection, group_ids: list[str]) -> None:
+    """Lazily seed the five default tags for every group whose library is still empty."""
+    if not group_ids:
+        return
+    counts = {
+        item["group_id"]: int(item["count"])
+        for item in rows(
+            conn,
+            "SELECT group_id, COUNT(*) AS count FROM task_tags "
+            f"WHERE group_id IN ({in_clause(group_ids)}) GROUP BY group_id",
+            tuple(group_ids),
+        )
+    }
+    now = now_iso()
+    for group_id in group_ids:
+        if counts.get(group_id, 0):
+            continue
+        for name, color in zip(DEFAULT_TAG_NAMES, DEFAULT_TAG_COLORS):
+            conn.execute(
+                "INSERT INTO task_tags (id,group_id,name,color,created_by,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (new_id("tag"), group_id, name, color, "system", now, now),
+            )
+
+
+def _tag_usage(conn: sqlite3.Connection, group_ids: list[str]) -> dict[str, int]:
+    """Count tasks referencing each tag id inside the read scope."""
+    if not group_ids:
+        return {}
+    usage: dict[str, int] = {}
+    for item in rows(
+        conn,
+        "SELECT tags FROM member_tasks "
+        f"WHERE group_id IN ({in_clause(group_ids)})",
+        tuple(group_ids),
+    ):
+        parsed = json_loads(item.get("tags"), [])
+        if not isinstance(parsed, list):
+            continue
+        for tag_id in {value for value in parsed if isinstance(value, str)}:
+            usage[tag_id] = usage.get(tag_id, 0) + 1
+    return usage
+
+
+def _tag_payload(tag: dict[str, Any], usage: int = 0) -> dict[str, Any]:
+    return {
+        "id": tag["id"],
+        "groupId": tag.get("group_id", ""),
+        "groupName": tag.get("group_name", ""),
+        "name": tag.get("name", ""),
+        "color": tag.get("color", "#5865f2"),
+        "usage": int(usage),
+        "createdBy": tag.get("created_by", ""),
+        "createdAt": tag.get("created_at", ""),
+        "updatedAt": tag.get("updated_at", ""),
+    }
+
+
+def _tag_select() -> str:
+    return (
+        "SELECT tg.*, g.name AS group_name FROM task_tags tg "
+        "JOIN groups g ON g.id=tg.group_id "
+    )
+
+
+def _get_tag(conn: sqlite3.Connection, tag_id: str, group_id: str) -> dict[str, Any]:
+    found = row(
+        conn,
+        _tag_select() + "WHERE tg.id=? AND tg.group_id=?",
+        (tag_id, group_id),
+    )
+    if not found:
+        raise fail(404, "标签不存在", "tag_not_found")
+    return found
+
+
+def _tag_name(conn: sqlite3.Connection, group_id: str, value: Any) -> str:
+    name = text(value, "标签名称", 20, required=True)
+    existing = row(
+        conn,
+        "SELECT id FROM task_tags WHERE group_id=? AND name=? LIMIT 1",
+        (group_id, name),
+    )
+    if existing:
+        raise fail(409, "标签名称已存在", "tag_exists")
+    return name
+
+
+def _tag_detail(conn: sqlite3.Connection, tag: dict[str, Any]) -> dict[str, Any]:
+    usage = _tag_usage(conn, [tag["group_id"]]).get(tag["id"], 0)
+    return _tag_payload(tag, usage)
+
+
+@router.get("/task-tags")
+def list_task_tags(
+    team_id: str,
+    group_id: str,
+    scope: str = Query(default="group"),
+    user: CurrentUser = Depends(require_read_access),
+):
+    with db() as conn:
+        get_group(conn, team_id, group_id)
+        ctx = resolve_scope(conn, team_id, group_id, scope)
+        group_ids = ctx["groupIds"]
+        _ensure_default_tags(conn, group_ids)
+        usage = _tag_usage(conn, group_ids)
+        tags = rows(
+            conn,
+            _tag_select()
+            + f"WHERE tg.group_id IN ({in_clause(group_ids)}) "
+            "ORDER BY g.sort_order, g.name, tg.name",
+            tuple(group_ids),
+        )
+    return ok(
+        {
+            "tags": [_tag_payload(tag, usage.get(tag["id"], 0)) for tag in tags],
+            "scope": ctx,
+        }
+    )
+
+
+@router.post("/task-tags")
+def create_task_tag(
+    team_id: str,
+    group_id: str,
+    payload: dict[str, Any] = Body(...),
+    user: CurrentUser = Depends(get_current_user),
+):
+    require_authenticated(user)
+    with db() as conn:
+        get_group(conn, team_id, group_id)
+        name = _tag_name(conn, group_id, payload.get("name"))
+        color = _tag_color(payload.get("color"))
+        tag_id = new_id("tag")
+        now = now_iso()
+        conn.execute(
+            "INSERT INTO task_tags (id,group_id,name,color,created_by,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (tag_id, group_id, name, color, user.name or user.id, now, now),
+        )
+        audit(conn, user, "task_tag.create", "task_tag", tag_id, {"name": name})
+        tag = _get_tag(conn, tag_id, group_id)
+        result = _tag_detail(conn, tag)
+    return ok({"tag": result})
+
+
+@router.patch("/task-tags/{tag_id}")
+def update_task_tag(
+    team_id: str,
+    group_id: str,
+    tag_id: str,
+    payload: dict[str, Any] = Body(...),
+    user: CurrentUser = Depends(get_current_user),
+):
+    require_authenticated(user)
+    with db() as conn:
+        get_group(conn, team_id, group_id)
+        _get_tag(conn, tag_id, group_id)
+        updates: dict[str, Any] = {}
+        if "name" in payload:
+            name = text(payload.get("name"), "标签名称", 20, required=True)
+            duplicate = row(
+                conn,
+                "SELECT id FROM task_tags WHERE group_id=? AND name=? AND id<>? LIMIT 1",
+                (group_id, name, tag_id),
+            )
+            if duplicate:
+                raise fail(409, "标签名称已存在", "tag_exists")
+            updates["name"] = name
+        if "color" in payload:
+            updates["color"] = _tag_color(payload.get("color"))
+        if updates:
+            updates["updated_at"] = now_iso()
+            assignments = ", ".join(f"{column}=?" for column in updates)
+            conn.execute(
+                f"UPDATE task_tags SET {assignments} WHERE id=? AND group_id=?",
+                (*updates.values(), tag_id, group_id),
+            )
+            audit(
+                conn,
+                user,
+                "task_tag.update",
+                "task_tag",
+                tag_id,
+                {"fields": sorted(payload)},
+            )
+        tag = _get_tag(conn, tag_id, group_id)
+        result = _tag_detail(conn, tag)
+    return ok({"tag": result})
+
+
+@router.delete("/task-tags/{tag_id}")
+def delete_task_tag(
+    team_id: str,
+    group_id: str,
+    tag_id: str,
+    user: CurrentUser = Depends(get_current_user),
+):
+    require_authenticated(user)
+    with db() as conn:
+        get_group(conn, team_id, group_id)
+        tag = _get_tag(conn, tag_id, group_id)
+        conn.execute("DELETE FROM task_tags WHERE id=? AND group_id=?", (tag_id, group_id))
+        # Remove the reference from every task in the ledger, not just this group.
+        for item in rows(conn, "SELECT id, tags FROM member_tasks"):
+            parsed = json_loads(item.get("tags"), [])
+            if not isinstance(parsed, list) or tag_id not in parsed:
+                continue
+            remaining = [value for value in parsed if value != tag_id]
+            conn.execute(
+                "UPDATE member_tasks SET tags=?, updated_at=? WHERE id=?",
+                (json_dumps(remaining), now_iso(), item["id"]),
+            )
+        audit(
+            conn,
+            user,
+            "task_tag.delete",
+            "task_tag",
+            tag_id,
+            {"name": tag.get("name", "")},
+        )
+    return ok({"deleted": True, "id": tag_id})

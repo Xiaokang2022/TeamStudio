@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { AlertCircle, Bell, BellOff, CalendarDays, Clock, Mail, Plus, UserRound, X } from "lucide-react";
+import { AlertCircle, Bell, BellOff, CalendarDays, Clock, Layers3, Mail, Plus, UserRound, X } from "lucide-react";
 import { api, ApiError } from "../api";
 import { useToast } from "./Toast";
 import { Modal } from "./Modal";
+import { Select } from "./Select";
 import { cn, PRIORITY_META, todayISO } from "../lib/utils";
 import type { Member, Todo, TodoPriority } from "../types";
 
@@ -15,6 +16,8 @@ export interface TodoDialogProps {
   todo: Todo | null;
   teamId: string;
   groupId: string;
+  /** Aggregate scope: new todos are written to the current group; show it. */
+  createGroupName?: string;
   members: Member[];
   defaultDate: string;
   defaultAssigneeId: string | null;
@@ -41,6 +44,7 @@ export function TodoDialog({
   todo,
   teamId,
   groupId,
+  createGroupName,
   members,
   defaultDate,
   defaultAssigneeId,
@@ -108,6 +112,19 @@ export function TodoDialog({
   const selectableMembers = canAssignOthers
     ? members
     : members.filter((member) => member.id === defaultAssigneeId);
+
+  const assigneeOptions = useMemo(
+    () => [
+      { value: "", label: canAssignOthers ? "未指派" : "自动指派给我" },
+      ...selectableMembers.map((member) => ({
+        value: member.id,
+        label: member.name,
+        description: member.title || undefined,
+        color: member.avatarColor,
+      })),
+    ],
+    [canAssignOthers, selectableMembers],
+  );
 
   const toggleOffset = (days: number) => {
     setOffsets((current) =>
@@ -202,6 +219,11 @@ export function TodoDialog({
       }
     >
       <form id="td-todo-form" className="td-form" onSubmit={submit}>
+        {!isEditing && createGroupName ? (
+          <p className="td-target-hint" role="status">
+            <Layers3 size={13} /> 将创建到：<strong>{createGroupName}</strong>
+          </p>
+        ) : null}
         <div className="field">
           <label htmlFor="td-title">待办标题 *</label>
           <input
@@ -263,21 +285,16 @@ export function TodoDialog({
           <label htmlFor="td-assignee">
             <UserRound size={12} /> 负责人
           </label>
-          <select
+          <Select
             id="td-assignee"
-            className="select"
             value={assigneeId ?? ""}
-            onChange={(event) => setAssigneeId(event.target.value || null)}
+            onChange={(next) => setAssigneeId(next || null)}
+            options={assigneeOptions}
             disabled={!canAssignOthers}
-          >
-            <option value="">{canAssignOthers ? "未指派" : "自动指派给我"}</option>
-            {selectableMembers.map((member) => (
-              <option key={member.id} value={member.id}>
-                {member.name}
-                {member.title ? ` · ${member.title}` : ""}
-              </option>
-            ))}
-          </select>
+            ariaLabel="负责人"
+            placeholder={canAssignOthers ? "未指派" : "自动指派给我"}
+            searchable={selectableMembers.length > 6}
+          />
           <span className="field-hint">
             {canAssignOthers
               ? "管理员可以指派给任意成员；成员本人只能创建自己的待办。"

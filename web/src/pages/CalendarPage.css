@@ -487,6 +487,7 @@
   width: 22px;
   height: 22px;
   flex: none;
+  /* Optical centering against the first text line of the todo title. */
   margin-top: -2px;
   display: grid;
   place-items: center;
@@ -495,12 +496,17 @@
   border-radius: 50%;
   background: var(--surface);
   color: var(--text-3);
-  line-height: 1;
+  line-height: 0;
   transition: border-color 0.15s var(--ease), color 0.15s var(--ease), background 0.15s var(--ease), transform 0.15s var(--ease);
 }
 
+/* Single, crisply centred glyph: no 1px drift between the ring and the tick. */
 .cal-check svg {
   display: block;
+  width: 13px;
+  height: 13px;
+  flex: none;
+  margin: 0;
 }
 
 .cal-check:hover:not(:disabled) {
@@ -522,6 +528,21 @@
   border-color: color-mix(in srgb, var(--green) 55%, transparent);
   background: var(--green-soft);
   color: var(--green);
+}
+
+.cal-todo.is-done .cal-check svg {
+  animation: cal-check-pop 0.18s var(--ease);
+}
+
+@keyframes cal-check-pop {
+  from {
+    opacity: 0.35;
+    transform: scale(0.55);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .cal-todo-main {
@@ -570,6 +591,44 @@
   align-items: center;
   gap: 3px;
   white-space: nowrap;
+}
+
+/* Aggregate scope: owning development group badge. */
+.cal-group-badge {
+  padding: 0 6px;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.cal-chip-group {
+  flex: none;
+  max-width: 46px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* TodoDialog aggregate hint: which group a new todo is written to. */
+.td-target-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 2px;
+  padding: 8px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--border));
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.td-target-hint strong {
+  font-weight: 700;
 }
 
 .cal-todo-assignee {
@@ -949,5 +1008,8 @@
   .cal-todo,
   .cal-check {
     transition: none;
+  }
+  .cal-todo.is-done .cal-check svg {
+    animation: none;
   }
 }

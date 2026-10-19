@@ -16,6 +16,16 @@ export default defineConfig({
   build: {
     outDir: "dist",
     sourcemap: false,
-    chunkSizeWarningLimit: 900,
+    // monaco-editor（VS Code 内核）本身体积较大，将其中立拆成独立 chunk 便于浏览器缓存；
+    // monaco 单 chunk ~3MB 属预期，因此放宽 warning 阈值，其余 chunk 仍保持拆分。
+    chunkSizeWarningLimit: 4200,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules/monaco-editor")) return "monaco";
+          return undefined;
+        },
+      },
+    },
   },
 });

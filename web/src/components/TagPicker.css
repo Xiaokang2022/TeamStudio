@@ -1,0 +1,458 @@
+/* ============================================================
+   Task tags (#10): chips, picker, library management dialog
+   Scoped classes: .tag-* / .tag-manager-* / .tag-library-*
+   Colours come from the shared design tokens; individual tag colours are
+   passed as the `--tag-color` custom property.
+   ============================================================ */
+
+.tag-chips {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 160px;
+  padding: 1px 7px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--tag-color, var(--accent)) 34%, var(--border));
+  background: color-mix(in srgb, var(--tag-color, var(--accent)) 11%, var(--surface));
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.65;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tag-chip-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--tag-color, var(--accent));
+  flex: none;
+}
+
+.tag-chip.is-more {
+  border-color: var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+}
+
+/* ---------- Picker field inside TaskDialog ---------- */
+.tag-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tag-picker-field {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 40px;
+  padding: 6px 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-2);
+  transition: border-color 0.16s, background 0.16s;
+}
+
+.tag-picker-field.is-open {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
+  background: var(--surface);
+}
+
+.tag-picker-field.is-disabled {
+  opacity: 0.7;
+}
+
+.tag-picker-chip {
+  padding-right: 4px;
+}
+
+.tag-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-3);
+}
+
+.tag-chip-remove:hover {
+  background: color-mix(in srgb, var(--tag-color, var(--accent)) 18%, var(--surface));
+  color: var(--text);
+}
+
+.tag-picker-placeholder,
+.tag-picker-missing {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.tag-picker-missing {
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px dashed var(--border-strong);
+}
+
+.tag-picker-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: border-color 0.16s, color 0.16s, background 0.16s;
+}
+
+.tag-picker-toggle:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.tag-picker-toggle[aria-expanded="true"] {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+  color: var(--accent);
+}
+
+.tag-picker-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.tag-picker-panel {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ---------- Tag manager ---------- */
+.tag-manager {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tag-manager-error {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--orange) 28%, var(--border));
+  border-radius: 8px;
+  background: var(--orange-soft);
+  color: var(--orange);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.tag-manager-error span {
+  flex: 1;
+  min-width: 0;
+}
+
+.tag-manager-error .text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--orange);
+  white-space: nowrap;
+}
+
+.tag-manager-empty {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 4px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.tag-manager-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 230px;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tag-manager:not(.is-compact) .tag-manager-list {
+  max-height: 340px;
+}
+
+.tag-manager-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  min-width: 0;
+  transition: background 0.14s;
+}
+
+.tag-manager-row:hover {
+  background: var(--surface-2);
+}
+
+.tag-manager-row.is-selected {
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+
+.tag-manager-row.is-disabled {
+  opacity: 0.5;
+}
+
+.tag-manager-row.is-editing,
+.tag-manager-row.is-confirming {
+  flex-wrap: wrap;
+  background: var(--surface-2);
+  padding: 7px 8px;
+}
+
+.tag-manager-check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex: 1;
+  cursor: pointer;
+}
+
+.tag-manager-check input {
+  width: 13px;
+  height: 13px;
+  accent-color: var(--accent);
+  flex: none;
+}
+
+.tag-manager-dot,
+.tag-color-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+.tag-manager-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.tag-manager-row:not(.is-editing) > .tag-manager-name {
+  flex: 1;
+}
+
+.tag-manager-usage {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tag-manager-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  margin-left: auto;
+  opacity: 0.55;
+  transition: opacity 0.14s;
+}
+
+.tag-manager-row:hover .tag-manager-actions,
+.tag-manager-row.is-editing .tag-manager-actions,
+.tag-manager-row.is-confirming .tag-manager-actions,
+.tag-manager-actions:focus-within {
+  opacity: 1;
+}
+
+.tag-manager-action {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+}
+
+.tag-manager-action.is-accent {
+  color: var(--accent);
+}
+
+.tag-manager-input {
+  flex: 1;
+  min-width: 110px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+
+.tag-manager-input:focus {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.tag-manager-confirm-text {
+  flex: 1;
+  min-width: 160px;
+  font-size: 11.5px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+.tag-manager-create {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.tag-manager-create-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+}
+
+.tag-manager-form-error {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: var(--red);
+}
+
+.tag-manager-hint {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+/* ---------- Colour swatches ---------- */
+.tag-swatches {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  flex: none;
+}
+
+.tag-swatch {
+  display: inline-grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  background: var(--tag-color, var(--accent));
+  color: #fff;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.16);
+  transition: transform 0.14s, border-color 0.14s;
+}
+
+.tag-swatch:hover:not(:disabled) {
+  transform: scale(1.12);
+}
+
+.tag-swatch.active {
+  border-color: var(--text);
+}
+
+.tag-swatch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---------- Library dialog ---------- */
+.tag-library-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tag-library-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.tag-library-group > span {
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--text-2);
+}
+
+.tag-library-group-static {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.tag-library-dialog .tag-manager-list {
+  max-height: min(46vh, 400px);
+}
+
+@media (max-width: 560px) {
+  .tag-manager-row.is-editing {
+    align-items: stretch;
+  }
+
+  .tag-manager-row.is-editing .tag-swatches {
+    order: 4;
+    width: 100%;
+  }
+
+  .tag-manager-create .tag-swatches {
+    order: 4;
+    width: 100%;
+  }
+}

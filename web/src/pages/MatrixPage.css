@@ -12,6 +12,20 @@
   margin-bottom: 0;
 }
 
+/* Member filter uses the shared custom Select: keep it compact in the toolbar
+   instead of stretching to the full column width. */
+.ts-select.mx-member-filter {
+  width: auto;
+  min-width: 168px;
+}
+
+/* Aggregate scope: owning development group badge. */
+.mx-group-badge {
+  padding: 0 6px;
+  font-size: 9px;
+  font-weight: 600;
+}
+
 /* ---------- help / legend ---------- */
 .mx-help {
   position: relative;

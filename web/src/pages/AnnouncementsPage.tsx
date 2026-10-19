@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   Info,
@@ -45,14 +45,48 @@ function levelMeta(level: string) {
 const isExpandable = (content: string): boolean =>
   content.trim().length > 180 || content.split("\n").length > 4;
 
+function GroupBadge({ name, color }: { name: string; color: string }) {
+  return (
+    <span className="badge badge-gray ann-group-badge" title={`所属开发组：${name}`}>
+      <i className="dot" style={{ background: color }} />
+      {name}
+    </span>
+  );
+}
+
 export default function AnnouncementsPage() {
-  const { currentTeam, currentGroup, canManageActiveGroup, config } = useApp();
+  const { data, currentTeam, currentGroup, canManageActiveGroup, config, scope } = useApp();
   const { toast } = useToast();
 
   const teamId = currentTeam?.id ?? "";
   const groupId = currentGroup?.id ?? "";
+  const aggregate = scope !== "group";
   const configuredMax = config?.announcements.maxPinned ?? 3;
   const maxPinned = Math.max(0, Math.min(3, configuredMax));
+
+  // Resolve an announcement's owning group for badges and write routing.
+  const groupIndex = useMemo(() => {
+    const map = new Map<string, { teamId: string; name: string; color: string }>();
+    data?.teams.forEach((team) =>
+      team.groups.forEach((group) =>
+        map.set(group.id, { teamId: team.id, name: group.name, color: group.color }),
+      ),
+    );
+    return map;
+  }, [data?.teams]);
+
+  const targetOf = useCallback(
+    (announcement: Announcement) => {
+      const meta = announcement.groupId ? groupIndex.get(announcement.groupId) : undefined;
+      return {
+        teamId: meta?.teamId || teamId,
+        groupId: announcement.groupId || groupId,
+        groupName: meta?.name || currentGroup?.name || "",
+        groupColor: meta?.color || "#8b8c88",
+      };
+    },
+    [groupIndex, teamId, groupId, currentGroup?.name],
+  );
 
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [loading, setLoading] = useState(true);
@@ -81,7 +115,7 @@ export default function AnnouncementsPage() {
     setLoading(true);
     setError("");
     void api
-      .announcements(teamId, groupId)
+      .announcements(teamId, groupId, scope)
       .then((result) => {
         if (!cancelled) setAnnouncements(result.announcements);
       })
@@ -97,7 +131,7 @@ export default function AnnouncementsPage() {
     return () => {
       cancelled = true;
     };
-  }, [teamId, groupId, refreshTick, toast]);
+  }, [teamId, groupId, scope, refreshTick, toast]);
 
   const sorted = useMemo(
     () =>
@@ -160,13 +194,21 @@ export default function AnnouncementsPage() {
         pinned: draft.pinned,
       };
       if (editing) {
-        const result = await api.updateAnnouncement(teamId, groupId, editing.id, body);
+        const target = targetOf(editing);
+        const result = await api.updateAnnouncement(target.teamId, target.groupId, editing.id, body);
         setAnnouncements((prev) => prev.map((item) => (item.id === result.announcement.id ? result.announcement : item)));
         toast("公告已更新", "success");
       } else {
         const result = await api.createAnnouncement(teamId, groupId, body);
         setAnnouncements((prev) => [result.announcement, ...prev]);
-        toast(draft.pinned ? "公告已发布并置顶" : "公告已发布", "success");
+        toast(
+          aggregate && currentGroup
+            ? `公告已发布到「${currentGroup.name}」${draft.pinned ? "并置顶" : ""}`
+            : draft.pinned
+              ? "公告已发布并置顶"
+              : "公告已发布",
+          "success",
+        );
       }
       setEditorOpen(false);
     } catch (err) {
@@ -178,9 +220,10 @@ export default function AnnouncementsPage() {
 
   const handleDelete = async () => {
     if (!teamId || !groupId || !deleteTarget) return;
+    const target = targetOf(deleteTarget);
     setDeleting(true);
     try {
-      await api.deleteAnnouncement(teamId, groupId, deleteTarget.id);
+      await api.deleteAnnouncement(target.teamId, target.groupId, deleteTarget.id);
       setAnnouncements((prev) => prev.filter((item) => item.id !== deleteTarget.id));
       setExpandedIds((prev) => prev.filter((id) => id !== deleteTarget.id));
       toast("公告已删除", "success");
@@ -307,6 +350,9 @@ export default function AnnouncementsPage() {
                         <Pin size={11} /> 置顶
                       </span>
                     ) : null}
+                    {aggregate ? (
+                      <GroupBadge name={targetOf(item).groupName} color={targetOf(item).groupColor} />
+                    ) : null}
                     <time className="ann-time" dateTime={item.createdAt}>
                       {formatDateTime(item.createdAt)}
                     </time>
@@ -367,7 +413,13 @@ export default function AnnouncementsPage() {
           if (!saving) setEditorOpen(false);
         }}
         title={editing ? "编辑公告" : "发布公告"}
-        description="公告发布后所有成员都能看到；置顶公告会同时出现在首页。"
+        description={
+          editing && aggregate
+            ? `当前在聚合视角编辑「${targetOf(editing).groupName}」的公告，保存会写回该开发组。`
+            : !editing && aggregate
+              ? `聚合视角下发布的公告会写入当前开发组：${currentGroup?.name ?? "当前开发组"}。`
+              : "公告发布后所有成员都能看到；置顶公告会同时出现在首页。"
+        }
         size="lg"
         footer={
           <>

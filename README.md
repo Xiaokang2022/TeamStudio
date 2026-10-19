@@ -1,8 +1,8 @@
 # TeamStudio · 团队工作室
 
-一个可本地部署的现代化「团队工作室」全栈应用：在团队（Team）内切换多个开发组（Group），围绕成员概览、任务台账、工作量负载、协作日历、红黑榜、公告栏、常用链接和可切换表格/网络视图的业务责任田矩阵组织日常协作，并提供企业 SSO、细粒度管理员白名单、可热更新的 JSON 配置和与日历关联的邮件提醒。
+一个可本地部署的现代化「团队工作室」全栈应用：在团队（Team）内切换多个开发组（Group），围绕成员概览、任务台账与共享标签、工作量负载、数据洞察、协作日历、红黑榜、公告栏、常用链接和可切换表格/网络视图的业务责任田矩阵组织日常协作，并提供企业 SSO、细粒度管理员白名单、可热更新的 JSON 配置、与日历关联的邮件提醒，以及**内建 SMTP 邮件服务器**（无需外部邮件服务即可离线投递与查看邮件）。所有数据都支持「开发组 / 整个团队 / 全部团队」三级浏览视角。
 
-> 技术栈：Python 3.15 + FastAPI + SQLite · React 19 + TypeScript + Vite · 原生 CSS 设计系统 · 华为鸿蒙风纸白 / 暗黑双主题。前后端同源部署，单进程即可运行。
+> 技术栈：Python 3.15 + FastAPI + SQLite · React 19 + TypeScript + Vite · 原生 CSS 设计系统 · 华为鸿蒙风纸白 / 暗黑双主题 · Monaco（VS Code 同款）JSON 编辑器。前后端同源部署，单进程即可运行。
 
 ---
 
@@ -28,6 +28,18 @@
 | --- | --- |
 | ![责任田成员筛选](docs/screenshots/matrix-network-member.png) | ![红黑榜](docs/screenshots/redblack.png) |
 
+| 数据洞察（全团队视角） | 内建邮件中心 |
+| --- | --- |
+| ![数据洞察](docs/screenshots/insights.png) | ![邮件中心](docs/screenshots/mail.png) |
+
+| 任务标签 | 自绘下拉框 |
+| --- | --- |
+| ![任务标签](docs/screenshots/tags.png) | ![下拉框](docs/screenshots/select-open.png) |
+
+| 纸白外观与跟随系统预览 | JSON 配置（VS Code 同款 Monaco） |
+| --- | --- |
+| ![外观设置](docs/screenshots/appearance.png) | ![JSON 编辑器](docs/screenshots/settings-json.png) |
+
 | 管理台（GUI 设置） | 关于 / 模型声明 |
 | --- | --- |
 | ![管理台](docs/screenshots/settings.png) | ![关于弹窗](docs/screenshots/about-dialog.png) |
@@ -36,7 +48,9 @@
 | --- | --- |
 | ![折叠侧边栏](docs/screenshots/sidebar-collapsed.png) | ![登录页](docs/screenshots/login.png) |
 
-开发组/团队切换：![开发组切换](docs/screenshots/sidebar-group-switch.png) ![团队切换](docs/screenshots/sidebar-team-switch.png)
+开发组/团队切换与浏览视角：![开发组切换](docs/screenshots/sidebar-group-switch.png) ![团队切换](docs/screenshots/sidebar-team-switch.png)
+
+全部团队聚合视角：[概览聚合](docs/screenshots/overview-scope-all.png) · [责任田聚合](docs/screenshots/matrix-all.png) · [链接聚合](docs/screenshots/scope-all-links.png)
 
 ---
 
@@ -52,6 +66,10 @@
 
 - [功能清单](#功能清单)
 - [成员任务与工作量负载](#成员任务与工作量负载)
+- [全局浏览视角](#全局浏览视角)
+- [任务标签](#任务标签开发组内共享)
+- [数据统计与分析](#数据统计与分析)
+- [内建邮件服务器](#内建邮件服务器)
 - [构建与模型声明](#构建与模型声明)
 - [快速开始](#快速开始)
 - [权限模型](#权限模型)
@@ -84,9 +102,14 @@
 | 12 | 邮件与日历关联 | 每条日历待办独立设置提醒天数与邮件开关；后台调度器按 `(待办, 提前天数, 收件人)` 幂等去重；邮件含开发组置顶公告 |
 | 13 | 成员任务台账 | 所有成员任务集中总览；进度状态（待完成 / 进行中 / 已完成）、健康状态（正常 / 延期 / 阻塞）、优先级、难易度、预期完成日期、加权负载点数；成员管理自己的任务 |
 | 14 | 工作量负载量化 | 任务基础 1 分 + 优先级加成 + 难度加成；每人每周容量 15 分；统计当前与近 4 周滚动平均负载点数，分级为轻载 / 均衡 / 偏高 / 超载 |
-| 15 | 高级双主题 | 华为鸿蒙风「纸白 / 暗黑」双主题，统一鸿蒙蓝强调色、轻量液态玻璃边界、微立体层次和丝滑过渡动画 |
+| 15 | 高级双主题 | 华为鸿蒙风「纸白 / 暗黑」双主题，统一鸿蒙蓝强调色、柔和纸感层次、不透明浮层，全站过渡动画与「跟随系统」真实主题预览 |
+| 16 | 全局浏览视角 | 侧边栏「浏览视角」在开发组 / 整个团队 / 全部团队之间切换；概览、任务、日历、链接、责任田、公告、数据分析均按 scope 聚合，条目显示所属开发组徽章 |
+| 17 | 任务标签 | 每个开发组共享一套标签库，所有人可新建、改名、换色、删除；任务支持多选标签（最多 8 个），任务总览支持按标签筛选与标签库管理 |
+| 18 | 数据统计与分析 | 独立「数据洞察」模块：7 项 KPI、日/周趋势柱状图、成员/开发组/团队三张可排序表格；时间跨度从近 1 周到全部时间 |
+| 19 | 内建邮件服务器 | 标准库 asyncio 实现的本地 SMTP 服务器（默认 `127.0.0.1:2525`），离线投递提醒与测试邮件，设置页内置「本地邮件中心」查看 / 删除邮件；外部 SMTP 仍可选 |
+| 20 | 体验细节优化 | 成员卡桌面一行 4 张、自绘无障碍下拉框、Monaco JSON 编辑器、单勾日历完成按钮、纸白主题低眩光层次、抽屉开合动画等 |
 
-除此之外还包括：可折叠侧边栏（状态持久化）、关于弹窗与模型声明、轻量液态玻璃与微立体层次、丝滑页面/卡片/负载条动画、原生下拉与复选框对比度修正、响应式布局、设备管理员身份提示、审计日志、演示种子数据、API 文档、自动化测试。
+除此之外还包括：可折叠侧边栏（状态持久化）、关于弹窗与模型声明、水墨纸感层次、丝滑页面/卡片/负载条动画、响应式布局、设备管理员身份提示、审计日志、演示种子数据、API 文档、自动化测试。
 
 ---
 
@@ -104,6 +127,77 @@
 - **负载分级**：`< 40%` 轻载、`< 85%` 均衡、`< 110%` 偏高、其余超载。
 - **界面**：总览页、成员抽屉和任务总览同时展示当前/平均负载；成员卡片支持展示多项并行进行中的工作。
 - **数据一致性**：任务接口与 `member_tasks` 表由服务端校验、鉴权和审计；现有库升级时会自动补充优先级/难度字段并回填。
+
+---
+
+## 全局浏览视角
+
+侧边栏的「浏览视角」提供三级数据范围，状态保存在本地并在刷新后保持：
+
+| 视角 | 数据范围 | 典型用途 |
+| --- | --- | --- |
+| 开发组 | 当前选中的开发组 | 日常协作、组内任务与日历 |
+| 团队 | 当前团队下全部开发组 | 团队负责人查看整体进度 |
+| 全部团队 | 站点内所有团队与开发组 | 跨团队横向对比与站点级盘点 |
+
+- 后端所有数据读取接口支持 `?scope=group|team|all`（默认 `group`，与旧版逐字段兼容），返回 `scope` 元数据；列表项携带 `groupId/groupName/teamId/teamName`，前端据此显示所属开发组徽章。
+- 写入仍然组级：在聚合视角编辑/删除时，前端按条目自己的 `groupId` 路由到对应开发组；新建数据写入当前选中的开发组，并在弹窗中明确提示「将创建到：{开发组}」。
+- 概览、任务总览、数据洞察、协作日历、常用链接、责任田矩阵、公告栏均已支持；红黑榜按开发组按月维护，保持组级语义。
+- 示例：`GET /api/teams/team-aurora/groups/grp-frontend/overview?scope=all`。
+
+---
+
+## 任务标签（开发组内共享）
+
+- 每个开发组拥有一套共享标签库（`task_tags` 表），**所有登录成员**都可以新增、重命名、换色、删除，无需管理员权限。
+- 任务可绑定最多 8 个标签（`member_tasks.tags` 存标签 ID 数组），任务列表与任务弹窗以彩色 chips 展示；支持按标签筛选。
+- 标签库管理弹层展示每个标签的使用次数；删除标签会自动从所有任务的引用中移除。
+- 首次访问某个开发组时若无标签，会自动初始化 5 个常用标签（如「前端」「后端」「体验」「数据」「协作」）。
+- API：`GET/POST /api/teams/{team}/groups/{group}/task-tags`、`PATCH/DELETE .../task-tags/{tagId}`；任务读写接受 `tagIds`。
+
+---
+
+## 数据统计与分析
+
+「数据洞察」是新的独立模块（`modules.insights` 可开关），用于和任务台账互补的纵向分析：
+
+- **7 项 KPI**：成员数、任务数、任务完成率、逾期任务、阻塞任务、平均负载、待办完成率。
+- **时间跨度**：近 1 周 / 近 2 周 / 近 1 个月 / 近 3 个月 / 全部时间（后端同时支持近 2 个月）；范围越小趋势按天聚合，范围越大按周聚合（全部时间最多 26 桶）。
+- **三张可排序表格**：成员表现、开发组对比、团队对比；点击表头切换升降序（`aria-sort`），并随浏览视角自动增减「开发组 / 团队」列。
+- **趋势图**：纯 CSS 分组柱状图展示新建任务、完成任务、新建待办，hover/聚焦显示数值。
+- 完整支持开发组 / 团队 / 全部团队三级视角；API：`GET /api/teams/{team}/groups/{group}/insights?scope=&range=1w|2w|1m|2m|3m|all`。
+
+「任务总览」同时提供近 1 周至近 3 个月的任务窗口和多列排序（成员 / 优先级 / 难度 / 负载点数 / 预期完成 / 创建时间 / 进度 / 健康度）。
+
+---
+
+## 内建邮件服务器
+
+无需外部邮箱服务即可完成提醒投递与查看：
+
+- 后端内建一个标准库 `asyncio` 实现的轻量 SMTP 服务器，默认监听 `127.0.0.1:2525`（仅本机，随应用启动/停止，端口被占用时只记录日志、不阻塞 API）。
+- `email.deliveryMode = "builtin"` 时，测试邮件和日历提醒会投递到内置服务器并写入本地邮箱（`mailbox_messages` 表），在「设置 → 邮件提醒 → 本地邮件中心」中可查看列表、正文详情、删除与刷新。
+- 仍可切换为 `deliveryMode = "smtp"` 使用企业外部 SMTP（保留原有配置项）；切换后即时生效。
+- 提醒调度、模板变量、公告聚合、幂等去重 `(todoId, offsetDays, recipient)` 等原有能力完全保留。
+
+```json
+{
+  "email": {
+    "enabled": true,
+    "deliveryMode": "builtin",
+    "builtin": {
+      "enabled": true,
+      "host": "127.0.0.1",
+      "port": 2525,
+      "hostname": "teamstudio.local",
+      "mailboxLimit": 500,
+      "retentionDays": 90
+    }
+  }
+}
+```
+
+管理台「邮件提醒」提供投递方式切换、内置服务器运行状态 / 配置 / 重启、测试发信与本地邮件中心。API：`GET /api/email/mailbox`、`GET /api/email/mailbox/{id}`、`DELETE /api/email/mailbox/{id}`、`POST /api/email/builtin/restart`。
 
 ---
 
@@ -134,8 +228,8 @@
 ### 依赖镜像说明
 
 - Python：清华 PyPI 镜像 `https://pypi.tuna.tsinghua.edu.cn/simple`（已写入 `pip.conf` 并在脚本中显式指定）。
-- npm：清华 TUNA 的 npm 镜像已停止提供（访问返回 404），因此使用国内 **npmmirror** 镜像 `https://registry.npmmirror.com/`，配置在项目根目录 `.npmrc`，脚本中同样显式指定。
-- 本项目未使用任何 CDN 运行时资源，字体使用系统字体，部署后无需外网。
+- npm：清华 TUNA 的 npm 镜像已停止提供（访问返回 404），因此使用国内 **npmmirror** 镜像 `https://registry.npmmirror.com/`，配置在项目根目录 `.npmrc`，脚本中同样显式指定。VS Code 同款编辑器 `monaco-editor@0.57.0` 也通过该镜像安装，worker 由 Vite 本地打包。
+- 本项目未使用任何 CDN 运行时资源，Monaco 编辑器代码与 worker 全部随构建产物本地加载，字体使用系统字体，部署后无需外网。
 
 ### 目录内容
 
@@ -144,7 +238,7 @@
 ```
 data/
 ├─ settings.json        # 可视化 + JSON 双模式编辑的全部设置
-├─ teamstudio.db        # SQLite 业务数据（含演示种子数据）
+├─ teamstudio.db        # SQLite 业务数据（含演示种子数据、任务标签、本地邮箱）
 ├─ .session_secret      # 会话签名密钥（自动生成，请勿泄露）
 └─ email_outbox.jsonl   # 邮件发送审计镜像
 ```
@@ -262,6 +356,15 @@ data/
 {
   "email": {
     "enabled": true,
+    "deliveryMode": "smtp",
+    "builtin": {
+      "enabled": true,
+      "host": "127.0.0.1",
+      "port": 2525,
+      "hostname": "teamstudio.local",
+      "mailboxLimit": 500,
+      "retentionDays": 90
+    },
     "smtp": {
       "host": "smtp.corp.example",
       "port": 587,
@@ -293,16 +396,17 @@ data/
 
 工作方式：
 
-1. 每条待办保存自己的 `reminderOffsetsDays`（如 `[3, 1, 0]`）和 `emailEnabled` 开关；未单独设置时使用全局默认。
-2. 后台调度器按 `sendTime` 扫描：在“截止日期 − 提前天数”的当天发送；提前 0 天表示截止当天发送。
-3. 以 `(todoId, offsetDays, recipient)` 唯一定位，重启、重试、手动扫描都不会重复发送。
-4. 收件人默认是待办指派成员；可关闭 `notifyAssignee` 或追加 `additionalRecipients`。
-5. 邮件内容自动附加该开发组置顶公告（最多 3 条）和自定义附加内容；所有模板变量均可配置。
-6. 管理台支持「测试发信」「立即扫描」、查看扫描状态与发送日志。
+1. 投递方式由 `email.deliveryMode` 决定：`builtin`（默认，使用内建 SMTP 服务器，离线可用）或 `smtp`（企业外部邮箱）。
+2. 每条待办保存自己的 `reminderOffsetsDays`（如 `[3, 1, 0]`）和 `emailEnabled` 开关；未单独设置时使用全局默认。
+3. 后台调度器按 `sendTime` 扫描：在“截止日期 − 提前天数”的当天发送；提前 0 天表示截止当天发送。
+4. 以 `(todoId, offsetDays, recipient)` 唯一定位，重启、重试、手动扫描都不会重复发送。
+5. 收件人默认是待办指派成员；可关闭 `notifyAssignee` 或追加 `additionalRecipients`。
+6. 邮件内容自动附加该开发组置顶公告（最多 3 条）和自定义附加内容；所有模板变量均可配置。
+7. 管理台支持「测试发信」「立即扫描」、查看扫描状态与发送日志；内置模式下的邮件同时进入「本地邮件中心」。
 
 可用模板变量：`{{siteName}}` `{{teamName}}` `{{groupName}}` `{{memberName}}` `{{todoTitle}}` `{{todoDescription}}` `{{dueDate}}` `{{dueTime}}` `{{priority}}` `{{announcements}}` `{{extraContent}}`。
 
-> SMTP 密码以明文保存在 `data/settings.json`（这是“JSON 可直接编辑”需求的取舍）。请使用应用专用密码，限制数据目录权限，并避免把该文件提交到版本库。
+> SMTP 密码以明文保存在 `data/settings.json`（这是“JSON 可直接编辑”需求的取舍）。请使用应用专用密码，限制数据目录权限，并避免把该文件提交到版本库。内置模式不需要填写任何 SMTP 密码。
 
 ---
 
@@ -310,21 +414,21 @@ data/
 
 所有设置都在 `data/settings.json`，服务端 Pydantic 模型强校验并原子写盘。管理台提供：
 
-- **GUI 模式**：站点/主题、模块开关、公告置顶策略、日历默认值、红黑榜文案、功能开关、SSO、白名单、SMTP、提醒模板、收件人。主题固定为鸿蒙纸白/暗黑双模式与统一色板。
-- **高级 JSON 模式**：完整设置对象，支持格式化、后端 Schema 校验、逐路径错误提示、校验通过后保存。
+- **GUI 模式**：站点/主题、模块开关、公告置顶策略、日历默认值、红黑榜文案、功能开关、SSO、白名单、邮件投递方式（内置 / SMTP）、提醒模板、收件人。主题固定为鸿蒙纸白/暗黑双模式与统一色板。
+- **高级 JSON 模式**：完整设置对象，VS Code 同款 Monaco 编辑器（行号、语法高亮、错误波浪线），支持格式化、后端 Schema 校验、逐路径错误提示、校验通过后保存。
 - **Schema**：管理台可下载/查看，或访问 `GET /api/settings/schema`（仅超级管理员）。
-- **模块隐藏**：`modules.overview/tasks/calendar/redblack/links/matrix/announcements/settings/email` 控制侧栏入口；隐藏后普通成员直接访问路由会看到隐藏提示，管理员仍可进入设置恢复。
+- **模块隐藏**：`modules.overview/tasks/insights/calendar/redblack/links/matrix/announcements/settings/email` 控制侧栏入口；隐藏后普通成员直接访问路由会看到隐藏提示，管理员仍可进入设置恢复。
 - **保存即时生效**：主题、模块可见性、日历默认值、邮件策略会立即应用；邮件后台调度器下一轮读取新配置。
 
 主要配置节点：
 
 ```
-site             站点名称、标语、logo、页脚、主题（纸白/暗黑/圆角）
-modules          模块展示开关
+site             站点名称、标语、logo、页脚、主题（纸白/暗黑/跟随系统、圆角）
+modules          模块展示开关（概览/任务/数据洞察/日历/红黑榜/链接/矩阵/公告/设置/邮件）
 announcements    置顶上限 0-3、首页条数
 calendar         周起始日、是否显示周末、默认提醒天数、默认提醒时间
 redblack         红黑榜标题、是否显示评分、月度主题
-email            SMTP、提醒策略、模板、附加内容
+email            投递方式（内置/SMTP）、内置服务器参数、SMTP、提醒策略、模板、附加内容
 auth             SSO、访客模式、管理员白名单、会话 Cookie
 features         成员自编辑、访客横幅、演示标识、审计、访客创建待办
 ```
@@ -339,27 +443,29 @@ features         成员自编辑、访客横幅、演示标识、审计、访客
 TeamStudio/
 ├─ backend/
 │  ├─ app/
-│  │  ├─ main.py              # FastAPI 入口、静态前端托管、异常格式
+│  │  ├─ main.py              # FastAPI 入口、静态前端托管、异常格式、生命周期
 │  │  ├─ config.py            # Pydantic 配置 Schema、原子 JSON 存储
-│  │  ├─ db.py                # SQLite Schema 与连接
+│  │  ├─ db.py                # SQLite Schema 与连接（任务标签 / 本地邮箱表）
+│  │  ├─ scope.py             # 开发组 / 团队 / 全部团队读取范围解析
 │  │  ├─ auth.py              # 本机 Admin、会话、IP/ID 权限
 │  │  ├─ sso.py               # OIDC Discovery + 授权码 + PKCE
 │  │  ├─ seed.py              # 演示团队/成员/工作/待办/榜单/任务数据
-│  │  ├─ routers/             # auth/bootstrap/settings/email/workspace/calendar/boards/tasks
-│  │  └─ services/            # SMTP、提醒扫描、任务负载计算、后台调度
-│  └─ tests/                  # 48 个 pytest 用例（API / 权限 / SSO / 邮件 / 任务负载）
+│  │  ├─ routers/             # auth/bootstrap/settings/email/workspace/calendar/boards/tasks/insights
+│  │  └─ services/            # 内置 SMTP 服务器、外部 SMTP、提醒扫描、任务负载、洞察聚合、调度
+│  └─ tests/                  # 80 个 pytest 用例（API / 权限 / SSO / 邮件 / 任务 / 标签 / 视角 / 洞察）
 ├─ web/
 │  ├─ src/
-│  │  ├─ pages/               # 概览、任务总览、日历、红黑榜、链接、矩阵、公告、设置、登录
-│  │  ├─ components/          # AppShell、成员抽屉、任务弹窗、负载卡、责任田网络图、Toast 等
+│  │  ├─ pages/               # 概览、任务总览、数据洞察、日历、红黑榜、链接、矩阵、公告、设置、登录
+│  │  ├─ components/          # AppShell、成员抽屉、任务弹窗、标签选择、下拉框、Monaco 编辑器等
 │  │  ├─ api.ts / types.ts    # 类型化 API 客户端
-│  │  ├─ store.tsx            # 工作区上下文、主题、团队/开发组切换
+│  │  ├─ store.tsx            # 工作区上下文、主题、团队/开发组切换、浏览视角
 │  │  └─ styles.css           # 鸿蒙风纸白/暗黑设计系统
+│  ├─ e2e/                    # Playwright 冒烟 / 任务 / 侧栏 / 集成 QA / 截图脚本
 │  └─ dist/                   # 构建产物（由 FastAPI 托管）
 ├─ data/                      # 运行时数据（首次启动生成）
 ├─ scripts/                   # setup / build / start / verify
 ├─ CONTRACT.md                # 前后端 API 契约
-├─ TASKS_CONTRACT.md          # 任务台账与负载契约
+├─ TASKS_CONTRACT.md          # 任务台账 / 标签 / 视角 / 洞察契约
 └─ README.md
 ```
 
@@ -368,10 +474,10 @@ TeamStudio/
 ## 开发与测试
 
 ```powershell
-# 后端测试
+# 后端测试（80 个用例）
 .\.venv\Scripts\python.exe -m pytest backend\tests -q
 
-# 前端类型检查 / 构建
+# 前端类型检查 / 构建（构建包含 Monaco 独立 chunk 与本地 worker）
 npm run typecheck --prefix web
 npm run build --prefix web
 
@@ -382,11 +488,22 @@ npm run build --prefix web
 npm run e2e:smoke --prefix web
 npm run e2e:tasks --prefix web
 npm run e2e:sidebar --prefix web
+# 优化轮次集成 QA（25 项断言：主题/视角/标签/洞察/下拉/日历/编辑器/邮件）
+npm run e2e:qa --prefix web
+# 专项验证脚本
+npm run e2e:select --prefix web
+npm run e2e:tags --prefix web
+npm run e2e:insights --prefix web
+npm run e2e:mail --prefix web
 # 全页面截图（输出到 artifacts/）
 npm run e2e:screenshots --prefix web
+# 刷新 README 截图（输出到 docs/screenshots/）
+npm run e2e:docs-shots --prefix web
 ```
 
-E2E 覆盖：成员抽屉、团队/开发组切换、日历待办增删、公告发布删除、设置各标签页、JSON 双模式校验与恢复、任务台账筛选与增删改（优先级 / 难度 / 负载点数）、成员负载展示、侧栏折叠、关于弹窗、纸白/暗黑主题切换。
+E2E 覆盖：成员抽屉、团队/开发组切换、日历待办增删、公告发布删除、设置各标签页、JSON 双模式校验与恢复（Monaco）、任务台账筛选与增删改（优先级 / 难度 / 负载点数 / 时间跨度 / 排序）、标签 CRUD 与筛选、数据洞察范围与排序、浏览视角聚合、自绘下拉框、内置邮件中心、成员负载展示、侧栏折叠、关于弹窗、纸白/暗黑主题切换。
+
+> 集成 QA 脚本默认访问 `http://127.0.0.1:8000`，可用 `QA_URL=http://127.0.0.1:5173` 指向 Vite 开发服务器；`TEAMSTUDIO_URL` 可指定冒烟脚本目标。
 
 前后端分离开发：
 
@@ -405,8 +522,9 @@ Vite 开发模式仍通过 `/api` 代理访问后端；生产由 FastAPI 直接�
 
 ## 数据备份与安全
 
-- 备份三件套：`data/teamstudio.db`、`data/settings.json`、`data/.session_secret`。SQLite 使用 WAL，建议停机备份或使用 SQLite 在线备份。
+- 备份三件套：`data/teamstudio.db`、`data/settings.json`、`data/.session_secret`。SQLite 使用 WAL，建议停机备份或使用 SQLite 在线备份。任务标签库、本地邮箱（`task_tags` / `mailbox_messages`）都在 SQLite 中，随数据库一起备份。
 - 部署设备本机访问自动获得 `Admin` 是为了防止锁死；**不要把 8000 端口无保护地暴露到公网**。
+- 内置邮件服务器默认只监听 `127.0.0.1:2525`（仅本机），不会对外暴露；如需跨机收信请改为受控地址并配合防火墙。
 - 中心化部署时建议：
   1. 配置企业 SSO + 至少一个 ID 白名单管理员；
   2. 通过反向代理启用 HTTPS；
@@ -430,7 +548,7 @@ Vite 开发模式仍通过 `/api` 代理访问后端；生产由 FastAPI 直接�
 检查 issuer/clientId/clientSecret/redirectUri 是否齐全、回调地址是否与控制台一致、IdP 是否允许该回调；管理台会显示具体错误原因。
 
 **Q：邮件测试失败？**  
-先确认 `email.enabled=true`、SMTP `host/fromEmail` 已填写；企业邮箱通常需要“应用专用密码”，587 端口用 STARTTLS，465 端口用 SSL（二者不要同时开启）。
+先确认 `email.enabled=true`。内置模式（`deliveryMode=builtin`）会使用本地 SMTP 服务器，无需填写 SMTP 账号；若提示服务未运行，在「邮件提醒」中点击「重启内置服务」。外部模式（`deliveryMode=smtp`）需填写 SMTP `host/fromEmail`；企业邮箱通常需要“应用专用密码”，587 端口用 STARTTLS，465 端口用 SSL（二者不要同时开启）。
 
 **Q：想清空演示数据？**  
 停止服务，删除 `data/teamstudio.db`，重新启动即可重建演示数据；`data/settings.json` 不受影响。

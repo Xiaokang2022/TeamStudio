@@ -2,7 +2,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type CSSProperties,
   type ReactNode,
@@ -43,6 +42,7 @@ import {
   ShieldCheck,
   Sparkles,
   Trash2,
+  TrendingUp,
   Trophy,
   Users,
   Wand2,
@@ -56,6 +56,8 @@ import { useToast } from "../components/Toast";
 import { ConfirmDialog } from "../components/Modal";
 import { LoadingBlock } from "../components/Feedback";
 import { EmailPanel } from "../components/EmailPanel";
+import { CodeEditor } from "../components/CodeEditor";
+import { Select } from "../components/Select";
 import {
   cn,
   copyText,
@@ -109,6 +111,7 @@ const MODULE_META: {
 }[] = [
   { key: "overview", label: "团队概览", description: "成员卡片、成长轨迹与近期动态。", icon: LayoutDashboard },
   { key: "tasks", label: "任务总览", description: "成员任务台账、健康状态与工作量负载。", icon: ListTodo },
+  { key: "insights", label: "数据洞察", description: "完成率、趋势与成员 / 团队数据对比。", icon: TrendingUp },
   { key: "calendar", label: "协作日历", description: "待办、提醒与月度日历视图。", icon: CalendarDays },
   { key: "redblack", label: "红黑榜", description: "每月红榜高光与黑榜改进记录。", icon: Trophy },
   { key: "announcements", label: "公告栏", description: "开发组公告与置顶消息。", icon: Megaphone },
@@ -617,6 +620,28 @@ function SettingsAccessDenied({ onBack }: { onBack: () => void }) {
 /* Section components                                                  */
 /* ------------------------------------------------------------------ */
 
+/**
+ * 真实系统主题（只看操作系统 / 浏览器偏好，不受用户本地手动主题覆盖影响）。
+ * 主题模式为 "auto" 时，实时预览必须按它渲染。
+ */
+function useSystemPrefersDark(): boolean {
+  const [prefersDark, setPrefersDark] = useState(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  });
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = (event: MediaQueryListEvent) => setPrefersDark(event.matches);
+    setPrefersDark(media.matches);
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, []);
+
+  return prefersDark;
+}
+
 function AppearanceSection({
   draft,
   update,
@@ -628,7 +653,17 @@ function AppearanceSection({
 }) {
   const site = draft.site;
   const theme = site.theme;
-  const modeLabel = theme.mode === "dark" ? "暗黑" : theme.mode === "auto" ? "跟随系统" : "纸白";
+  const systemPrefersDark = useSystemPrefersDark();
+  // 预览严格跟随草稿里的 theme.mode：auto 时解析系统真实主题（并实时监听），
+  // dark/light 则直接使用草稿值，不受用户本地手动主题覆盖影响。
+  const previewMode: "dark" | "light" =
+    theme.mode === "dark" ? "dark" : theme.mode === "auto" ? (systemPrefersDark ? "dark" : "light") : "light";
+  const modeLabel =
+    theme.mode === "dark"
+      ? "暗黑"
+      : theme.mode === "auto"
+        ? `跟随系统 · ${systemPrefersDark ? "暗色" : "亮色"}`
+        : "纸白";
   const previewStyle = {
     "--pv-accent": "#0a59f7",
     "--pv-secondary": "#4d8dff",
@@ -795,7 +830,7 @@ function AppearanceSection({
       >
         <div
           className="settings-preview"
-          data-preview-mode={theme.mode === "dark" ? "dark" : "light"}
+          data-preview-mode={previewMode}
           style={previewStyle}
         >
           <div className="settings-preview-brand">
@@ -1234,11 +1269,9 @@ function AdminEntryCard({
           error={errorText(errorsFor(`${basePath}.teamId`))}
           hint={entry.role === "team_admin" ? "团队管理员必须指定团队" : "可仅用于筛选开发组"}
         >
-          <select
-            className="select"
+          <Select
             value={entry.teamId}
-            onChange={(event) => {
-              const teamId = event.target.value;
+            onChange={(teamId) => {
               const allowed = new Set(
                 workspace.groups.filter((group) => group.team_id === teamId).map((group) => group.id),
               );
@@ -1248,14 +1281,13 @@ function AdminEntryCard({
                 groupIds: entry.groupIds.filter((id) => allowed.has(id)),
               });
             }}
-          >
-            <option value="">未指定团队</option>
-            {teams.map((team) => (
-              <option key={team.id} value={team.id}>
-                {team.name}
-              </option>
-            ))}
-          </select>
+            ariaLabel="白名单条目所属团队"
+            placeholder="未指定团队"
+            options={[
+              { value: "", label: "未指定团队" },
+              ...teams.map((team) => ({ value: team.id, label: team.name })),
+            ]}
+          />
         </Field>
         <Field
           label="备注"
@@ -1934,15 +1966,7 @@ function JsonWorkspace({
   onCopy,
   onJumpTab,
 }: JsonWorkspaceProps) {
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const gutterRef = useRef<HTMLDivElement | null>(null);
   const lineCount = useMemo(() => jsonText.split("\n").length, [jsonText]);
-
-  const syncScroll = () => {
-    if (textareaRef.current && gutterRef.current) {
-      gutterRef.current.scrollTop = textareaRef.current.scrollTop;
-    }
-  };
 
   return (
     <div className="settings-sections">
@@ -1999,20 +2023,12 @@ function JsonWorkspace({
         </div>
 
         <div className="settings-json-editor">
-          <div className="settings-json-gutter" ref={gutterRef} aria-hidden="true">
-            {Array.from({ length: lineCount }, (_, index) => (
-              <span key={index}>{index + 1}</span>
-            ))}
-          </div>
-          <textarea
-            ref={textareaRef}
-            className="settings-json-textarea"
+          <CodeEditor
             value={jsonText}
-            spellCheck={false}
-            wrap="off"
-            onChange={(event) => onTextChange(event.target.value)}
-            onScroll={syncScroll}
-            aria-label="完整设置 JSON 编辑器"
+            onChange={onTextChange}
+            language="json"
+            height="100%"
+            ariaLabel="完整设置 JSON 编辑器"
           />
         </div>
 

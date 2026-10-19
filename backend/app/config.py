@@ -63,6 +63,7 @@ class ModuleFlags(StrictModel):
     settings: bool = True
     email: bool = True
     tasks: bool = True
+    insights: bool = True
 
 
 class AnnouncementSettings(StrictModel):
@@ -168,8 +169,29 @@ class ReminderSettings(StrictModel):
         return list(dict.fromkeys(value))
 
 
+class BuiltinMailSettings(StrictModel):
+    """Settings for the bundled SMTP server (no external mail provider required)."""
+
+    enabled: bool = True
+    host: str = Field(default="127.0.0.1", max_length=120)
+    port: int = Field(default=2525, ge=1024, le=65535)
+    hostname: str = Field(default="teamstudio.local", max_length=120)
+    mailboxLimit: int = Field(default=500, ge=20, le=5000)
+    retentionDays: int = Field(default=90, ge=1, le=3650)
+
+    @field_validator("host")
+    @classmethod
+    def valid_host(cls, value: str) -> str:
+        cleaned = value.strip() or "127.0.0.1"
+        if any(char.isspace() for char in cleaned):
+            raise ValueError("内置邮件服务器监听地址不能包含空格")
+        return cleaned
+
+
 class EmailSettings(StrictModel):
     enabled: bool = False
+    deliveryMode: Literal["builtin", "smtp"] = "builtin"
+    builtin: BuiltinMailSettings = Field(default_factory=BuiltinMailSettings)
     smtp: SmtpSettings = Field(default_factory=SmtpSettings)
     reminders: ReminderSettings = Field(default_factory=ReminderSettings)
 
@@ -348,7 +370,12 @@ class SettingsService:
             "calendar": cfg.calendar.model_dump(mode="json"),
             "redblack": cfg.redblack.model_dump(mode="json"),
             "features": cfg.features.model_dump(mode="json"),
-            "email": {"enabled": cfg.email.enabled, "remindersEnabled": cfg.email.reminders.enabled},
+            "email": {
+                "enabled": cfg.email.enabled,
+                "remindersEnabled": cfg.email.reminders.enabled,
+                "deliveryMode": cfg.email.deliveryMode,
+                "builtinEnabled": cfg.email.builtin.enabled,
+            },
             "auth": {
                 "guestMode": cfg.auth.guestMode,
                 "sso": {

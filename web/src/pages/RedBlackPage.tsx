@@ -18,6 +18,7 @@ import { useApp } from "../store";
 import { useToast } from "../components/Toast";
 import { Avatar } from "../components/Avatar";
 import { Modal } from "../components/Modal";
+import { Select } from "../components/Select";
 import { EmptyState, LoadingBlock } from "../components/Feedback";
 import { cn, formatDateTime, monthKey, monthLabel, shiftMonth, uid } from "../lib/utils";
 import type { Member, RedBlackData, RedBlackEntry } from "../types";
@@ -150,6 +151,18 @@ function DraftColumn({
   onUpdate: (side: Side, key: string, patch: Partial<DraftEntry>) => void;
   onPickMember: (side: Side, key: string, memberId: string) => void;
 }) {
+  const memberOptions = useMemo(
+    () => [
+      { value: "", label: "手动填写" },
+      ...members.map((member) => ({
+        value: member.id,
+        label: member.name,
+        description: member.title || undefined,
+        color: member.avatarColor,
+      })),
+    ],
+    [members],
+  );
   return (
     <section className={cn("rb-draft", `rb-draft-${side}`)}>
       <header className="rb-draft-head">
@@ -176,18 +189,14 @@ function DraftColumn({
             <div className="rb-draft-grid">
               <div className="field">
                 <span className="field-label">选择成员</span>
-                <select
-                  className="select"
+                <Select
                   value={entry.memberId}
-                  onChange={(event) => onPickMember(side, entry.key, event.target.value)}
-                >
-                  <option value="">手动填写</option>
-                  {members.map((member) => (
-                    <option key={member.id} value={member.id}>
-                      {member.name}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(next) => onPickMember(side, entry.key, next)}
+                  options={memberOptions}
+                  ariaLabel="选择成员"
+                  placeholder="手动填写"
+                  searchable={members.length > 6}
+                />
               </div>
               <div className="field">
                 <span className="field-label">姓名</span>

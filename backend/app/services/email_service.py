@@ -14,19 +14,41 @@ from typing import Any
 
 from ..config import DATA_DIR, settings_service
 from ..db import db, get_meta, json_loads, new_id, now_iso, row, rows, scalar, set_meta
+from . import mail_server
 
 OUTBOX_PATH = DATA_DIR / "email_outbox.jsonl"
 TEMPLATE_PATTERN = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
 MAX_SENDS_PER_SCAN = 120
+BUILTIN_TIMEOUT_SECONDS = 10
 
 
 class EmailError(RuntimeError):
     pass
 
 
-def smtp_configured() -> bool:
+def _external_smtp_configured() -> bool:
     cfg = settings_service.get().email
     return bool(cfg.smtp.host and cfg.smtp.fromEmail)
+
+
+def smtp_configured() -> bool:
+    """Whether a usable delivery channel exists for the active mode.
+
+    ``builtin`` mode counts as configured as soon as the bundled server is
+    running (it is lazily (re)started from the saved settings). An external SMTP
+    account is treated as a graceful fallback so reminders never get lost while
+    the local server is unavailable.
+    """
+
+    cfg = settings_service.get().email
+    external = _external_smtp_configured()
+    if cfg.deliveryMode == "builtin":
+        try:
+            running = mail_server.ensure_running_sync()
+        except Exception:  # pragma: no cover - status checks must never crash
+            running = False
+        return running or external
+    return external
 
 
 def mask_email(value: str) -> str:
@@ -100,6 +122,79 @@ def _log_email(
     _write_outbox(record)
 
 
+def _builtin_from_address(cfg) -> str:
+    from_address = (cfg.smtp.fromEmail or "").strip()
+    if from_address:
+        return from_address
+    hostname = (cfg.builtin.hostname or "teamstudio.local").strip() or "teamstudio.local"
+    return f"teamstudio@{hostname}"
+
+
+def _build_message(
+    cfg,
+    *,
+    recipient: str,
+    subject: str,
+    body: str,
+    kind: str,
+    group_id: str,
+    todo_id: str,
+) -> EmailMessage:
+    message = EmailMessage()
+    message["From"] = formataddr(
+        (cfg.smtp.fromName or "团队工作室", _builtin_from_address(cfg))
+    )
+    message["To"] = recipient
+    message["Subject"] = subject
+    message["X-TeamStudio-Kind"] = kind or "test"
+    if group_id:
+        message["X-TeamStudio-Group-Id"] = group_id
+    if todo_id:
+        message["X-TeamStudio-Todo-Id"] = todo_id
+    message.set_content(body)
+    return message
+
+
+def _builtin_connect_host(status: dict[str, Any]) -> str:
+    host = str(status.get("host") or "127.0.0.1").strip()
+    if host in {"", "0.0.0.0", "::", "::0"}:
+        return "127.0.0.1"
+    return host
+
+
+def _send_via_builtin(message: EmailMessage) -> None:
+    status = mail_server.mail_server_status()
+    if not status.get("running"):
+        raise EmailError("内置邮件服务器未运行")
+    with smtplib.SMTP(
+        _builtin_connect_host(status),
+        int(status.get("port") or 2525),
+        timeout=BUILTIN_TIMEOUT_SECONDS,
+    ) as server:
+        server.ehlo()
+        server.send_message(message)
+
+
+def _send_via_smtp(cfg, message: EmailMessage) -> None:
+    if cfg.smtp.useSsl:
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL(
+            cfg.smtp.host, cfg.smtp.port, timeout=cfg.smtp.timeoutSeconds, context=context
+        ) as server:
+            if cfg.smtp.username:
+                server.login(cfg.smtp.username, cfg.smtp.password)
+            server.send_message(message)
+        return
+    with smtplib.SMTP(cfg.smtp.host, cfg.smtp.port, timeout=cfg.smtp.timeoutSeconds) as server:
+        server.ehlo()
+        if cfg.smtp.useStartTls:
+            server.starttls(context=ssl.create_default_context())
+            server.ehlo()
+        if cfg.smtp.username:
+            server.login(cfg.smtp.username, cfg.smtp.password)
+        server.send_message(message)
+
+
 def deliver(
     *,
     recipient: str,
@@ -113,34 +208,43 @@ def deliver(
     cfg = settings_service.get().email
     if not cfg.enabled:
         raise EmailError("邮件功能未启用，请在设置中开启 email.enabled")
-    if not smtp_configured():
-        raise EmailError("SMTP 尚未配置完整（host 与 fromEmail 必填）")
-    message = EmailMessage()
-    message["From"] = formataddr((cfg.smtp.fromName or "团队工作室", cfg.smtp.fromEmail))
-    message["To"] = recipient
-    message["Subject"] = subject
-    message.set_content(body)
-    try:
-        if cfg.smtp.useSsl:
-            context = ssl.create_default_context()
-            with smtplib.SMTP_SSL(
-                cfg.smtp.host, cfg.smtp.port, timeout=cfg.smtp.timeoutSeconds, context=context
-            ) as server:
-                if cfg.smtp.username:
-                    server.login(cfg.smtp.username, cfg.smtp.password)
-                server.send_message(message)
+    external = _external_smtp_configured()
+    channel = ""
+    if cfg.deliveryMode == "builtin":
+        try:
+            running = mail_server.ensure_running_sync()
+        except Exception:  # pragma: no cover - delivery surfaces a real error below
+            running = False
+        if running:
+            channel = "builtin"
+        elif external:
+            # Graceful fallback: the bundled server could not listen (busy port /
+            # disabled) but a complete external SMTP account is configured.
+            channel = "smtp"
         else:
-            with smtplib.SMTP(
-                cfg.smtp.host, cfg.smtp.port, timeout=cfg.smtp.timeoutSeconds
-            ) as server:
-                server.ehlo()
-                if cfg.smtp.useStartTls:
-                    server.starttls(context=ssl.create_default_context())
-                    server.ehlo()
-                if cfg.smtp.username:
-                    server.login(cfg.smtp.username, cfg.smtp.password)
-                server.send_message(message)
-    except (OSError, smtplib.SMTPException) as exc:
+            raise EmailError(
+                "内置邮件服务器未运行，请在「设置 → 邮件提醒」中点击「重启内置服务」后重试"
+            )
+    else:
+        if not external:
+            raise EmailError("SMTP 尚未配置完整（host 与 fromEmail 必填）")
+        channel = "smtp"
+    message = _build_message(
+        cfg,
+        recipient=recipient,
+        subject=subject,
+        body=body,
+        kind=kind,
+        group_id=group_id,
+        todo_id=todo_id,
+    )
+    channel_label = "内置服务器" if channel == "builtin" else "外部 SMTP"
+    try:
+        if channel == "builtin":
+            _send_via_builtin(message)
+        else:
+            _send_via_smtp(cfg, message)
+    except EmailError as exc:
         _log_email(
             group_id=group_id,
             todo_id=todo_id,
@@ -151,7 +255,19 @@ def deliver(
             error=str(exc),
             detail=detail,
         )
-        raise EmailError(f"邮件发送失败: {exc}") from exc
+        raise
+    except (OSError, smtplib.SMTPException) as exc:
+        _log_email(
+            group_id=group_id,
+            todo_id=todo_id,
+            kind=kind,
+            recipient=recipient,
+            subject=subject,
+            status="failed",
+            error=f"[{channel_label}] {exc}",
+            detail=detail,
+        )
+        raise EmailError(f"邮件发送失败（{channel_label}）: {exc}") from exc
     _log_email(
         group_id=group_id,
         todo_id=todo_id,
@@ -159,7 +275,7 @@ def deliver(
         recipient=recipient,
         subject=subject,
         status="sent",
-        detail=detail,
+        detail=f"{detail} · channel={channel}".strip(" ·"),
     )
 
 
@@ -455,11 +571,30 @@ def email_status() -> dict[str, Any]:
             (datetime.now().strftime("%Y-%m-%d") + "%",),
             default=0,
         )
+    from_address = cfg.email.smtp.fromEmail
+    if cfg.email.deliveryMode == "builtin" and not from_address:
+        from_address = _builtin_from_address(cfg.email)
+    # Resolve the channel first: in builtin mode this lazily (re)starts the
+    # bundled server, so the reported ``builtin.running`` is up to date.
+    configured = smtp_configured()
+    builtin = mail_server.mail_server_status()
     return {
         "enabled": cfg.email.enabled,
         "remindersEnabled": cfg.email.reminders.enabled,
-        "smtpConfigured": smtp_configured(),
-        "fromEmail": mask_email(cfg.email.smtp.fromEmail) if cfg.email.smtp.fromEmail else "",
+        "deliveryMode": cfg.email.deliveryMode,
+        "builtin": {
+            "enabled": builtin["enabled"],
+            "running": builtin["running"],
+            "host": builtin["host"],
+            "port": builtin["port"],
+            "hostname": builtin["hostname"],
+            "stored": builtin["stored"],
+            "limit": builtin["limit"],
+            "retentionDays": builtin["retentionDays"],
+            "lastError": builtin["lastError"],
+        },
+        "smtpConfigured": configured,
+        "fromEmail": mask_email(from_address) if from_address else "",
         "lastScanAt": last_scan,
         "pendingReminders": pending_reminder_count(),
         "sentToday": sent_today,

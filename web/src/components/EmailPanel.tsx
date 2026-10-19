@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
+  Cable,
   CheckCircle2,
   Clock,
   Eye,
   EyeOff,
+  HardDrive,
   Inbox,
   Info,
   Loader2,
@@ -13,12 +15,14 @@ import {
   MailWarning,
   Plus,
   RefreshCw,
+  RotateCcw,
   ScanLine,
   ScrollText,
   Send,
   Server,
   Sparkles,
   Timer,
+  Trash2,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -27,7 +31,14 @@ import { useToast } from "./Toast";
 import { Modal } from "./Modal";
 import { EmptyState, LoadingBlock } from "./Feedback";
 import { cn, formatDateTime } from "../lib/utils";
-import type { AppSettings, EmailLog, EmailStatus, ValidationDetail } from "../types";
+import type {
+  AppSettings,
+  EmailLog,
+  EmailStatus,
+  MailMessage,
+  MailboxData,
+  ValidationDetail,
+} from "../types";
 import "./EmailPanel.css";
 
 type UpdateSettings = (mutate: (next: AppSettings) => void) => void;
@@ -48,6 +59,13 @@ interface ScanResult {
   startedAt?: string;
   finishedAt?: string;
 }
+
+/** Backend also returns these diagnostics on the builtin status block. */
+type BuiltinStatusView = EmailStatus["builtin"] & {
+  hostname?: string;
+  retentionDays?: number;
+  lastError?: string;
+};
 
 const REMINDER_PRESETS = [0, 1, 2, 3, 5, 7, 14, 30];
 
@@ -79,6 +97,10 @@ function errorText(list: ValidationDetail[]): string | undefined {
 function toInt(value: string, fallback: number): number {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function kindLabel(kind: string): string {
+  return KIND_LABELS[kind] ?? (kind || "邮件");
 }
 
 function EmailField({
@@ -314,6 +336,8 @@ export function EmailPanel({ settings, update, errorsFor }: EmailPanelProps) {
   const { toast } = useToast();
   const reminder = settings.email.reminders;
   const smtp = settings.email.smtp;
+  const builtinConfig = settings.email.builtin;
+  const deliveryMode: "builtin" | "smtp" = settings.email.deliveryMode ?? "builtin";
 
   const [status, setStatus] = useState<EmailStatus | null>(null);
   const [logs, setLogs] = useState<EmailLog[]>([]);
@@ -331,6 +355,15 @@ export function EmailPanel({ settings, update, errorsFor }: EmailPanelProps) {
   const [previewError, setPreviewError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [insertTarget, setInsertTarget] = useState<"subject" | "body">("body");
+  const [restarting, setRestarting] = useState(false);
+
+  const [mailbox, setMailbox] = useState<MailboxData | null>(null);
+  const [mailboxLoading, setMailboxLoading] = useState(false);
+  const [mailboxError, setMailboxError] = useState("");
+  const [deletingId, setDeletingId] = useState("");
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [messageDetail, setMessageDetail] = useState<MailMessage | null>(null);
 
   const subjectRef = useRef<HTMLInputElement | null>(null);
   const bodyRef = useRef<HTMLTextAreaElement | null>(null);
@@ -338,10 +371,7 @@ export function EmailPanel({ settings, update, errorsFor }: EmailPanelProps) {
   const refresh = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const [statusResult, logsResult] = await Promise.all([
-        api.emailStatus(),
-        api.emailLogs(50),
-      ]);
+      const [statusResult, logsResult] = await Promise.all([api.emailStatus(), api.emailLogs(50)]);
       setStatus(statusResult);
       setLogs(logsResult.logs);
       setStatusError("");
@@ -352,17 +382,49 @@ export function EmailPanel({ settings, update, errorsFor }: EmailPanelProps) {
     }
   }, []);
 
+  const refreshMailbox = useCallback(async (silent = false) => {
+    if (!silent) setMailboxLoading(true);
+    try {
+      const result = await api.emailMailbox(50);
+      setMailbox(result);
+      setMailboxError("");
+    } catch (error) {
+      setMailboxError(error instanceof ApiError ? error.message : "加载本地邮件中心失败");
+    } finally {
+      if (!silent) setMailboxLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+    void refreshMailbox();
+  }, [refresh, refreshMailbox]);
 
-  const configured = Boolean(smtp.host.trim() && smtp.fromEmail.trim());
+  const builtinStatus = (status?.builtin ?? null) as BuiltinStatusView | null;
+  const builtinRunning = Boolean(builtinStatus?.running);
+  const smtpReady = Boolean(smtp.host.trim() && smtp.fromEmail.trim());
+  const mailboxTotal = mailbox?.total ?? builtinStatus?.stored ?? 0;
+  const mailboxLimit = mailbox?.builtin.limit ?? builtinStatus?.limit ?? builtinConfig.mailboxLimit;
+  const channelLabel = deliveryMode === "builtin" ? "内置邮件服务器" : "外部 SMTP";
+  const channelReady = deliveryMode === "builtin" ? builtinRunning : smtpReady;
   const statusFromSaved = status
-    ? `${status.enabled ? "已启用" : "未启用"} · ${status.smtpConfigured ? "SMTP 已配置" : "SMTP 未配置"}`
+    ? `${status.enabled ? "已启用" : "未启用"} · ${
+        status.deliveryMode === "builtin"
+          ? status.builtin.running
+            ? "内置服务运行中"
+            : "内置服务未运行"
+          : status.smtpConfigured
+            ? "SMTP 已配置"
+            : "SMTP 未配置"
+      }`
     : "未知";
 
   const openTest = () => {
-    setTestTo((current) => current || smtp.fromEmail || "");
+    const fallbackRecipient =
+      deliveryMode === "builtin"
+        ? `teamstudio@${builtinConfig.hostname || "teamstudio.local"}`
+        : smtp.fromEmail;
+    setTestTo((current) => current || fallbackRecipient || "");
     setActionError("");
     setTestOpen(true);
   };
@@ -377,9 +439,13 @@ export function EmailPanel({ settings, update, errorsFor }: EmailPanelProps) {
     setActionError("");
     try {
       const result = await api.emailTest(recipient);
-      toast(`测试邮件已发送至 ${result.to}，请检查收件箱`);
+      toast(
+        deliveryMode === "builtin"
+          ? `测试邮件已投递到本地邮件中心（${result.to}）`
+          : `测试邮件已发送至 ${result.to}，请检查收件箱`,
+      );
       setTestOpen(false);
-      await refresh(true);
+      await Promise.all([refresh(true), refreshMailbox(true)]);
     } catch (error) {
       const message = error instanceof ApiError ? error.message : "测试邮件发送失败";
       setActionError(message);
@@ -400,13 +466,65 @@ export function EmailPanel({ settings, update, errorsFor }: EmailPanelProps) {
       const skipped = result.skipped ?? 0;
       const failed = result.failed ?? 0;
       toast(`扫描完成：发送 ${sent} 封 · 跳过 ${skipped} 封 · 失败 ${failed} 封`);
-      await refresh(true);
+      await Promise.all([refresh(true), refreshMailbox(true)]);
     } catch (error) {
       const message = error instanceof ApiError ? error.message : "立即扫描失败";
       setActionError(message);
       toast(message, "error");
     } finally {
       setScanning(false);
+    }
+  };
+
+  const restartBuiltin = async () => {
+    setRestarting(true);
+    try {
+      const result = await api.restartBuiltinMail();
+      toast(
+        result.running
+          ? `内置邮件服务器已重启：${result.host}:${result.port}`
+          : "内置服务未运行：请先保存配置并启用邮件功能",
+        result.running ? "success" : "info",
+      );
+      await Promise.all([refresh(true), refreshMailbox(true)]);
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : "重启内置服务失败";
+      toast(message, "error");
+    } finally {
+      setRestarting(false);
+    }
+  };
+
+  const openMessage = async (messageId: string) => {
+    setDetailOpen(true);
+    setDetailLoading(true);
+    setMessageDetail(null);
+    try {
+      const result = await api.emailMailboxMessage(messageId);
+      setMessageDetail(result.message);
+      await refreshMailbox(true);
+    } catch (error) {
+      toast(error instanceof ApiError ? error.message : "读取邮件失败", "error");
+      setDetailOpen(false);
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const deleteMessage = async (messageId: string) => {
+    setDeletingId(messageId);
+    try {
+      await api.deleteMailboxMessage(messageId);
+      toast("邮件已从本地邮件中心删除");
+      if (messageDetail?.id === messageId) {
+        setDetailOpen(false);
+        setMessageDetail(null);
+      }
+      await Promise.all([refresh(true), refreshMailbox(true)]);
+    } catch (error) {
+      toast(error instanceof ApiError ? error.message : "删除邮件失败", "error");
+    } finally {
+      setDeletingId("");
     }
   };
 
@@ -457,20 +575,37 @@ export function EmailPanel({ settings, update, errorsFor }: EmailPanelProps) {
     <div className="settings-sections email-panel">
       <EmailCard
         title="邮件提醒概览"
-        description="状态来自服务端已保存配置；修改 SMTP 或提醒开关后请先保存，再刷新状态。"
+        description={`状态来自服务端已保存配置；当前投递方式：${channelLabel}。修改服务器或提醒开关后请先保存，再刷新状态。`}
         icon={<Mail size={18} />}
         extra={
           <div className="email-head-actions">
             <span className={cn("badge", settings.email.enabled ? "badge-green" : "badge-gray")}>
               {settings.email.enabled ? "邮件已启用" : "邮件未启用"}
             </span>
-            <span className={cn("badge", configured ? "badge-blue" : "badge-orange")}>
-              {configured ? "SMTP 已填写" : "SMTP 待配置"}
+            <span
+              className={cn(
+                "badge",
+                deliveryMode === "builtin"
+                  ? builtinRunning
+                    ? "badge-green"
+                    : "badge-orange"
+                  : channelReady
+                    ? "badge-blue"
+                    : "badge-orange",
+              )}
+            >
+              {deliveryMode === "builtin"
+                ? builtinRunning
+                  ? "内置服务运行中"
+                  : "内置服务未运行"
+                : channelReady
+                  ? "SMTP 已填写"
+                  : "SMTP 待配置"}
             </span>
             <button
               type="button"
               className="btn btn-secondary btn-sm"
-              onClick={() => void refresh()}
+              onClick={() => void Promise.all([refresh(), refreshMailbox()])}
               disabled={loading}
             >
               <RefreshCw size={14} className={loading ? "spin" : undefined} /> 刷新状态
@@ -509,11 +644,42 @@ export function EmailPanel({ settings, update, errorsFor }: EmailPanelProps) {
               tone={status?.enabled ? "green" : "gray"}
             />
             <StatusStat
-              icon={Server}
-              label="SMTP 配置"
-              value={status?.smtpConfigured ? "已就绪" : "未就绪"}
-              detail={status?.fromEmail ? `发件：${status.fromEmail}` : "缺少 host 或 fromEmail"}
-              tone={status?.smtpConfigured ? "green" : "orange"}
+              icon={deliveryMode === "builtin" ? Server : Cable}
+              label={deliveryMode === "builtin" ? "内置邮件服务" : "SMTP 配置"}
+              value={
+                deliveryMode === "builtin"
+                  ? builtinRunning
+                    ? "运行中"
+                    : "未运行"
+                  : status?.smtpConfigured
+                    ? "已就绪"
+                    : "未就绪"
+              }
+              detail={
+                deliveryMode === "builtin"
+                  ? builtinStatus
+                    ? `${builtinStatus.host}:${builtinStatus.port}`
+                    : "未知"
+                  : status?.fromEmail
+                    ? `发件：${status.fromEmail}`
+                    : "缺少 host 或 fromEmail"
+              }
+              tone={
+                deliveryMode === "builtin"
+                  ? builtinRunning
+                    ? "green"
+                    : "orange"
+                  : status?.smtpConfigured
+                    ? "green"
+                    : "orange"
+              }
+            />
+            <StatusStat
+              icon={HardDrive}
+              label="本地邮件中心"
+              value={`${mailboxTotal} / ${mailboxLimit}`}
+              detail={`保留 ${builtinStatus?.retentionDays ?? builtinConfig.retentionDays} 天 · 已入库邮件`}
+              tone={mailboxTotal > 0 ? "blue" : "gray"}
             />
             <StatusStat
               icon={Timer}
@@ -565,7 +731,10 @@ export function EmailPanel({ settings, update, errorsFor }: EmailPanelProps) {
             <Eye size={14} /> 预览当前模板
           </button>
           <span className="email-actions-hint">
-            <Info size={13} /> 测试邮件需要先保存并启用邮件通道。
+            <Info size={13} />
+            {deliveryMode === "builtin"
+              ? "内置模式无需外部邮箱；测试邮件会直接进入下方本地邮件中心。"
+              : "测试邮件使用已保存的外部 SMTP 配置。"}
           </span>
         </div>
 
@@ -594,166 +763,464 @@ export function EmailPanel({ settings, update, errorsFor }: EmailPanelProps) {
       </EmailCard>
 
       <EmailCard
-        title="SMTP 发件配置"
-        description="支持标准 SMTP / STARTTLS / SSL。密码仅保存在服务端 settings.json。"
-        icon={<Server size={18} />}
+        title="投递方式"
+        description="内置邮件服务器完全在本机运行，离线也能收信；外部 SMTP 作为可选方案保留。"
+        icon={<Cable size={18} />}
+        extra={
+          <div className="segmented email-mode-segmented" role="group" aria-label="投递方式">
+            <button
+              type="button"
+              className={deliveryMode === "builtin" ? "active" : undefined}
+              onClick={() =>
+                update((next) => {
+                  next.email.deliveryMode = "builtin";
+                })
+              }
+            >
+              <Server size={13} /> 内置邮件服务器
+            </button>
+            <button
+              type="button"
+              className={deliveryMode === "smtp" ? "active" : undefined}
+              onClick={() =>
+                update((next) => {
+                  next.email.deliveryMode = "smtp";
+                })
+              }
+            >
+              <Cable size={13} /> 外部 SMTP
+            </button>
+          </div>
+        }
       >
-        <div className="settings-toggle-stack">
-          <EmailToggle
-            label="启用邮件功能"
-            description="总开关：关闭后不会发送任何提醒或测试邮件。"
-            checked={settings.email.enabled}
-            onChange={(checked) =>
-              update((next) => {
-                next.email.enabled = checked;
-              })
-            }
-          />
-          <EmailToggle
-            label="启用提醒扫描"
-            description="按设定的时间与提前天数自动发送日历提醒。"
-            checked={reminder.enabled}
-            onChange={(checked) =>
-              update((next) => {
-                next.email.reminders.enabled = checked;
-              })
-            }
-          />
-        </div>
-        <div className="divider" />
-        <div className="form-grid">
-          <EmailField
-            label="SMTP 主机"
-            error={errorText(errorsFor("email.smtp.host"))}
-            hint="例如 smtp.exmail.qq.com"
-          >
-            <input
-              className="input"
-              value={smtp.host}
-              spellCheck={false}
-              placeholder="smtp.example.com"
-              onChange={(event) =>
-                update((next) => {
-                  next.email.smtp.host = event.target.value;
-                })
-              }
-            />
-          </EmailField>
-          <EmailField label="端口" error={errorText(errorsFor("email.smtp.port"))} hint="SSL 常用 465，STARTTLS 常用 587">
-            <input
-              className="input"
-              type="number"
-              min={1}
-              max={65535}
-              value={smtp.port}
-              onChange={(event) =>
-                update((next) => {
-                  next.email.smtp.port = toInt(event.target.value, 587);
-                })
-              }
-            />
-          </EmailField>
-          <EmailField label="用户名" error={errorText(errorsFor("email.smtp.username"))} hint="多数邮箱为完整邮箱地址">
-            <input
-              className="input"
-              value={smtp.username}
-              spellCheck={false}
-              autoComplete="off"
-              onChange={(event) =>
-                update((next) => {
-                  next.email.smtp.username = event.target.value;
-                })
-              }
-            />
-          </EmailField>
-          <EmailField label="密码 / 授权码" error={errorText(errorsFor("email.smtp.password"))}>
-            <div className="settings-secret-control">
-              <input
-                className="input"
-                type={showPassword ? "text" : "password"}
-                value={smtp.password}
-                spellCheck={false}
-                autoComplete="new-password"
-                onChange={(event) =>
+        {deliveryMode === "builtin" ? (
+          <>
+            <div className={cn("email-builtin-status", builtinRunning && "is-on")}>
+              <span className={cn("email-run-dot", builtinRunning && "is-on")} aria-hidden="true" />
+              <div className="email-builtin-status-copy">
+                <strong>
+                  {builtinStatus
+                    ? builtinRunning
+                      ? "内置邮件服务器运行中"
+                      : "内置邮件服务器未运行"
+                    : "正在读取内置服务状态…"}
+                </strong>
+                <small>
+                  {builtinStatus
+                    ? builtinRunning
+                      ? `监听 ${builtinStatus.host}:${builtinStatus.port} · 已存 ${builtinStatus.stored}/${builtinStatus.limit} 封`
+                      : "保存配置后点击「重启内置服务」；离线发送前服务需处于运行状态。"
+                    : ""}
+                </small>
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => void restartBuiltin()}
+                disabled={restarting}
+              >
+                {restarting ? <Loader2 size={14} className="spin" /> : <RotateCcw size={14} />}
+                {restarting ? "重启中…" : "重启内置服务"}
+              </button>
+            </div>
+            {builtinStatus?.lastError ? (
+              <div className="email-banner is-error">
+                <AlertTriangle size={15} />
+                <span>上次启动失败：{builtinStatus.lastError}</span>
+              </div>
+            ) : null}
+            <div className="settings-toggle-stack">
+              <EmailToggle
+                label="启用内置邮件服务器"
+                description="关闭后不再监听端口，邮件将无法投递到本地邮箱（外部 SMTP 可选作为回退）。"
+                checked={builtinConfig.enabled}
+                onChange={(checked) =>
                   update((next) => {
-                    next.email.smtp.password = event.target.value;
+                    next.email.builtin.enabled = checked;
                   })
                 }
               />
-              <button
-                type="button"
-                className="icon-button"
-                aria-label={showPassword ? "隐藏密码" : "显示密码"}
-                onClick={() => setShowPassword((value) => !value)}
-              >
-                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
             </div>
-          </EmailField>
-          <EmailField label="发件邮箱" error={errorText(errorsFor("email.smtp.fromEmail"))}>
-            <input
-              className="input"
-              type="email"
-              value={smtp.fromEmail}
-              spellCheck={false}
-              placeholder="teamstudio@company.com"
-              onChange={(event) =>
-                update((next) => {
-                  next.email.smtp.fromEmail = event.target.value;
-                })
-              }
-            />
-          </EmailField>
-          <EmailField label="发件人名称" error={errorText(errorsFor("email.smtp.fromName"))}>
-            <input
-              className="input"
-              value={smtp.fromName}
-              onChange={(event) =>
-                update((next) => {
-                  next.email.smtp.fromName = event.target.value;
-                })
-              }
-            />
-          </EmailField>
-          <EmailField label="超时时间（秒）" error={errorText(errorsFor("email.smtp.timeoutSeconds"))} hint="3 - 120 秒">
-            <input
-              className="input"
-              type="number"
-              min={3}
-              max={120}
-              value={smtp.timeoutSeconds}
-              onChange={(event) =>
-                update((next) => {
-                  next.email.smtp.timeoutSeconds = toInt(event.target.value, 15);
-                })
-              }
-            />
-          </EmailField>
-          <div className="email-encryption">
+            <div className="divider" />
+            <div className="form-grid">
+              <EmailField
+                label="监听地址"
+                error={errorText(errorsFor("email.builtin.host"))}
+                hint="默认 127.0.0.1，仅本机可访问更安全"
+              >
+                <input
+                  className="input"
+                  value={builtinConfig.host}
+                  spellCheck={false}
+                  placeholder="127.0.0.1"
+                  onChange={(event) =>
+                    update((next) => {
+                      next.email.builtin.host = event.target.value;
+                    })
+                  }
+                />
+              </EmailField>
+              <EmailField
+                label="监听端口"
+                error={errorText(errorsFor("email.builtin.port"))}
+                hint="默认 2525；修改后需重启内置服务"
+              >
+                <input
+                  className="input"
+                  type="number"
+                  min={1024}
+                  max={65535}
+                  value={builtinConfig.port}
+                  onChange={(event) =>
+                    update((next) => {
+                      next.email.builtin.port = toInt(event.target.value, 2525);
+                    })
+                  }
+                />
+              </EmailField>
+              <EmailField
+                label="服务器域名"
+                error={errorText(errorsFor("email.builtin.hostname"))}
+                hint="用于 SMTP 问候语与默认发件地址"
+              >
+                <input
+                  className="input"
+                  value={builtinConfig.hostname}
+                  spellCheck={false}
+                  placeholder="teamstudio.local"
+                  onChange={(event) =>
+                    update((next) => {
+                      next.email.builtin.hostname = event.target.value;
+                    })
+                  }
+                />
+              </EmailField>
+              <EmailField
+                label="邮箱容量（封）"
+                error={errorText(errorsFor("email.builtin.mailboxLimit"))}
+                hint="20 - 5000 封，超出后自动清理最旧邮件"
+              >
+                <input
+                  className="input"
+                  type="number"
+                  min={20}
+                  max={5000}
+                  value={builtinConfig.mailboxLimit}
+                  onChange={(event) =>
+                    update((next) => {
+                      next.email.builtin.mailboxLimit = toInt(event.target.value, 500);
+                    })
+                  }
+                />
+              </EmailField>
+              <EmailField
+                label="保留天数"
+                error={errorText(errorsFor("email.builtin.retentionDays"))}
+                hint="1 - 3650 天，过期邮件自动清理"
+              >
+                <input
+                  className="input"
+                  type="number"
+                  min={1}
+                  max={3650}
+                  value={builtinConfig.retentionDays}
+                  onChange={(event) =>
+                    update((next) => {
+                      next.email.builtin.retentionDays = toInt(event.target.value, 90);
+                    })
+                  }
+                />
+              </EmailField>
+            </div>
+            <p className="field-hint email-builtin-note">
+              <Info size={13} /> 内置服务器只监听本机回环地址，不会把邮件转发到互联网；「本地邮件中心」可查看全部已投递邮件。
+            </p>
+          </>
+        ) : (
+          <div className="email-banner is-info">
+            <Info size={15} />
+            <span>
+              外部 SMTP 模式会使用下方「SMTP 发件配置」把邮件发送到真实邮箱；如需完全离线，请切换回内置邮件服务器。
+            </span>
+          </div>
+        )}
+      </EmailCard>
+
+      {deliveryMode === "smtp" ? (
+        <EmailCard
+          title="SMTP 发件配置"
+          description="支持标准 SMTP / STARTTLS / SSL。密码仅保存在服务端 settings.json。"
+          icon={<Server size={18} />}
+        >
+          <div className="settings-toggle-stack">
             <EmailToggle
-              label="STARTTLS"
-              description="587 端口常用，先明文连接再升级 TLS。"
-              checked={smtp.useStartTls}
+              label="启用邮件功能"
+              description="总开关：关闭后不会发送任何提醒或测试邮件。"
+              checked={settings.email.enabled}
               onChange={(checked) =>
                 update((next) => {
-                  next.email.smtp.useStartTls = checked;
-                  if (checked) next.email.smtp.useSsl = false;
+                  next.email.enabled = checked;
                 })
               }
             />
             <EmailToggle
-              label="SSL 直连"
-              description="465 端口常用，全程加密连接。"
-              checked={smtp.useSsl}
+              label="启用提醒扫描"
+              description="按设定的时间与提前天数自动发送日历提醒。"
+              checked={reminder.enabled}
               onChange={(checked) =>
                 update((next) => {
-                  next.email.smtp.useSsl = checked;
-                  if (checked) next.email.smtp.useStartTls = false;
+                  next.email.reminders.enabled = checked;
                 })
               }
             />
           </div>
-        </div>
+          <div className="divider" />
+          <div className="form-grid">
+            <EmailField
+              label="SMTP 主机"
+              error={errorText(errorsFor("email.smtp.host"))}
+              hint="例如 smtp.exmail.qq.com"
+            >
+              <input
+                className="input"
+                value={smtp.host}
+                spellCheck={false}
+                placeholder="smtp.example.com"
+                onChange={(event) =>
+                  update((next) => {
+                    next.email.smtp.host = event.target.value;
+                  })
+                }
+              />
+            </EmailField>
+            <EmailField label="端口" error={errorText(errorsFor("email.smtp.port"))} hint="SSL 常用 465，STARTTLS 常用 587">
+              <input
+                className="input"
+                type="number"
+                min={1}
+                max={65535}
+                value={smtp.port}
+                onChange={(event) =>
+                  update((next) => {
+                    next.email.smtp.port = toInt(event.target.value, 587);
+                  })
+                }
+              />
+            </EmailField>
+            <EmailField label="用户名" error={errorText(errorsFor("email.smtp.username"))} hint="多数邮箱为完整邮箱地址">
+              <input
+                className="input"
+                value={smtp.username}
+                spellCheck={false}
+                autoComplete="off"
+                onChange={(event) =>
+                  update((next) => {
+                    next.email.smtp.username = event.target.value;
+                  })
+                }
+              />
+            </EmailField>
+            <EmailField label="密码 / 授权码" error={errorText(errorsFor("email.smtp.password"))}>
+              <div className="settings-secret-control">
+                <input
+                  className="input"
+                  type={showPassword ? "text" : "password"}
+                  value={smtp.password}
+                  spellCheck={false}
+                  autoComplete="new-password"
+                  onChange={(event) =>
+                    update((next) => {
+                      next.email.smtp.password = event.target.value;
+                    })
+                  }
+                />
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label={showPassword ? "隐藏密码" : "显示密码"}
+                  onClick={() => setShowPassword((value) => !value)}
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+            </EmailField>
+            <EmailField label="发件邮箱" error={errorText(errorsFor("email.smtp.fromEmail"))}>
+              <input
+                className="input"
+                type="email"
+                value={smtp.fromEmail}
+                spellCheck={false}
+                placeholder="teamstudio@company.com"
+                onChange={(event) =>
+                  update((next) => {
+                    next.email.smtp.fromEmail = event.target.value;
+                  })
+                }
+              />
+            </EmailField>
+            <EmailField label="发件人名称" error={errorText(errorsFor("email.smtp.fromName"))}>
+              <input
+                className="input"
+                value={smtp.fromName}
+                onChange={(event) =>
+                  update((next) => {
+                    next.email.smtp.fromName = event.target.value;
+                  })
+                }
+              />
+            </EmailField>
+            <EmailField label="超时时间（秒）" error={errorText(errorsFor("email.smtp.timeoutSeconds"))} hint="3 - 120 秒">
+              <input
+                className="input"
+                type="number"
+                min={3}
+                max={120}
+                value={smtp.timeoutSeconds}
+                onChange={(event) =>
+                  update((next) => {
+                    next.email.smtp.timeoutSeconds = toInt(event.target.value, 15);
+                  })
+                }
+              />
+            </EmailField>
+            <div className="email-encryption">
+              <EmailToggle
+                label="STARTTLS"
+                description="587 端口常用，先明文连接再升级 TLS。"
+                checked={smtp.useStartTls}
+                onChange={(checked) =>
+                  update((next) => {
+                    next.email.smtp.useStartTls = checked;
+                    if (checked) next.email.smtp.useSsl = false;
+                  })
+                }
+              />
+              <EmailToggle
+                label="SSL 直连"
+                description="465 端口常用，全程加密连接。"
+                checked={smtp.useSsl}
+                onChange={(checked) =>
+                  update((next) => {
+                    next.email.smtp.useSsl = checked;
+                    if (checked) next.email.smtp.useStartTls = false;
+                  })
+                }
+              />
+            </div>
+          </div>
+        </EmailCard>
+      ) : null}
+
+      <EmailCard
+        title="本地邮件中心"
+        description="内置服务器离线保存邮件，不依赖外部邮件服务；点击任意邮件可查看完整正文。"
+        icon={<Inbox size={18} />}
+        extra={
+          <div className="email-head-actions">
+            <span className="badge badge-gray">共 {mailboxTotal} 封</span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => void refreshMailbox()}
+              disabled={mailboxLoading}
+            >
+              <RefreshCw size={14} className={mailboxLoading ? "spin" : undefined} /> 刷新邮件
+            </button>
+          </div>
+        }
+      >
+        {mailboxError ? (
+          <div className="email-banner is-error">
+            <AlertTriangle size={15} />
+            <span>{mailboxError}</span>
+            <button type="button" className="text-button" onClick={() => void refreshMailbox()}>
+              重试
+            </button>
+          </div>
+        ) : null}
+        {mailboxLoading && !mailbox ? (
+          <LoadingBlock label="正在读取本地邮件…" rows={4} />
+        ) : mailbox && mailbox.messages.length ? (
+          <div className="table-wrap email-log-table email-mailbox-table">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>收件人</th>
+                  <th>主题</th>
+                  <th>类型</th>
+                  <th>状态</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {mailbox.messages.map((message) => (
+                  <tr
+                    key={message.id}
+                    className={cn("email-mailbox-row", !message.readAt && "is-unread")}
+                    onClick={() => void openMessage(message.id)}
+                  >
+                    <td className="email-log-time">{formatDateTime(message.createdAt)}</td>
+                    <td className="email-mailbox-recipient" title={message.toAddrs.join(", ")}>
+                      {message.toAddrs.join(", ") || "—"}
+                    </td>
+                    <td className="email-log-subject" title={message.subject}>
+                      {message.subject || "（无主题）"}
+                    </td>
+                    <td>
+                      <span className="chip">{kindLabel(message.kind)}</span>
+                    </td>
+                    <td>
+                      <span className={cn("badge", message.status === "error" ? "badge-red" : "badge-green")}>
+                        {message.status === "error" ? "存储异常" : "已入库"}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="email-mailbox-actions">
+                        <button
+                          type="button"
+                          className="icon-button"
+                          aria-label="查看邮件"
+                          title="查看邮件"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void openMessage(message.id);
+                          }}
+                        >
+                          <Eye size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          className="icon-button is-danger"
+                          aria-label="删除邮件"
+                          title="删除邮件"
+                          disabled={deletingId === message.id}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void deleteMessage(message.id);
+                          }}
+                        >
+                          {deletingId === message.id ? (
+                            <Loader2 size={14} className="spin" />
+                          ) : (
+                            <Trash2 size={14} />
+                          )}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <EmptyState
+            compact
+            icon={<Inbox size={22} />}
+            title="本地邮箱还是空的"
+            description="开启内置邮件服务器后，点击「发送测试邮件」或执行一次提醒扫描，邮件会出现在这里，完全不需要外部邮件服务。"
+          />
+        )}
       </EmailCard>
 
       <EmailCard
@@ -1012,7 +1479,7 @@ export function EmailPanel({ settings, update, errorsFor }: EmailPanelProps) {
                   <tr key={log.id}>
                     <td className="email-log-time">{formatDateTime(log.created_at)}</td>
                     <td>
-                      <span className="chip">{KIND_LABELS[log.kind] ?? log.kind}</span>
+                      <span className="chip">{kindLabel(log.kind)}</span>
                     </td>
                     <td className="email-log-recipient">{log.recipient}</td>
                     <td className="email-log-subject" title={log.subject}>
@@ -1049,7 +1516,11 @@ export function EmailPanel({ settings, update, errorsFor }: EmailPanelProps) {
       <Modal
         open={testOpen}
         title="发送测试邮件"
-        description="将使用当前已保存的 SMTP 配置发送一封配置测试邮件。"
+        description={
+          deliveryMode === "builtin"
+            ? "将使用内置邮件服务器投递，离线也能成功；发送后可在「本地邮件中心」查看。"
+            : "将使用当前已保存的外部 SMTP 配置发送一封配置测试邮件。"
+        }
         size="sm"
         onClose={() => {
           if (!testing) setTestOpen(false);
@@ -1074,14 +1545,18 @@ export function EmailPanel({ settings, update, errorsFor }: EmailPanelProps) {
         <div className="email-test-form">
           <EmailField
             label="收件邮箱"
-            hint="留空默认使用发件邮箱；发送结果会写入发送日志。"
+            hint={
+              deliveryMode === "builtin"
+                ? "默认投递到本地邮箱；任意本地地址都可以收到。"
+                : "留空默认使用发件邮箱；发送结果会写入发送日志。"
+            }
             error={statusError ? statusError : undefined}
           >
             <input
               className="input"
               type="email"
               value={testTo}
-              placeholder={smtp.fromEmail || "name@company.com"}
+              placeholder={`teamstudio@${builtinConfig.hostname || "teamstudio.local"}`}
               onChange={(event) => setTestTo(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
@@ -1094,10 +1569,95 @@ export function EmailPanel({ settings, update, errorsFor }: EmailPanelProps) {
           <div className="email-test-hint">
             <Info size={14} />
             <span>
-              测试邮件依赖已保存的配置。若刚修改过 SMTP，请先点击页面右上角「保存设置」，再重新打开此弹窗。
+              测试邮件依赖已保存的配置。若刚修改过服务器地址或投递方式，请先点击页面右上角「保存设置」，再点击「重启内置服务」。
             </span>
           </div>
         </div>
+      </Modal>
+
+      <Modal
+        open={detailOpen}
+        title="邮件详情"
+        description="来自本地邮件中心，正文完整保存在服务端，不依赖外部邮件服务。"
+        size="lg"
+        onClose={() => {
+          setDetailOpen(false);
+          setMessageDetail(null);
+        }}
+        footer={
+          <>
+            {messageDetail ? (
+              <button
+                type="button"
+                className="btn btn-danger"
+                disabled={deletingId === messageDetail.id}
+                onClick={() => void deleteMessage(messageDetail.id)}
+              >
+                {deletingId === messageDetail.id ? (
+                  <Loader2 size={15} className="spin" />
+                ) : (
+                  <Trash2 size={15} />
+                )}
+                删除邮件
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => {
+                setDetailOpen(false);
+                setMessageDetail(null);
+              }}
+            >
+              关闭
+            </button>
+          </>
+        }
+      >
+        {detailLoading ? (
+          <LoadingBlock label="正在读取邮件正文…" rows={4} />
+        ) : messageDetail ? (
+          <div className="email-message">
+            <div className="email-message-meta">
+              <div className="email-message-subject">
+                <small>主题</small>
+                <strong>{messageDetail.subject || "（无主题）"}</strong>
+              </div>
+              <div>
+                <small>发件人</small>
+                <span>{messageDetail.fromAddr || "—"}</span>
+              </div>
+              <div>
+                <small>收件人</small>
+                <span>{messageDetail.toAddrs.join(", ") || "—"}</span>
+              </div>
+              {messageDetail.ccAddrs.length ? (
+                <div>
+                  <small>抄送</small>
+                  <span>{messageDetail.ccAddrs.join(", ")}</span>
+                </div>
+              ) : null}
+              <div>
+                <small>时间</small>
+                <span>{formatDateTime(messageDetail.createdAt)}</span>
+              </div>
+              <div>
+                <small>类型</small>
+                <span>{kindLabel(messageDetail.kind)}</span>
+              </div>
+            </div>
+            {messageDetail.error ? (
+              <div className="email-banner is-error">
+                <AlertTriangle size={15} />
+                <span>{messageDetail.error}</span>
+              </div>
+            ) : null}
+            <div className="email-preview-body">
+              <small>正文</small>
+              <pre>{messageDetail.bodyText || messageDetail.bodyHtml || "（无正文）"}</pre>
+            </div>
+          </div>
+        ) : null}
       </Modal>
 
       <Modal

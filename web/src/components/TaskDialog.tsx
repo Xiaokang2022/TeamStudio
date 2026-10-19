@@ -2,16 +2,20 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   AlertCircle,
   AlertTriangle,
+  ArrowRight,
   CalendarDays,
   CheckCheck,
   Flag,
   Gauge,
   Layers,
+  Tags,
   UserRound,
 } from "lucide-react";
 import { api, ApiError } from "../api";
 import { Avatar } from "./Avatar";
 import { Modal } from "./Modal";
+import { Select } from "./Select";
+import { TagPicker } from "./TagPicker";
 import { useToast } from "./Toast";
 import { cn } from "../lib/utils";
 import {
@@ -46,8 +50,13 @@ export interface TaskDialogProps {
   open: boolean;
   /** Existing task when editing, null when creating. */
   task: MemberTask | null;
+  /** Team/group the save request targets: task's own group when editing, current group when creating. */
   teamId: string;
   groupId: string;
+  /** Display name of the target group (used for the aggregate-scope hint). */
+  targetGroupName?: string;
+  /** True when the sidebar browsing scope is team/all. */
+  aggregate?: boolean;
   /** Every member of the active group (workload rail source). */
   members: TaskMemberOption[];
   /** Admins may assign any member; ordinary linked members are fixed to themselves. */
@@ -70,6 +79,8 @@ export function TaskDialog({
   task,
   teamId,
   groupId,
+  targetGroupName,
+  aggregate = false,
   members,
   canAssignOthers,
   selfMemberId,
@@ -86,6 +97,7 @@ export function TaskDialog({
   const [priority, setPriority] = useState<TaskPriority>(DEFAULT_PRIORITY);
   const [difficulty, setDifficulty] = useState<TaskDifficulty>(DEFAULT_DIFFICULTY);
   const [expectedDate, setExpectedDate] = useState("");
+  const [tagIds, setTagIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -103,6 +115,7 @@ export function TaskDialog({
       setPriority(task.priority ?? DEFAULT_PRIORITY);
       setDifficulty(task.difficulty ?? DEFAULT_DIFFICULTY);
       setExpectedDate(task.expectedDate || "");
+      setTagIds(task.tagIds ?? task.tags?.map((tag) => tag.id) ?? []);
     } else {
       const fallbackMemberId = canAssignOthers
         ? defaultMemberId || members[0]?.id || ""
@@ -115,6 +128,7 @@ export function TaskDialog({
       setPriority(DEFAULT_PRIORITY);
       setDifficulty(DEFAULT_DIFFICULTY);
       setExpectedDate("");
+      setTagIds([]);
     }
     setSaving(false);
     setError("");
@@ -174,6 +188,7 @@ export function TaskDialog({
       priority,
       difficulty,
       expectedDate: expectedDate || "",
+      tagIds,
     };
     try {
       if (task) {
@@ -216,6 +231,19 @@ export function TaskDialog({
       }
     >
       <form id="tasks-dialog-form" className="td-form tasks-dialog-form" onSubmit={submit}>
+        {aggregate && targetGroupName ? (
+          <div className="tasks-dialog-group-hint" role="note">
+            <ArrowRight size={13} />
+            <span>
+              {isEditing ? "该任务属于" : "将创建到"}：
+              <strong>{targetGroupName}</strong>
+              {isEditing
+                ? "。标签库与成员均按任务所属开发组加载，保存会写回该组。"
+                : "。聚合视角下新建任务总是写入当前选中的开发组。"}
+            </span>
+          </div>
+        ) : null}
+
         <div className="field">
           <label htmlFor="tasks-title">任务标题 *</label>
           <input
@@ -249,21 +277,19 @@ export function TaskDialog({
           </label>
           {canAssignOthers ? (
             <>
-              <select
+              <Select
                 id="tasks-member"
-                className="select"
                 value={memberId}
-                onChange={(event) => setMemberId(event.target.value)}
-                required
-              >
-                <option value="">请选择成员</option>
-                {members.map((member) => (
-                  <option key={member.id} value={member.id}>
-                    {member.name}
-                    {member.title ? ` · ${member.title}` : ""}
-                  </option>
-                ))}
-              </select>
+                onChange={setMemberId}
+                placeholder="请选择成员"
+                ariaLabel="任务所属成员"
+                options={members.map((member) => ({
+                  value: member.id,
+                  label: member.name,
+                  description: member.title || undefined,
+                  color: member.avatarColor,
+                }))}
+              />
               <span className="field-hint">
                 管理员可以将任务指派给开发组内任意成员；普通成员只能管理自己的任务。
               </span>
@@ -287,6 +313,23 @@ export function TaskDialog({
               <span className="badge badge-gray">仅本人</span>
             </div>
           )}
+        </div>
+
+        <div className="field">
+          <span className="field-label">
+            <Tags size={12} /> 任务标签
+          </span>
+          <TagPicker
+            teamId={teamId}
+            groupId={groupId}
+            groupName={targetGroupName}
+            value={tagIds}
+            onChange={setTagIds}
+            disabled={saving}
+          />
+          <span className="field-hint">
+            标签按开发组共享，最多选择 8 个；可在选择面板中直接新建、改名、换色或删除。
+          </span>
         </div>
 
         <div className="field">

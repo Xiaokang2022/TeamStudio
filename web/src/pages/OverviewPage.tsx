@@ -16,6 +16,7 @@ import {
   CheckCircle2,
   Clock,
   Gauge,
+  Layers3,
   ListTodo,
   Megaphone,
   Plus,
@@ -102,12 +103,23 @@ function messageOf(error: unknown, fallback: string): string {
 }
 
 export default function OverviewPage() {
-  const { data, config, currentTeam, currentGroup, canManageActiveGroup, navigate, reload } = useApp();
+  const {
+    data,
+    config,
+    currentTeam,
+    currentGroup,
+    canManageActiveGroup,
+    scope,
+    scopeLabel,
+    navigate,
+    reload,
+  } = useApp();
   const { toast } = useToast();
 
   const teamId = currentTeam?.id ?? "";
   const groupId = currentGroup?.id ?? "";
   const me = data?.me ?? null;
+  const isAggregated = scope !== "group";
 
   const [overview, setOverview] = useState<OverviewData | null>(null);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
@@ -126,8 +138,8 @@ export default function OverviewPage() {
       setError("");
       try {
         const [overviewData, announcementData] = await Promise.all([
-          api.overview(teamId, groupId),
-          api.announcements(teamId, groupId),
+          api.overview(teamId, groupId, scope),
+          api.announcements(teamId, groupId, scope),
         ]);
         setOverview(overviewData);
         setAnnouncements(announcementData.announcements);
@@ -138,7 +150,7 @@ export default function OverviewPage() {
         setRefreshing(false);
       }
     },
-    [teamId, groupId],
+    [teamId, groupId, scope],
   );
 
   useEffect(() => {
@@ -198,6 +210,48 @@ export default function OverviewPage() {
 
   const activity = (overview?.recentActivity ?? []) as ActivityRow[];
   const selectedMember = selectedMemberId ? memberById.get(selectedMemberId) ?? null : null;
+
+  // Group list for aggregated views: prefer the scope payload, then the bootstrap teams.
+  // (Backend scope metadata may still be landing, so the fallback keeps counts truthful.)
+  const scopeGroups = useMemo(() => {
+    const fromMeta = overview?.scope?.groups ?? [];
+    if (fromMeta.length) return fromMeta;
+    const teams = scope === "all" ? data?.teams ?? [] : currentTeam ? [currentTeam] : [];
+    return teams.flatMap((team) =>
+      team.groups.map((group) => ({ id: group.id, name: group.name, color: group.color })),
+    );
+  }, [overview?.scope?.groups, scope, data?.teams, currentTeam]);
+
+  const scopeTeamCount = useMemo(() => {
+    const fromMeta = overview?.scope?.teamIds.length ?? 0;
+    if (fromMeta) return fromMeta;
+    return scope === "all" ? data?.teams.length ?? 0 : 1;
+  }, [overview?.scope?.teamIds, scope, data?.teams]);
+
+  // Group meta for aggregated views: prefer the scope payload, then bootstrap teams.
+  const groupMetaById = useMemo(() => {
+    const map = new Map<string, { name: string; color: string }>();
+    for (const item of scopeGroups) map.set(item.id, { name: item.name, color: item.color });
+    for (const team of data?.teams ?? []) {
+      for (const item of team.groups) {
+        if (!map.has(item.id)) map.set(item.id, { name: item.name, color: item.color });
+      }
+    }
+    return map;
+  }, [scopeGroups, data?.teams]);
+
+  // Member edits always route to the member's own group/team, never the active one.
+  const selectedMemberScope = useMemo(() => {
+    const fallback = { teamId, groupId };
+    if (!selectedMember) return fallback;
+    const memberGroupId = selectedMember.groupId || groupId;
+    for (const team of data?.teams ?? []) {
+      if (team.groups.some((item) => item.id === memberGroupId)) {
+        return { teamId: team.id, groupId: memberGroupId };
+      }
+    }
+    return { teamId: selectedMember.teamId || teamId, groupId: memberGroupId };
+  }, [selectedMember, data?.teams, teamId, groupId]);
 
   const heroStats = [
     { label: "团队成员", value: stats?.members ?? members.length, unit: "位伙伴", icon: Users },
@@ -266,9 +320,20 @@ export default function OverviewPage() {
         <div className="ov-hero-main">
           <div className="ov-hero-top">
             <span className="ov-hero-chip">
-              <span className="dot" style={{ background: group?.color ?? currentGroup.color }} />
-              {group?.name ?? currentGroup.name}
+              <span
+                className="dot"
+                style={{
+                  background: isAggregated ? currentGroup.color : group?.color ?? currentGroup.color,
+                }}
+              />
+              {isAggregated ? scopeLabel : group?.name ?? currentGroup.name}
             </span>
+            {isAggregated ? (
+              <span className="ov-hero-chip is-muted">
+                <Layers3 size={13} />
+                {scope === "all" ? `${scopeTeamCount} 个团队` : `${scopeGroups.length} 个开发组`} · 聚合
+              </span>
+            ) : null}
             <span className="ov-hero-chip is-muted">
               <CalendarDays size={13} />
               {formatFullDate(serverDate)}
@@ -279,15 +344,32 @@ export default function OverviewPage() {
             </span>
           </div>
           <p className="eyebrow ov-hero-eyebrow">
-            <Sparkles size={12} /> GROUP PULSE · 团队脉搏
+            <Sparkles size={12} />{" "}
+            {scope === "all" ? "ALL TEAMS PULSE · 全局脉搏" : scope === "team" ? "TEAM PULSE · 团队脉搏" : "GROUP PULSE · 团队脉搏"}
           </p>
           <h1 id="ov-hero-title" className="ov-hero-title">
             {config?.site.tagline || "让协作被看见，让成长有回声。"}
           </h1>
           <p className="ov-hero-sub">
-            {currentTeam.name}
-            <span aria-hidden="true"> · </span>
-            {group?.description || currentGroup.description || "一起把事情做得更漂亮。"}
+            {scope === "group" ? (
+              <>
+                {currentTeam.name}
+                <span aria-hidden="true"> · </span>
+                {group?.description || currentGroup.description || "一起把事情做得更漂亮。"}
+              </>
+            ) : scope === "team" ? (
+              <>
+                {currentTeam.name}
+                <span aria-hidden="true"> · </span>
+                {scopeLabel}：聚合 {scopeGroups.length} 个开发组的成员、工作与动态。
+              </>
+            ) : (
+              <>
+                全部团队
+                <span aria-hidden="true"> · </span>
+                {scopeTeamCount} 个团队 / {scopeGroups.length} 个开发组的聚合视图。
+              </>
+            )}
           </p>
 
           <dl className="ov-hero-stats">
@@ -320,7 +402,9 @@ export default function OverviewPage() {
               {members.length > 6 ? <span className="ov-avatar-more">+{members.length - 6}</span> : null}
             </div>
             <span className="ov-hero-note">
-              协同视角下的团队档案：谁在做什么、进度如何，一眼可见。
+              {isAggregated
+                ? `聚合视角：${scopeLabel} 的成员档案、负载与动态汇总展示，卡片会标注所属开发组。`
+                : "协同视角下的团队档案：谁在做什么、进度如何，一眼可见。"}
             </span>
           </div>
         </div>
@@ -409,6 +493,7 @@ export default function OverviewPage() {
               </h2>
               <p className="ov-section-sub">
                 共 {members.length} 位伙伴，正在推进 {stats?.currentWorks ?? 0} 项工作。
+                {isAggregated ? ` · ${scopeLabel}` : ""}
               </p>
             </div>
             {canManageActiveGroup ? (
@@ -458,6 +543,13 @@ export default function OverviewPage() {
             <div className="ov-member-grid">
               {filteredMembers.map((member, index) => {
                 const memberWorkload = workloadByMember.get(member.id) ?? null;
+                const memberGroupMeta = isAggregated
+                  ? groupMetaById.get(member.groupId ?? "") ?? null
+                  : null;
+                const memberGroupName = isAggregated
+                  ? member.groupName || memberGroupMeta?.name || ""
+                  : "";
+                const memberGroupColor = memberGroupMeta?.color ?? currentGroup.color;
                 const workloadMeta = memberWorkload
                   ? WORKLOAD_LEVEL_META[workloadLevel(memberWorkload.currentLoadPercent)] ??
                     WORKLOAD_LEVEL_META.balanced
@@ -484,6 +576,15 @@ export default function OverviewPage() {
                       <div className="ov-member-id">
                         <div className="ov-member-name-row">
                           <h3>{member.name}</h3>
+                          {memberGroupName ? (
+                            <span
+                              className="badge ov-member-group"
+                              style={{ "--group-color": memberGroupColor } as CSSProperties}
+                              title={`所属开发组：${memberGroupName}`}
+                            >
+                              {memberGroupName}
+                            </span>
+                          ) : null}
                         </div>
                         <p className="ov-member-title">{member.title || "团队成员"}</p>
                         <span className="ov-member-role">{member.role || "成员"}</span>
@@ -810,8 +911,8 @@ export default function OverviewPage() {
       <MemberDrawer
         open={Boolean(selectedMember)}
         member={selectedMember}
-        teamId={teamId}
-        groupId={groupId}
+        teamId={selectedMemberScope.teamId}
+        groupId={selectedMemberScope.groupId}
         workload={selectedMember ? workloadByMember.get(selectedMember.id) ?? null : null}
         onClose={closeMember}
         onChanged={refreshEverything}
@@ -830,6 +931,7 @@ interface AddMemberDialogProps {
 
 function AddMemberDialog({ open, teamId, groupId, onClose, onSaved }: AddMemberDialogProps) {
   const { toast } = useToast();
+  const { scope, currentGroup } = useApp();
   const [form, setForm] = useState<MemberFormState>(EMPTY_MEMBER_FORM);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -879,7 +981,11 @@ function AddMemberDialog({ open, teamId, groupId, onClose, onSaved }: AddMemberD
       open={open}
       onClose={onClose}
       title="添加团队成员"
-      description="补全基础信息即可创建档案，工作项与待办可在档案中继续维护。"
+      description={
+        scope === "group"
+          ? "补全基础信息即可创建档案，工作项与待办可在档案中继续维护。"
+          : `聚合视角下，新成员会创建到当前开发组「${currentGroup?.name ?? "当前开发组"}」，创建后可在成员档案中继续维护。`
+      }
       size="md"
       footer={
         <>
@@ -996,7 +1102,10 @@ function AddMemberDialog({ open, teamId, groupId, onClose, onSaved }: AddMemberD
           </p>
         ) : null}
         <div className="ov-form-meta span-2">
-          <Clock size={12} /> 创建后会立即出现在成员档案与团队动态中。
+          <Clock size={12} />{" "}
+          {scope === "group"
+            ? "创建后会立即出现在成员档案与团队动态中。"
+            : `将创建到：${currentGroup?.name ?? "当前开发组"}，创建后立即出现在成员档案中。`}
         </div>
       </form>
     </Modal>

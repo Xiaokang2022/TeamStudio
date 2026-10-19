@@ -1,6 +1,9 @@
-# Task Ledger & Workload Contract (v2)
+# Task Ledger & Workload Contract (v3)
 
-This doc defines the shared shapes for the "任务总览" feature and the non-hour workload model.
+This doc defines the shared shapes for the "任务总览" feature, the non-hour workload model,
+the shared per-group tag library, and the multi-scope / time-range / sorting behaviour.
+Data insights shapes are documented in `CONTRACT.md` (`GET /insights`) and typed in
+`web/src/types.ts` (`InsightsData`).
 
 ## Workload model (no hours)
 
@@ -26,13 +29,17 @@ Examples: a normal/easy task = 2 points; a high/medium task = 4 points; an urgen
 
 Base: `/api/teams/{team_id}/groups/{group_id}`
 
-`GET /tasks`:
+`GET /tasks?scope=group|team|all` (default `group`; see `CONTRACT.md` for the `scope` object):
 
 ```json
 {
+  "scope": { "kind": "group", "label": "前端体验组", "groupIds": ["grp-frontend"], "groups": [] },
   "tasks": [{
     "id": "task-...",
     "groupId": "grp-frontend",
+    "groupName": "前端体验组",
+    "teamId": "team-aurora",
+    "teamName": "星港产品团队",
     "memberId": "m-lin",
     "memberName": "林知夏",
     "memberTitle": "前端负责人",
@@ -45,6 +52,9 @@ Base: `/api/teams/{team_id}/groups/{group_id}`
     "difficulty": "easy | medium | hard",
     "loadPoints": 4,
     "expectedDate": "2026-11-02",
+    "tagIds": ["tag-...", "tag-..."],
+    "tags": [{ "id": "tag-...", "groupId": "grp-frontend", "groupName": "前端体验组",
+               "name": "前端", "color": "#0a59f7" }],
     "createdBy": "Admin",
     "createdAt": "ISO",
     "updatedAt": "ISO",
@@ -56,6 +66,10 @@ Base: `/api/teams/{team_id}/groups/{group_id}`
     "memberName": "林知夏",
     "memberTitle": "前端负责人",
     "avatarColor": "#7c3aed",
+    "groupId": "grp-frontend",
+    "groupName": "前端体验组",
+    "teamId": "team-aurora",
+    "teamName": "星港产品团队",
     "currentPoints": 8,
     "currentLoadPercent": 53,
     "averagePoints": 6.5,
@@ -92,23 +106,56 @@ Base: `/api/teams/{team_id}/groups/{group_id}`
 
 Writes:
 
-- `POST /tasks` body: `{ memberId, title, description?, progressStatus?, healthStatus?, priority?, difficulty?, expectedDate? }`
+- `POST /tasks` body: `{ memberId, title, description?, progressStatus?, healthStatus?, priority?, difficulty?, expectedDate?, tagIds? }`
 - `PATCH /tasks/{task_id}` partial same
 - `DELETE /tasks/{task_id}`
 
 Permissions unchanged: admins manage in-scope members; linked members self-only; guests read-only.
 
-`GET /overview` includes `workloads` and `workloadSummary` with the same v2 workload shape.
+`GET /overview` includes `workloads` and `workloadSummary` with the same v2 workload shape,
+aggregated across the active read scope.
+
+## Shared task tags (v3)
+
+The tag library is shared per development group (`task_tags`) and writable by any signed-in
+user:
+
+- `GET /task-tags?scope=` → `{ tags: [{ id, groupId, groupName, name, color, usage, createdBy,
+  createdAt, updatedAt }], scope }`; a group with no tags lazily gets 5 defaults.
+- `POST /task-tags` `{ name (1-20 chars), color? (#RRGGBB) }`; duplicate names in the same group → 409.
+- `PATCH /task-tags/{tagId}` `{ name?, color? }`.
+- `DELETE /task-tags/{tagId}` removes the id from every task's `tags` array.
+- Task writes accept `tagIds` (max 8, deduplicated, must belong to the task's group → 422 otherwise).
+
+## Browsing scope, time range and sorting (v3)
+
+- All reads accept `?scope=group|team|all`; single-group responses stay field-compatible with v2.
+- `GET /insights?scope=&range=1w|2w|1m|2m|3m|all` powers the analytics board; see `CONTRACT.md`.
+- Task ledger UI time range: `1w / 2w / 1m / 2m / 3m` (default `1m`). A task is "active" in the
+  window when `createdAt`, `updatedAt` or `completedAt` falls inside it, or it is still open.
+  Aggregated KPI cards use the same window.
+- Sortable columns: member, priority, difficulty, load points, expected date, created time,
+  progress status, health status (asc/desc, `aria-sort`).
 
 ## Data migration
 
-Existing `member_tasks` table has `effort_hours`. Add additive `priority TEXT NOT NULL DEFAULT 'normal'` and `difficulty TEXT NOT NULL DEFAULT 'medium'` columns; keep `effort_hours` in DB for compatibility but do not return it. Backfill existing rows deterministically from effort hours / health / urgency before serving. New seed tasks must set realistic priority/difficulty.
+Existing `member_tasks` table has `effort_hours`. Additive migrations:
+
+- `priority TEXT NOT NULL DEFAULT 'normal'` and `difficulty TEXT NOT NULL DEFAULT 'medium'`
+  (backfilled deterministically from effort hours / health / urgency).
+- `tags TEXT NOT NULL DEFAULT '[]'` (JSON array of `task_tags.id`), added automatically on start.
+
+`effort_hours` is kept in DB for compatibility but never returned.
 
 ## Shared frontend types/API
 
-`MemberTask`: `priority`, `difficulty`, `loadPoints`; no `effortHours`.
-`Workload`: `currentPoints`, `currentLoadPercent`, `averagePoints`, `averageLoadPercent`, `capacityPoints`.
+`MemberTask`: `priority`, `difficulty`, `loadPoints`, `groupId/groupName/teamId/teamName`,
+`tagIds`, hydrated `tags`; no `effortHours`.
+`Workload`: `currentPoints`, `currentLoadPercent`, `averagePoints`, `averageLoadPercent`,
+`capacityPoints`, plus group/team metadata.
 `WorkloadSummary` accordingly.
 `lib/taskMeta.ts`: `PRIORITY_META`, `DIFFICULTY_META`, `TASK_LOAD_WEIGHTS`, `formatPoints`, `loadLevel`.
+`lib/scope.ts`: `SCOPE_OPTIONS`, `TASK_RANGES`, `INSIGHTS_RANGES`, `rangeStartISO`, `isWithinRange`.
 
-`api.tasks` returns `TaskOverviewData`.
+`api.tasks(teamId, groupId, scope)` returns `TaskOverviewData`; `api.taskTags` / `api.insights`
+cover the v3 additions.

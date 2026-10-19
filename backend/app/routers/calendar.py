@@ -25,6 +25,7 @@ from ..permissions import (
     require_read_access,
     require_todo_write,
 )
+from ..scope import resolve_scope
 
 router = APIRouter(prefix="/api/teams/{team_id}/groups/{group_id}", tags=["calendar"])
 
@@ -112,6 +113,9 @@ def _todo_payload(todo: dict[str, Any], reminders_sent: list[int] | None = None)
     return {
         "id": todo["id"],
         "groupId": todo.get("group_id", ""),
+        "groupName": todo.get("group_name") or "",
+        "teamId": todo.get("group_team_id") or "",
+        "teamName": todo.get("team_name") or "",
         "title": todo["title"],
         "description": todo.get("description", ""),
         "dueDate": todo["due_date"],
@@ -150,13 +154,17 @@ def _sent_offsets(conn, group_id: str, todo_id: str) -> list[int]:
     return sorted({int(item["offset_days"]) for item in items}, reverse=True)
 
 
-def _sent_offsets_for_group(conn, group_id: str) -> dict[str, list[int]]:
+def _sent_offsets_for_groups(conn, group_ids: list[str]) -> dict[str, list[int]]:
+    """Reminder offsets sent per todo for every group in the read scope."""
+    if not group_ids:
+        return {}
+    placeholders = ",".join("?" for _ in group_ids)
     result: dict[str, list[int]] = {}
     for item in rows(
         conn,
-        "SELECT todo_id, offset_days FROM email_reminders_sent WHERE group_id=? "
-        "GROUP BY todo_id, offset_days",
-        (group_id,),
+        "SELECT todo_id, offset_days FROM email_reminders_sent "
+        f"WHERE group_id IN ({placeholders}) GROUP BY todo_id, offset_days",
+        tuple(group_ids),
     ):
         result.setdefault(item["todo_id"], []).append(int(item["offset_days"]))
     for offsets in result.values():
@@ -168,8 +176,10 @@ def _todo_row(conn, todo_id: str, group_id: str) -> dict[str, Any]:
     found = row(
         conn,
         "SELECT t.*, m.name AS assignee_name, m.email AS assignee_email, "
-        "m.avatar_color AS assignee_color FROM todos t "
+        "m.avatar_color AS assignee_color, g.name AS group_name, "
+        "g.team_id AS group_team_id, tm.name AS team_name FROM todos t "
         "LEFT JOIN members m ON m.id=t.assignee_member_id "
+        "JOIN groups g ON g.id=t.group_id JOIN teams tm ON tm.id=g.team_id "
         "WHERE t.id=? AND t.group_id=?",
         (todo_id, group_id),
     )
@@ -209,27 +219,34 @@ def list_todos(
     team_id: str,
     group_id: str,
     month: str | None = Query(default=None),
+    scope: str = Query(default="group"),
     user: CurrentUser = Depends(require_read_access),
 ):
     selected = parse_month(month)
     with db() as conn:
         get_group(conn, team_id, group_id)
+        ctx = resolve_scope(conn, team_id, group_id, scope)
+        group_ids = ctx["groupIds"]
+        placeholders = ",".join("?" for _ in group_ids) if group_ids else "NULL"
         todo_rows = rows(
             conn,
             "SELECT t.*, m.name AS assignee_name, m.email AS assignee_email, "
-            "m.avatar_color AS assignee_color FROM todos t "
+            "m.avatar_color AS assignee_color, g.name AS group_name, "
+            "g.team_id AS group_team_id, tm.name AS team_name FROM todos t "
             "LEFT JOIN members m ON m.id=t.assignee_member_id "
-            "WHERE t.group_id=? AND t.due_date LIKE ? "
-            "ORDER BY t.due_date, t.due_time, t.created_at",
-            (group_id, f"{selected}-%"),
+            "JOIN groups g ON g.id=t.group_id JOIN teams tm ON tm.id=g.team_id "
+            f"WHERE t.group_id IN ({placeholders}) AND t.due_date LIKE ? "
+            "ORDER BY g.sort_order, g.name, t.due_date, t.due_time, t.created_at",
+            (*group_ids, f"{selected}-%"),
         )
-        sent_map = _sent_offsets_for_group(conn, group_id)
+        sent_map = _sent_offsets_for_groups(conn, group_ids)
     return ok(
         {
             "month": selected,
             "todos": [
                 _todo_payload(todo, sent_map.get(todo["id"], [])) for todo in todo_rows
             ],
+            "scope": ctx,
         }
     )
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import {
   AtSign,
@@ -24,6 +24,7 @@ import { useToast } from "./Toast";
 import { Avatar } from "./Avatar";
 import { ConfirmDialog, Modal } from "./Modal";
 import { EmptyState } from "./Feedback";
+import { Select } from "./Select";
 import {
   canEditMember,
   canManageGroup,
@@ -42,6 +43,9 @@ const WORK_STATUS_META: Record<WorkStatus, { label: string; badge: string }> = {
 };
 
 const WORK_STATUS_OPTIONS: WorkStatus[] = ["current", "planned", "done"];
+
+/** Exit animation budget (#5): keep the drawer mounted for a short slide/fade. */
+const CLOSE_ANIMATION_MS = 190;
 
 function splitList(value: string): string[] {
   return Array.from(
@@ -68,8 +72,16 @@ export interface MemberDrawerProps {
   onChanged: () => Promise<void> | void;
 }
 
-export function MemberDrawer({ open, member, teamId, groupId, workload = null, onClose, onChanged }: MemberDrawerProps) {
-  const { data } = useApp();
+export function MemberDrawer({
+  open,
+  member: memberProp,
+  teamId,
+  groupId,
+  workload: workloadProp = null,
+  onClose,
+  onChanged,
+}: MemberDrawerProps) {
+  const { data, scope } = useApp();
   const { toast } = useToast();
   const user = data?.me ?? null;
 
@@ -81,6 +93,12 @@ export function MemberDrawer({ open, member, teamId, groupId, workload = null, o
   const [workToDelete, setWorkToDelete] = useState<WorkItem | null>(null);
   const [deleteMemberOpen, setDeleteMemberOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // #5 close animation: stay mounted for one exit beat instead of returning null.
+  const [closing, setClosing] = useState(false);
+  const [visibleMember, setVisibleMember] = useState<Member | null>(open ? memberProp : null);
+  const [visibleWorkload, setVisibleWorkload] = useState<Workload | null>(workloadProp);
+  const closeTimer = useRef<number | null>(null);
+  const lastMemberRef = useRef<Member | null>(open ? memberProp : null);
 
   useEffect(() => {
     setProfileOpen(false);
@@ -88,10 +106,52 @@ export function MemberDrawer({ open, member, teamId, groupId, workload = null, o
     setWorkToDelete(null);
     setDeleteMemberOpen(false);
     setDeleting(false);
-  }, [member?.id]);
+  }, [memberProp?.id]);
 
   useEffect(() => {
-    if (!open) return;
+    if (open && memberProp) lastMemberRef.current = memberProp;
+  }, [open, memberProp]);
+
+  useEffect(() => {
+    if (open) {
+      // Re-opening during the exit beat cancels the close.
+      if (closeTimer.current !== null) {
+        window.clearTimeout(closeTimer.current);
+        closeTimer.current = null;
+      }
+      setClosing(false);
+      setVisibleMember(memberProp ?? lastMemberRef.current);
+      return;
+    }
+    const snapshot = lastMemberRef.current;
+    if (!snapshot) return;
+    setVisibleMember((current) => current ?? snapshot);
+    setClosing(true);
+    if (closeTimer.current === null) {
+      closeTimer.current = window.setTimeout(() => {
+        closeTimer.current = null;
+        setClosing(false);
+        setVisibleMember(null);
+        setVisibleWorkload(null);
+      }, CLOSE_ANIMATION_MS);
+    }
+  }, [open, memberProp]);
+
+  useEffect(() => {
+    if (open) setVisibleWorkload(workloadProp);
+  }, [open, workloadProp]);
+
+  useEffect(
+    () => () => {
+      if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
+    },
+    [],
+  );
+
+  const mounted = open || closing;
+
+  useEffect(() => {
+    if (!mounted) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
     };
@@ -102,7 +162,7 @@ export function MemberDrawer({ open, member, teamId, groupId, workload = null, o
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = previous;
     };
-  }, [open, onClose]);
+  }, [mounted, onClose]);
 
   const handleDeleteWork = useCallback(async () => {
     if (!workToDelete) return;
@@ -120,11 +180,11 @@ export function MemberDrawer({ open, member, teamId, groupId, workload = null, o
   }, [workToDelete, teamId, groupId, toast, onChanged]);
 
   const handleDeleteMember = useCallback(async () => {
-    if (!member) return;
+    if (!memberProp) return;
     setDeleting(true);
     try {
-      await api.deleteMember(teamId, groupId, member.id);
-      toast(`成员「${member.name}」已删除`, "success");
+      await api.deleteMember(teamId, groupId, memberProp.id);
+      toast(`成员「${memberProp.name}」已删除`, "success");
       setDeleteMemberOpen(false);
       onClose();
       await onChanged();
@@ -133,10 +193,14 @@ export function MemberDrawer({ open, member, teamId, groupId, workload = null, o
     } finally {
       setDeleting(false);
     }
-  }, [member, teamId, groupId, toast, onClose, onChanged]);
+  }, [memberProp, teamId, groupId, toast, onClose, onChanged]);
 
-  if (!open || !member) return null;
+  // Keep the last member/workload snapshot rendered while the drawer slides out.
+  const shownMember = (open ? memberProp : null) ?? visibleMember;
+  if (!shownMember) return null;
 
+  const member = shownMember;
+  const workload = (open ? workloadProp : null) ?? visibleWorkload;
   const isAdmin = canManageGroup(user, teamId, groupId);
   const canEdit = canEditMember(user, teamId, groupId, member.id);
   const isSelf = Boolean(user?.linkedMemberId && user.linkedMemberId === member.id);
@@ -161,7 +225,7 @@ export function MemberDrawer({ open, member, teamId, groupId, workload = null, o
   };
 
   return createPortal(
-    <div className="md-layer" role="presentation">
+    <div className={cn("md-layer", closing && "is-closing")} role="presentation" aria-hidden={closing || undefined}>
       <button className="md-scrim" type="button" onClick={onClose} aria-label="关闭成员档案" />
       <aside
         className="md-drawer"
@@ -193,6 +257,12 @@ export function MemberDrawer({ open, member, teamId, groupId, workload = null, o
                 {member.role ? ` · ${member.role}` : ""}
               </p>
               <div className="md-hero-badges">
+                {scope !== "group" && member.groupName ? (
+                  <span className="badge badge-blue">{member.groupName}</span>
+                ) : null}
+                {scope === "all" && member.teamName ? (
+                  <span className="badge">{member.teamName}</span>
+                ) : null}
                 {isSelf ? <span className="badge">这是我</span> : null}
                 {isAdmin ? <span className="badge">{isSelf ? "管理员" : "管理员视角"}</span> : null}
                 {!canEdit ? <span className="badge">只读</span> : null}
@@ -502,7 +572,7 @@ export function MemberDrawer({ open, member, teamId, groupId, workload = null, o
       </aside>
 
       <ProfileEditDialog
-        open={profileOpen && Boolean(member)}
+        open={open && profileOpen && Boolean(member)}
         member={member}
         teamId={teamId}
         groupId={groupId}
@@ -511,7 +581,7 @@ export function MemberDrawer({ open, member, teamId, groupId, workload = null, o
       />
 
       <WorkEditDialog
-        open={workDialog.open}
+        open={open && workDialog.open}
         work={workDialog.work}
         memberId={member.id}
         teamId={teamId}
@@ -521,7 +591,7 @@ export function MemberDrawer({ open, member, teamId, groupId, workload = null, o
       />
 
       <ConfirmDialog
-        open={Boolean(workToDelete)}
+        open={open && Boolean(workToDelete)}
         title="删除工作项"
         message={`确定删除「${workToDelete?.title ?? ""}」吗？删除后无法恢复。`}
         confirmLabel="删除工作项"
@@ -531,7 +601,7 @@ export function MemberDrawer({ open, member, teamId, groupId, workload = null, o
       />
 
       <ConfirmDialog
-        open={deleteMemberOpen}
+        open={open && deleteMemberOpen}
         title="删除成员"
         message={`确定删除成员「${member.name}」吗？该成员的档案与工作项会被移除，相关待办将变为未指派。`}
         confirmLabel="删除成员"
@@ -863,18 +933,16 @@ function WorkEditDialog({ open, work, memberId, teamId, groupId, onClose, onSave
         </div>
         <div className="field">
           <label htmlFor="md-work-status">状态</label>
-          <select
+          <Select
             id="md-work-status"
-            className="select"
             value={status}
-            onChange={(event) => setStatus(event.target.value as WorkStatus)}
-          >
-            {WORK_STATUS_OPTIONS.map((value) => (
-              <option key={value} value={value}>
-                {WORK_STATUS_META[value].label}
-              </option>
-            ))}
-          </select>
+            onChange={(value) => setStatus((value || "current") as WorkStatus)}
+            options={WORK_STATUS_OPTIONS.map((value) => ({
+              value,
+              label: WORK_STATUS_META[value].label,
+            }))}
+            ariaLabel="工作状态"
+          />
         </div>
         <div className="field">
           <label htmlFor="md-work-period">周期</label>

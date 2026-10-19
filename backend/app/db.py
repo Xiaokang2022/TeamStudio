@@ -213,6 +213,18 @@ CREATE TABLE IF NOT EXISTS announcements (
 );
 CREATE INDEX IF NOT EXISTS idx_announcements_group ON announcements(group_id, pinned DESC, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS task_tags (
+    id TEXT PRIMARY KEY,
+    group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    color TEXT NOT NULL DEFAULT '#5865f2',
+    created_by TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(group_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_task_tags_group ON task_tags(group_id, name);
+
 CREATE TABLE IF NOT EXISTS email_reminders_sent (
     id TEXT PRIMARY KEY,
     group_id TEXT NOT NULL,
@@ -235,6 +247,26 @@ CREATE TABLE IF NOT EXISTS email_logs (
     detail TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS mailbox_messages (
+    id TEXT PRIMARY KEY,
+    direction TEXT NOT NULL DEFAULT 'outbound',
+    from_addr TEXT NOT NULL DEFAULT '',
+    to_addrs TEXT NOT NULL DEFAULT '',
+    cc_addrs TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL DEFAULT '',
+    body_text TEXT NOT NULL DEFAULT '',
+    body_html TEXT NOT NULL DEFAULT '',
+    raw TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL DEFAULT 'test',
+    group_id TEXT NOT NULL DEFAULT '',
+    todo_id TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'stored',
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    read_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mailbox_created ON mailbox_messages(created_at DESC);
 
 CREATE TABLE IF NOT EXISTS audit_logs (
     id TEXT PRIMARY KEY,
@@ -326,10 +358,27 @@ def _migrate_member_tasks(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_task_tags(conn: sqlite3.Connection) -> None:
+    """Additive migration for the shared task tag library.
+
+    ``member_tasks.tags`` stores a JSON array of ``task_tags.id`` values. Existing
+    deployments gain the column with an empty list; the shared library table is created
+    by ``SCHEMA`` above.
+    """
+    columns = {
+        str(info[1]) for info in conn.execute("PRAGMA table_info(member_tasks)").fetchall()
+    }
+    if columns and "tags" not in columns:
+        conn.execute(
+            "ALTER TABLE member_tasks ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'"
+        )
+
+
 def init_db() -> None:
     with db() as conn:
         conn.executescript(SCHEMA)
         _migrate_member_tasks(conn)
+        _migrate_task_tags(conn)
 
 
 def rows(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:

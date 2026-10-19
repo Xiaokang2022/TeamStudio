@@ -5,15 +5,21 @@ import type {
   BootstrapData,
   EmailLog,
   EmailStatus,
+  InsightsData,
+  InsightsRangeKey,
   LinkItem,
+  MailMessage,
+  MailboxData,
   MatrixArea,
   Member,
   MemberTask,
   OverviewData,
   RedBlackBoard,
   RedBlackData,
+  ScopeKind,
   SettingsMeta,
   SettingsResponse,
+  TagLibraryData,
   TaskOverviewData,
   Todo,
   ValidationDetail,
@@ -107,11 +113,36 @@ export const api = {
     }),
   loginHref: (next = "/") => `/api/auth/login?next=${encodeURIComponent(next)}`,
 
-  overview: (teamId: string, groupId: string) =>
-    request<OverviewData>(`${groupBase(teamId, groupId)}/overview`),
+  overview: (teamId: string, groupId: string, scope: ScopeKind = "group") =>
+    request<OverviewData>(`${groupBase(teamId, groupId)}/overview${q({ scope })}`),
 
-  tasks: (teamId: string, groupId: string) =>
-    request<TaskOverviewData>(`${groupBase(teamId, groupId)}/tasks`),
+  tasks: (teamId: string, groupId: string, scope: ScopeKind = "group") =>
+    request<TaskOverviewData>(`${groupBase(teamId, groupId)}/tasks${q({ scope })}`),
+  taskTags: (teamId: string, groupId: string, scope: ScopeKind = "group") =>
+    request<TagLibraryData>(`${groupBase(teamId, groupId)}/task-tags${q({ scope })}`),
+  createTaskTag: (
+    teamId: string,
+    groupId: string,
+    body: { name: string; color?: string },
+  ) =>
+    request<{ tag: import("./types").TaskTag }>(`${groupBase(teamId, groupId)}/task-tags`, {
+      method: "POST",
+      body,
+    }),
+  updateTaskTag: (
+    teamId: string,
+    groupId: string,
+    tagId: string,
+    body: { name?: string; color?: string },
+  ) =>
+    request<{ tag: import("./types").TaskTag }>(
+      `${groupBase(teamId, groupId)}/task-tags/${tagId}`,
+      { method: "PATCH", body },
+    ),
+  deleteTaskTag: (teamId: string, groupId: string, tagId: string) =>
+    request<{ deleted: boolean }>(`${groupBase(teamId, groupId)}/task-tags/${tagId}`, {
+      method: "DELETE",
+    }),
   createTask: (teamId: string, groupId: string, body: Partial<MemberTask>) =>
     request<{ task: MemberTask }>(`${groupBase(teamId, groupId)}/tasks`, {
       method: "POST",
@@ -163,8 +194,10 @@ export const api = {
       { method: "DELETE" },
     ),
 
-  todos: (teamId: string, groupId: string, month?: string) =>
-    request<{ todos: Todo[] }>(`${groupBase(teamId, groupId)}/todos${q({ month })}`),
+  todos: (teamId: string, groupId: string, month?: string, scope: ScopeKind = "group") =>
+    request<{ todos: Todo[]; scope?: import("./types").ScopeMeta }>(
+      `${groupBase(teamId, groupId)}/todos${q({ month, scope })}`,
+    ),
   createTodo: (teamId: string, groupId: string, body: Partial<Todo>) =>
     request<{ todo: Todo }>(`${groupBase(teamId, groupId)}/todos`, {
       method: "POST",
@@ -197,8 +230,10 @@ export const api = {
       { method: "POST", body: { month } },
     ),
 
-  links: (teamId: string, groupId: string) =>
-    request<{ links: LinkItem[] }>(`${groupBase(teamId, groupId)}/links`),
+  links: (teamId: string, groupId: string, scope: ScopeKind = "group") =>
+    request<{ links: LinkItem[]; scope?: import("./types").ScopeMeta }>(
+      `${groupBase(teamId, groupId)}/links${q({ scope })}`,
+    ),
   createLink: (teamId: string, groupId: string, body: Partial<LinkItem>) =>
     request<{ link: LinkItem }>(`${groupBase(teamId, groupId)}/links`, {
       method: "POST",
@@ -214,8 +249,10 @@ export const api = {
       method: "DELETE",
     }),
 
-  matrix: (teamId: string, groupId: string) =>
-    request<{ areas: MatrixArea[] }>(`${groupBase(teamId, groupId)}/matrix`),
+  matrix: (teamId: string, groupId: string, scope: ScopeKind = "group") =>
+    request<{ areas: MatrixArea[]; scope?: import("./types").ScopeMeta }>(
+      `${groupBase(teamId, groupId)}/matrix${q({ scope })}`,
+    ),
   createMatrix: (teamId: string, groupId: string, body: Partial<MatrixArea>) =>
     request<{ area: MatrixArea }>(`${groupBase(teamId, groupId)}/matrix`, {
       method: "POST",
@@ -231,8 +268,8 @@ export const api = {
       method: "DELETE",
     }),
 
-  announcements: (teamId: string, groupId: string) =>
-    request<AnnouncementsData>(`${groupBase(teamId, groupId)}/announcements`),
+  announcements: (teamId: string, groupId: string, scope: ScopeKind = "group") =>
+    request<AnnouncementsData>(`${groupBase(teamId, groupId)}/announcements${q({ scope })}`),
   createAnnouncement: (teamId: string, groupId: string, body: Partial<Announcement>) =>
     request<{ announcement: Announcement }>(
       `${groupBase(teamId, groupId)}/announcements`,
@@ -281,4 +318,34 @@ export const api = {
   emailScan: () => request<Record<string, unknown>>("/api/email/scan", { method: "POST" }),
   emailPreview: () =>
     request<{ subject: string; body: string }>("/api/email/preview"),
+
+  insights: (params: {
+    teamId: string;
+    groupId: string;
+    scope?: ScopeKind;
+    range?: InsightsRangeKey;
+  }) =>
+    request<InsightsData>(
+      `${groupBase(params.teamId, params.groupId)}/insights${q({
+        scope: params.scope ?? "group",
+        range: params.range ?? "1m",
+      })}`,
+    ),
+
+  emailMailbox: (limit = 50) =>
+    request<MailboxData>(`/api/email/mailbox${q({ limit })}`),
+  emailMailboxMessage: (messageId: string) =>
+    request<{ message: MailMessage }>(
+      `/api/email/mailbox/${encodeURIComponent(messageId)}`,
+    ),
+  deleteMailboxMessage: (messageId: string) =>
+    request<{ deleted: boolean }>(
+      `/api/email/mailbox/${encodeURIComponent(messageId)}`,
+      { method: "DELETE" },
+    ),
+  restartBuiltinMail: () =>
+    request<{ running: boolean; host: string; port: number }>(
+      "/api/email/builtin/restart",
+      { method: "POST" },
+    ),
 };

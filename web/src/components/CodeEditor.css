@@ -1,0 +1,45 @@
+/* ============================================================
+   CodeEditor — monaco-editor（VS Code 内核）容器
+   ============================================================ */
+
+.code-editor {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--code-border);
+  border-radius: 12px;
+  /* 用应用主题表面色兜底（仅在 monaco 首帧渲染前可见），
+     编辑器自身的亮/暗背景完全交给 vs / vs-dark 主题。 */
+  background: var(--surface);
+  transition: border-color 0.16s, box-shadow 0.16s;
+}
+
+.code-editor:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--code-border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.code-editor-host {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* monaco 自带背景/边框收敛到容器上，避免圆角处出现直角。
+   注意：不要覆盖 .monaco-editor .margin 背景，否则亮色主题的行号栏会变成深色条。 */
+.code-editor .monaco-editor,
+.code-editor .monaco-editor .overflow-guard {
+  border-radius: 11px;
+}
+
+/* 暗色下滚动条与选中色跟随应用色板，避免默认亮白刺眼。 */
+.code-editor .monaco-editor .scrollbar .slider {
+  border-radius: 99px;
+}
+
+.code-editor .monaco-editor .inputarea.ime-input {
+  border-radius: 0;
+}

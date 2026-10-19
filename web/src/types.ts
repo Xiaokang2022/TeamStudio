@@ -50,6 +50,7 @@ export interface ModuleFlags {
   announcements: boolean;
   settings: boolean;
   email: boolean;
+  insights: boolean;
 }
 
 export interface PublicConfig {
@@ -77,7 +78,7 @@ export interface PublicConfig {
     auditLog: boolean;
     allowGuestTodoCreate: boolean;
   };
-  email: { enabled: boolean; remindersEnabled: boolean };
+  email: { enabled: boolean; remindersEnabled: boolean; deliveryMode?: "builtin" | "smtp"; builtinEnabled?: boolean };
   auth: {
     guestMode: boolean;
     sso: { enabled: boolean; configured: boolean; providerName: string };
@@ -152,6 +153,10 @@ export interface Member {
   currentWorks: WorkItem[];
   historyWorks: WorkItem[];
   stats: { current: number; done: number; todos: number };
+  groupId?: string;
+  groupName?: string;
+  teamId?: string;
+  teamName?: string;
 }
 
 export interface GroupDetail {
@@ -179,6 +184,7 @@ export interface ActivityItem {
 
 export interface OverviewData {
   group: GroupDetail;
+  scope?: ScopeMeta;
   members: Member[];
   works: WorkItem[];
   recentActivity: ActivityItem[];
@@ -203,6 +209,9 @@ export type WorkloadLevel = "low" | "balanced" | "high" | "overload";
 export interface MemberTask {
   id: string;
   groupId: string;
+  groupName?: string;
+  teamId?: string;
+  teamName?: string;
   memberId: string;
   memberName: string;
   memberTitle: string;
@@ -215,6 +224,8 @@ export interface MemberTask {
   difficulty: TaskDifficulty;
   loadPoints: number;
   expectedDate: string;
+  tagIds?: string[];
+  tags?: TaskTag[];
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -258,6 +269,7 @@ export interface TaskOverviewData {
   tasks: MemberTask[];
   workloads: Workload[];
   summary: WorkloadSummary;
+  scope?: ScopeMeta;
   meta: {
     capacityPoints: number;
     windowWeeks: number;
@@ -271,6 +283,9 @@ export type TodoPriority = "low" | "normal" | "high" | "urgent";
 export interface Todo {
   id: string;
   groupId: string;
+  groupName?: string;
+  teamId?: string;
+  teamName?: string;
   title: string;
   description: string;
   dueDate: string;
@@ -381,6 +396,15 @@ export interface AppSettings {
   redblack: PublicConfig["redblack"];
   email: {
     enabled: boolean;
+    deliveryMode: "builtin" | "smtp";
+    builtin: {
+      enabled: boolean;
+      host: string;
+      port: number;
+      hostname: string;
+      mailboxLimit: number;
+      retentionDays: number;
+    };
     smtp: {
       host: string;
       port: number;
@@ -469,6 +493,15 @@ export interface WorkspaceOption {
 export interface EmailStatus {
   enabled: boolean;
   remindersEnabled: boolean;
+  deliveryMode: "builtin" | "smtp";
+  builtin: {
+    enabled: boolean;
+    running: boolean;
+    host: string;
+    port: number;
+    stored: number;
+    limit: number;
+  };
   smtpConfigured: boolean;
   fromEmail: string;
   lastScanAt: string | null;
@@ -516,4 +549,179 @@ export interface ActivityEntry {
   entityId: string;
   detail?: string;
   createdAt: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Multi-scope browsing, task tags, insights and bundled mail          */
+/* ------------------------------------------------------------------ */
+
+export type ScopeKind = "group" | "team" | "all";
+
+export interface ScopeGroupRef {
+  id: string;
+  teamId: string;
+  teamName: string;
+  teamShortName?: string;
+  name: string;
+  color: string;
+  icon?: string;
+}
+
+export interface ScopeMeta {
+  kind: ScopeKind;
+  label: string;
+  teamIds: string[];
+  groupIds: string[];
+  groups: ScopeGroupRef[];
+  team: { id: string; name: string; shortName: string; color: string } | null;
+  group: { id: string; teamId: string; name: string; color: string } | null;
+}
+
+export interface TaskTag {
+  id: string;
+  groupId: string;
+  groupName?: string;
+  name: string;
+  color: string;
+  usage?: number;
+  createdBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface TagLibraryData {
+  tags: TaskTag[];
+  scope?: ScopeMeta;
+}
+
+export type InsightsRangeKey = "1w" | "2w" | "1m" | "2m" | "3m" | "all";
+
+export interface InsightsRange {
+  key: InsightsRangeKey;
+  label: string;
+  days: number | null;
+  start: string | null;
+}
+
+export interface InsightsSummary {
+  teams: number;
+  groups: number;
+  members: number;
+  tasks: number;
+  openTasks: number;
+  completedTasks: number;
+  overdueTasks: number;
+  blockedTasks: number;
+  completionRate: number;
+  todos: number;
+  completedTodos: number;
+  todoCompletionRate: number;
+  loadPoints: number;
+  capacityPoints: number;
+  averageLoadPercent: number;
+}
+
+export interface InsightsMemberRow {
+  memberId: string;
+  memberName: string;
+  memberTitle: string;
+  avatarColor: string;
+  teamId: string;
+  teamName: string;
+  groupId: string;
+  groupName: string;
+  tasks: number;
+  openTasks: number;
+  completedTasks: number;
+  overdueTasks: number;
+  blockedTasks: number;
+  completionRate: number;
+  loadPoints: number;
+  todos: number;
+  completedTodos: number;
+}
+
+export interface InsightsGroupRow {
+  groupId: string;
+  groupName: string;
+  teamId: string;
+  teamName: string;
+  color: string;
+  members: number;
+  tasks: number;
+  openTasks: number;
+  completedTasks: number;
+  overdueTasks: number;
+  blockedTasks: number;
+  completionRate: number;
+  loadPoints: number;
+  averageLoadPercent: number;
+  todos: number;
+  completedTodos: number;
+}
+
+export interface InsightsTeamRow {
+  teamId: string;
+  teamName: string;
+  color: string;
+  groups: number;
+  members: number;
+  tasks: number;
+  openTasks: number;
+  completedTasks: number;
+  overdueTasks: number;
+  completionRate: number;
+  loadPoints: number;
+}
+
+export interface InsightsTrendPoint {
+  label: string;
+  start: string;
+  created: number;
+  completed: number;
+  todos: number;
+}
+
+export interface InsightsData {
+  scope: ScopeMeta;
+  range: InsightsRange;
+  summary: InsightsSummary;
+  members: InsightsMemberRow[];
+  groups: InsightsGroupRow[];
+  teams: InsightsTeamRow[];
+  trend: {
+    granularity: "day" | "week";
+    buckets: InsightsTrendPoint[];
+  };
+}
+
+export interface MailMessage {
+  id: string;
+  direction: string;
+  fromAddr: string;
+  toAddrs: string[];
+  ccAddrs: string[];
+  subject: string;
+  bodyText: string;
+  bodyHtml: string;
+  kind: string;
+  groupId: string;
+  todoId: string;
+  status: string;
+  error: string;
+  createdAt: string;
+  readAt: string | null;
+  raw?: string;
+}
+
+export interface MailboxData {
+  messages: MailMessage[];
+  total: number;
+  builtin: {
+    enabled: boolean;
+    running: boolean;
+    host: string;
+    port: number;
+    limit: number;
+  };
 }

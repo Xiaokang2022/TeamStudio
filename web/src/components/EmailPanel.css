@@ -475,3 +475,218 @@
     align-items: flex-start;
   }
 }
+
+/* ============================================================
+   Bundled mail server: delivery mode, local mail center
+   ============================================================ */
+
+.email-mode-segmented {
+  flex-wrap: wrap;
+}
+
+.email-mode-segmented button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.email-mode-segmented button svg {
+  flex: none;
+}
+
+/* ---------- builtin server status ---------- */
+
+.email-builtin-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 13px;
+  border: 1px solid var(--border);
+  background: var(--surface-raised), var(--surface-2);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+}
+
+.email-builtin-status.is-on {
+  border-color: color-mix(in srgb, var(--green) 26%, var(--border));
+  background: linear-gradient(180deg, var(--green-soft), var(--surface));
+}
+
+.email-builtin-status-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.email-builtin-status-copy strong {
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.email-builtin-status-copy small {
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: var(--text-3);
+  word-break: break-word;
+}
+
+.email-run-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-3);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text-3) 14%, transparent);
+}
+
+.email-run-dot.is-on {
+  background: var(--green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 18%, transparent);
+  animation: email-run-pulse 2.2s ease-in-out infinite;
+}
+
+@keyframes email-run-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.email-builtin-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.email-builtin-note svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.email-banner.is-info {
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+}
+
+.email-banner.is-info svg {
+  color: var(--accent);
+}
+
+/* ---------- local mail center ---------- */
+
+.email-mailbox-table .data-table tbody tr {
+  cursor: pointer;
+  transition: background 0.15s var(--ease);
+}
+
+.email-mailbox-table .data-table tbody tr:hover {
+  background: var(--surface-2);
+}
+
+.email-mailbox-row.is-unread .email-log-subject {
+  font-weight: 650;
+  color: var(--text);
+}
+
+.email-mailbox-recipient {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 10.5px !important;
+}
+
+.email-mailbox-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.email-mailbox-actions .icon-button.is-danger {
+  color: var(--red);
+}
+
+.email-mailbox-actions .icon-button.is-danger:hover {
+  background: var(--red-soft);
+}
+
+/* ---------- message detail ---------- */
+
+.email-message {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.email-message-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
+  padding: 13px 15px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--surface-sunken), var(--surface-2);
+}
+
+.email-message-meta > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.email-message-meta small {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.email-message-meta span,
+.email-message-meta strong {
+  font-size: 11.5px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.email-message-subject {
+  grid-column: 1 / -1;
+}
+
+.email-message-subject strong {
+  font-size: 13.5px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .email-run-dot.is-on {
+    animation: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .email-builtin-status {
+    flex-wrap: wrap;
+  }
+
+  .email-builtin-status .btn {
+    width: 100%;
+  }
+
+  .email-message-meta {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .email-mailbox-recipient {
+    max-width: 140px;
+  }
+}

@@ -219,6 +219,13 @@
   color: var(--text-3);
 }
 
+/* Aggregate scope: owning development group badge. */
+.ann-group-badge {
+  padding: 0 6px;
+  font-size: 9px;
+  font-weight: 600;
+}
+
 .ann-actions {
   display: flex;
   align-items: center;

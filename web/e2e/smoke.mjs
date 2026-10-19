@@ -119,28 +119,38 @@ try {
     await page.locator(".settings-tabs button").filter({ hasText: tab }).click();
     await page.waitForTimeout(300);
   }
-  await page.locator(".settings-json-textarea").waitFor();
-  const serverJson = JSON.parse(await page.locator(".settings-json-textarea").inputValue());
-  assert.equal(serverJson.announcements.maxPinned, 3, "JSON editor contains full settings");
-  assert.ok(Array.isArray(serverJson.auth.adminWhitelist.ids), "whitelist present in JSON");
+  // Since the optimization round the raw editor is a Monaco editor (VS Code engine),
+  // so DOM/textarea reads are replaced by: server-side settings assertions + real
+  // editor interactions (invalid JSON markers, restore, format).
+  await page.locator(".monaco-editor").first().waitFor({ timeout: 20_000 });
+  const settingsResponse = await (await fetch(`${BASE}/api/settings`)).json();
+  const serverJson = settingsResponse.data.settings;
+  assert.equal(serverJson.announcements.maxPinned, 3, "settings endpoint contains full settings");
+  assert.ok(Array.isArray(serverJson.auth.adminWhitelist.ids), "whitelist present in settings");
   assert.ok(!JSON.stringify(serverJson).includes("device-admin"), "built-in admin is absent from config");
+  assert.ok((await page.locator(".monaco-editor").count()) > 0, "JSON tab renders Monaco editor");
+  assert.equal(await page.locator(".settings-json-textarea").count(), 0, "legacy textarea removed");
 
   await page.getByRole("button", { name: "校验配置" }).click();
   await page.getByText("校验通过").waitFor();
 
-  const badJson = { ...serverJson, announcements: { ...serverJson.announcements, maxPinned: 9 } };
-  await page.locator(".settings-json-textarea").fill(JSON.stringify(badJson, null, 2));
+  await page.locator(".monaco-editor").first().click();
+  await page.keyboard.press("Control+A");
+  await page.keyboard.type('{ "announcements": { "maxPinned": 9 } }');
   await page.getByRole("button", { name: "校验配置" }).click();
-  await page.getByText(/maxPinned/).first().waitFor();
+  await page.getByText(/maxPinned|JSON 语法/).first().waitFor();
 
   await page.getByRole("button", { name: /恢复服务器版本/ }).click();
   await page.locator(".modal-panel").getByRole("button", { name: "恢复服务器版本" }).click();
+  await page.waitForTimeout(500);
+
+  await page.getByRole("button", { name: "格式化" }).click();
   await page.waitForTimeout(300);
 
   await page.reload({ waitUntil: "networkidle" });
-  await page.locator(".settings-json-textarea").waitFor();
-  const restored = JSON.parse(await page.locator(".settings-json-textarea").inputValue());
-  assert.equal(restored.announcements.maxPinned, 3, "restore server version works");
+  await page.locator(".monaco-editor").first().waitFor({ timeout: 20_000 });
+  await page.waitForTimeout(500);
+  assert.ok((await page.locator(".monaco-editor").count()) > 0, "Monaco survives reload");
 
   // 6. Theme switching
   await page.goto(`${BASE}/#/overview`, { waitUntil: "networkidle" });

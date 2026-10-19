@@ -30,6 +30,16 @@ except ImportError as exc:  # pragma: no cover - only during initial scaffolding
 else:
     _FEATURE_IMPORT_ERROR = None
 
+try:  # Insights dashboard router (optional while it is being implemented).
+    from .routers import insights
+except ImportError:  # pragma: no cover - defensive during parallel development
+    insights = None  # type: ignore[assignment]
+
+try:  # Bundled SMTP server (optional while it is being implemented).
+    from .services import mail_server
+except ImportError:  # pragma: no cover - defensive during parallel development
+    mail_server = None  # type: ignore[assignment]
+
 logger = logging.getLogger("teamstudio")
 
 
@@ -42,7 +52,17 @@ async def lifespan(app: FastAPI):
         "TeamStudio started (seeded=%s, memberTasksSeeded=%s)", seeded, seeded_tasks
     )
     scheduler.start_scheduler()
+    if mail_server is not None:
+        try:
+            await mail_server.start_mail_server()
+        except Exception:  # pragma: no cover - port conflicts must not break the API
+            logger.exception("内置邮件服务器启动失败，邮件中心暂不可用")
     yield
+    if mail_server is not None:
+        try:
+            await mail_server.stop_mail_server()
+        except Exception:  # pragma: no cover - best effort shutdown
+            logger.exception("内置邮件服务器停止失败")
     await scheduler.stop_scheduler()
 
 
@@ -129,6 +149,9 @@ if workspace and calendar and boards and tasks:
     app.include_router(tasks.router)
 elif _FEATURE_IMPORT_ERROR:
     logger.warning("Feature routers unavailable: %s", _FEATURE_IMPORT_ERROR)
+
+if insights is not None:
+    app.include_router(insights.router)
 
 if (FRONTEND_DIST / "assets").exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")

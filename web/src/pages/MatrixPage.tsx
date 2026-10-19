@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUpRight,
   HandHelping,
@@ -18,6 +18,7 @@ import { useApp } from "../store";
 import { useToast } from "../components/Toast";
 import { Avatar } from "../components/Avatar";
 import { Modal, ConfirmDialog } from "../components/Modal";
+import { Select } from "../components/Select";
 import { MatrixNetwork } from "../components/MatrixNetwork";
 import { EmptyState, LoadingBlock } from "../components/Feedback";
 import { cn } from "../lib/utils";
@@ -37,6 +38,15 @@ const emptyDraft = (): MatrixDraft => ({
   backupMemberId: "",
   sortOrder: "",
 });
+
+function GroupBadge({ name, color }: { name: string; color: string }) {
+  return (
+    <span className="badge badge-gray mx-group-badge" title={`所属开发组：${name}`}>
+      <i className="dot" style={{ background: color }} />
+      {name}
+    </span>
+  );
+}
 
 function MemberCell({
   memberId,
@@ -99,11 +109,36 @@ function RoleBadge({ role }: { role: MemberRole | null }) {
 }
 
 export default function MatrixPage() {
-  const { currentTeam, currentGroup, canManageActiveGroup, navigate } = useApp();
+  const { data, currentTeam, currentGroup, canManageActiveGroup, navigate, scope } = useApp();
   const { toast } = useToast();
 
   const teamId = currentTeam?.id ?? "";
   const groupId = currentGroup?.id ?? "";
+  const aggregate = scope !== "group";
+
+  // Resolve an area's owning group (team/name/color) for badges and routing.
+  const groupIndex = useMemo(() => {
+    const map = new Map<string, { teamId: string; name: string; color: string }>();
+    data?.teams.forEach((team) =>
+      team.groups.forEach((group) =>
+        map.set(group.id, { teamId: team.id, name: group.name, color: group.color }),
+      ),
+    );
+    return map;
+  }, [data?.teams]);
+
+  const targetOf = useCallback(
+    (area: MatrixArea) => {
+      const meta = area.groupId ? groupIndex.get(area.groupId) : undefined;
+      return {
+        teamId: meta?.teamId || teamId,
+        groupId: area.groupId || groupId,
+        groupName: meta?.name || currentGroup?.name || "",
+        groupColor: meta?.color || "#8b8c88",
+      };
+    },
+    [groupIndex, teamId, groupId, currentGroup?.name],
+  );
 
   const [areas, setAreas] = useState<MatrixArea[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
@@ -134,7 +169,10 @@ export default function MatrixPage() {
     let cancelled = false;
     setLoading(true);
     setError("");
-    void Promise.all([api.matrix(teamId, groupId), api.overview(teamId, groupId).catch(() => null)])
+    void Promise.all([
+      api.matrix(teamId, groupId, scope),
+      api.overview(teamId, groupId, scope).catch(() => null),
+    ])
       .then(([matrixResult, overview]) => {
         if (cancelled) return;
         setAreas(matrixResult.areas);
@@ -152,7 +190,7 @@ export default function MatrixPage() {
     return () => {
       cancelled = true;
     };
-  }, [teamId, groupId, refreshTick, toast]);
+  }, [teamId, groupId, scope, refreshTick, toast]);
 
   const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
   const colorOf = (memberId: string | null) => (memberId ? memberById.get(memberId)?.avatarColor : undefined);
@@ -190,6 +228,53 @@ export default function MatrixPage() {
     if (!selectedMemberId) return;
     if (!filterMembers.some((member) => member.id === selectedMemberId)) setSelectedMemberId("");
   }, [filterMembers, selectedMemberId]);
+
+  const memberFilterOptions = useMemo(
+    () => [
+      { value: "", label: "全部成员" },
+      ...filterMembers.map((member) => ({ value: member.id, label: member.name })),
+    ],
+    [filterMembers],
+  );
+
+  // In aggregate scope the editor writes into one group: offer that group's
+  // members. Creating always writes into the current group.
+  const dialogGroupId = editing ? targetOf(editing).groupId : currentGroup?.id ?? "";
+  const dialogMembers = useMemo(() => {
+    if (!aggregate) return members;
+    const scoped = members.filter(
+      (member) => (member.groupId ?? currentGroup?.id ?? "") === dialogGroupId,
+    );
+    return scoped.length ? scoped : members;
+  }, [aggregate, members, dialogGroupId, currentGroup?.id]);
+
+  const ownerOptions = useMemo(
+    () => [
+      { value: "", label: "待认领" },
+      ...dialogMembers.map((member) => ({
+        value: member.id,
+        label: member.name,
+        description: member.title || undefined,
+        color: member.avatarColor,
+        disabled: member.id === draft.backupMemberId,
+      })),
+    ],
+    [dialogMembers, draft.backupMemberId],
+  );
+
+  const backupOptions = useMemo(
+    () => [
+      { value: "", label: "暂无备份" },
+      ...dialogMembers.map((member) => ({
+        value: member.id,
+        label: member.name,
+        description: member.title || undefined,
+        color: member.avatarColor,
+        disabled: member.id === draft.ownerMemberId,
+      })),
+    ],
+    [dialogMembers, draft.ownerMemberId],
+  );
 
   const visibleAreas = useMemo(
     () =>
@@ -253,13 +338,17 @@ export default function MatrixPage() {
         sortOrder: sortOrder === "" ? undefined : Number(sortOrder),
       };
       if (editing) {
-        const result = await api.updateMatrix(teamId, groupId, editing.id, body);
+        const target = targetOf(editing);
+        const result = await api.updateMatrix(target.teamId, target.groupId, editing.id, body);
         setAreas((prev) => prev.map((item) => (item.id === result.area.id ? result.area : item)));
         toast("责任田已更新", "success");
       } else {
         const result = await api.createMatrix(teamId, groupId, body);
         setAreas((prev) => [...prev, result.area]);
-        toast("责任田已创建", "success");
+        toast(
+          aggregate && currentGroup ? `责任田已创建到「${currentGroup.name}」` : "责任田已创建",
+          "success",
+        );
       }
       setEditorOpen(false);
     } catch (err) {
@@ -271,9 +360,10 @@ export default function MatrixPage() {
 
   const handleDelete = async () => {
     if (!teamId || !groupId || !deleteTarget) return;
+    const target = targetOf(deleteTarget);
     setDeleting(true);
     try {
-      await api.deleteMatrix(teamId, groupId, deleteTarget.id);
+      await api.deleteMatrix(target.teamId, target.groupId, deleteTarget.id);
       setAreas((prev) => prev.filter((item) => item.id !== deleteTarget.id));
       toast("责任田已删除", "success");
       setDeleteTarget(null);
@@ -420,19 +510,16 @@ export default function MatrixPage() {
               ) : null}
             </div>
             <div className="toolbar">
-              <select
-                className="select mx-member-filter"
+              <Select
+                className="mx-member-filter"
+                size="sm"
                 value={selectedMemberId}
-                onChange={(event) => setSelectedMemberId(event.target.value)}
-                aria-label="按成员筛选责任田"
-              >
-                <option value="">全部成员</option>
-                {filterMembers.map((member) => (
-                  <option key={member.id} value={member.id}>
-                    {member.name}
-                  </option>
-                ))}
-              </select>
+                onChange={setSelectedMemberId}
+                options={memberFilterOptions}
+                ariaLabel="按成员筛选责任田"
+                placeholder="全部成员"
+                searchable
+              />
               <div className="segmented mx-view-switch" role="group" aria-label="切换责任田视图">
                 <button
                   type="button"
@@ -488,6 +575,9 @@ export default function MatrixPage() {
                           <div className="mx-area">
                             <span className="mx-area-index">{String(index + 1).padStart(2, "0")}</span>
                             <strong>{area.area}</strong>
+                            {aggregate ? (
+                              <GroupBadge name={targetOf(area).groupName} color={targetOf(area).groupColor} />
+                            ) : null}
                           </div>
                         </td>
                         {selectedMemberId ? (
@@ -550,6 +640,9 @@ export default function MatrixPage() {
                       <div className="mx-card-title">
                         <span className="mx-card-index">{String(index + 1).padStart(2, "0")}</span>
                         <strong>{area.area}</strong>
+                        {aggregate ? (
+                          <GroupBadge name={targetOf(area).groupName} color={targetOf(area).groupColor} />
+                        ) : null}
                         {selectedMemberId ? (
                           <RoleBadge role={roleOfMember(area, selectedMemberId)} />
                         ) : null}
@@ -611,7 +704,13 @@ export default function MatrixPage() {
           if (!saving) setEditorOpen(false);
         }}
         title={editing ? "编辑责任田" : "新增责任田"}
-        description="负责人决定这块领域谁拍板，备份人保证负责人缺席时仍有人接住。"
+        description={
+          editing && aggregate
+            ? `当前在聚合视角编辑「${targetOf(editing).groupName}」的责任田，保存会写回该开发组。`
+            : !editing && aggregate
+              ? `聚合视角下新增的责任田会写入当前开发组：${currentGroup?.name ?? "当前开发组"}。`
+              : "负责人决定这块领域谁拍板，备份人保证负责人缺席时仍有人接住。"
+        }
         size="lg"
         footer={
           <>
@@ -639,33 +738,25 @@ export default function MatrixPage() {
             </div>
             <div className="field">
               <span className="field-label">负责人</span>
-              <select
-                className="select"
+              <Select
                 value={draft.ownerMemberId}
-                onChange={(event) => setDraft((prev) => ({ ...prev, ownerMemberId: event.target.value }))}
-              >
-                <option value="">待认领</option>
-                {members.map((member) => (
-                  <option key={member.id} value={member.id}>
-                    {member.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(next) => setDraft((prev) => ({ ...prev, ownerMemberId: next }))}
+                options={ownerOptions}
+                ariaLabel="负责人"
+                placeholder="待认领"
+                searchable={dialogMembers.length > 6}
+              />
             </div>
             <div className="field">
               <span className="field-label">备份人</span>
-              <select
-                className="select"
+              <Select
                 value={draft.backupMemberId}
-                onChange={(event) => setDraft((prev) => ({ ...prev, backupMemberId: event.target.value }))}
-              >
-                <option value="">暂无备份</option>
-                {members.map((member) => (
-                  <option key={member.id} value={member.id}>
-                    {member.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(next) => setDraft((prev) => ({ ...prev, backupMemberId: next }))}
+                options={backupOptions}
+                ariaLabel="备份人"
+                placeholder="暂无备份"
+                searchable={dialogMembers.length > 6}
+              />
             </div>
             <div className="field">
               <span className="field-label">排序（可选）</span>

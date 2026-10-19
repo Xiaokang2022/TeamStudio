@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  Building2,
   Clock,
   Eye,
   Gauge,
@@ -10,6 +14,7 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
+  Tags,
   Timer,
   Trash2,
   UserRound,
@@ -25,8 +30,11 @@ import { EmptyState, LoadingBlock } from "../components/Feedback";
 import { ConfirmDialog } from "../components/Modal";
 import { TaskDialog } from "../components/TaskDialog";
 import type { TaskMemberOption } from "../components/TaskDialog";
+import { TagChips, TagLibraryDialog } from "../components/TagPicker";
+import type { TagLibraryGroupOption } from "../components/TagPicker";
 import { WorkloadMeter } from "../components/WorkloadMeter";
 import { cn, formatDate, formatDateTime } from "../lib/utils";
+import { TASK_RANGES, isWithinRange, rangeStartISO } from "../lib/scope";
 import {
   DIFFICULTY_META,
   HEALTH_STATUSES,
@@ -40,12 +48,14 @@ import {
   taskLoadPoints,
 } from "../lib/taskMeta";
 import type {
+  InsightsRangeKey,
   MemberTask,
   TaskDifficulty,
   TaskHealthStatus,
   TaskOverviewData,
   TaskPriority,
   TaskProgressStatus,
+  TaskTag,
   Workload,
   WorkloadSummary,
 } from "../types";
@@ -54,6 +64,35 @@ import "./TaskOverviewPage.css";
 type ProgressFilter = "all" | TaskProgressStatus;
 type HealthFilter = "all" | TaskHealthStatus;
 type PriorityFilter = "all" | TaskPriority;
+
+/** #13 sortable task-ledger columns. */
+type TaskSortKey =
+  | "member"
+  | "priority"
+  | "difficulty"
+  | "load"
+  | "expected"
+  | "created"
+  | "progress"
+  | "health";
+type SortDirection = "asc" | "desc";
+
+interface SortState {
+  key: TaskSortKey;
+  direction: SortDirection;
+}
+
+const DEFAULT_SORT: SortState = { key: "created", direction: "desc" };
+const DEFAULT_RANGE_KEY: InsightsRangeKey = "1m";
+
+const PRIORITY_RANK: Record<TaskPriority, number> = { low: 0, normal: 1, high: 2, urgent: 3 };
+const DIFFICULTY_RANK: Record<TaskDifficulty, number> = { easy: 0, medium: 1, hard: 2 };
+const PROGRESS_RANK: Record<TaskProgressStatus, number> = {
+  pending: 0,
+  in_progress: 1,
+  completed: 2,
+};
+const HEALTH_RANK: Record<TaskHealthStatus, number> = { normal: 0, delayed: 1, blocked: 2 };
 
 const EMPTY_TASKS: MemberTask[] = [];
 const EMPTY_WORKLOADS: Workload[] = [];
@@ -81,6 +120,65 @@ function messageOf(error: unknown, fallback: string): string {
   return error instanceof ApiError ? error.message : fallback;
 }
 
+function pointsOf(task: MemberTask): number {
+  return typeof task.loadPoints === "number"
+    ? task.loadPoints
+    : taskLoadPoints(task.priority ?? "normal", task.difficulty ?? "medium");
+}
+
+/**
+ * #13 window semantics: a task is "active" inside the selected span when it was
+ * created / updated / completed after the window start, or is still unfinished.
+ */
+function isTaskActiveInRange(task: MemberTask, startISO: string | null): boolean {
+  if (!startISO) return true;
+  if (task.progressStatus !== "completed") return true;
+  return (
+    isWithinRange(task.createdAt, startISO) ||
+    isWithinRange(task.updatedAt, startISO) ||
+    isWithinRange(task.completedAt, startISO)
+  );
+}
+
+function sortValue(task: MemberTask, key: TaskSortKey): string | number {
+  switch (key) {
+    case "member":
+      return task.memberName ?? "";
+    case "priority":
+      return PRIORITY_RANK[task.priority] ?? 1;
+    case "difficulty":
+      return DIFFICULTY_RANK[task.difficulty] ?? 1;
+    case "load":
+      return pointsOf(task);
+    case "expected":
+      // Missing dates always sort after real dates in ascending order.
+      return task.expectedDate || "9999-99-99";
+    case "created":
+      return task.createdAt || "";
+    case "progress":
+      return PROGRESS_RANK[task.progressStatus] ?? 0;
+    case "health":
+      return HEALTH_RANK[task.healthStatus] ?? 0;
+    default:
+      return "";
+  }
+}
+
+function compareTasks(a: MemberTask, b: MemberTask, sort: SortState): number {
+  const left = sortValue(a, sort.key);
+  const right = sortValue(b, sort.key);
+  let result = 0;
+  if (typeof left === "number" && typeof right === "number") {
+    result = left - right;
+  } else {
+    result = String(left).localeCompare(String(right), "zh-CN");
+  }
+  if (result === 0) {
+    result = (a.createdAt || "").localeCompare(b.createdAt || "");
+  }
+  return sort.direction === "asc" ? result : -result;
+}
+
 const PROGRESS_FILTERS: { value: ProgressFilter; label: string }[] = [
   { value: "all", label: "全部进度" },
   ...PROGRESS_STATUSES.map((value) => ({
@@ -105,8 +203,53 @@ const PRIORITY_FILTERS: { value: PriorityFilter; label: string }[] = [
   })),
 ];
 
+function SortableTh({
+  label,
+  sortKey,
+  sort,
+  onSort,
+  title,
+  className,
+}: {
+  label: string;
+  sortKey: TaskSortKey;
+  sort: SortState;
+  onSort: (key: TaskSortKey) => void;
+  title?: string;
+  className?: string;
+}) {
+  const active = sort.key === sortKey;
+  const ariaSort: "ascending" | "descending" | "none" = active
+    ? sort.direction === "asc"
+      ? "ascending"
+      : "descending"
+    : "none";
+  return (
+    <th scope="col" className={cn("tasks-th-sortable", className)} aria-sort={ariaSort}>
+      <button
+        type="button"
+        className={cn("tasks-sort-btn", active && "is-active")}
+        onClick={() => onSort(sortKey)}
+        title={title ?? `按${label}排序`}
+        aria-label={`按${label}排序${active ? (sort.direction === "asc" ? "（当前升序）" : "（当前降序）") : ""}`}
+      >
+        <span>{label}</span>
+        {active ? (
+          sort.direction === "asc" ? (
+            <ArrowUp size={11} aria-hidden="true" />
+          ) : (
+            <ArrowDown size={11} aria-hidden="true" />
+          )
+        ) : (
+          <ArrowUpDown size={11} className="tasks-sort-idle" aria-hidden="true" />
+        )}
+      </button>
+    </th>
+  );
+}
+
 export default function TaskOverviewPage() {
-  const { data, currentTeam, currentGroup, canManageActiveGroup, reload } = useApp();
+  const { data, currentTeam, currentGroup, canManageActiveGroup, reload, scope } = useApp();
   const { toast } = useToast();
   const me = data?.me ?? null;
   const teamId = currentTeam?.id ?? "";
@@ -124,13 +267,39 @@ export default function TaskOverviewPage() {
   });
   const [deleting, setDeleting] = useState<MemberTask | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [tagLibraryOpen, setTagLibraryOpen] = useState(false);
 
   const [search, setSearch] = useState("");
   const [memberFilter, setMemberFilter] = useState<string>("all");
   const [progressFilter, setProgressFilter] = useState<ProgressFilter>("all");
   const [healthFilter, setHealthFilter] = useState<HealthFilter>("all");
   const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>("all");
+  const [tagFilter, setTagFilter] = useState<string>("all");
   const [showCompleted, setShowCompleted] = useState(true);
+  const [rangeKey, setRangeKey] = useState<InsightsRangeKey>(DEFAULT_RANGE_KEY);
+  const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
+
+  const range = useMemo(
+    () => TASK_RANGES.find((option) => option.key === rangeKey) ?? TASK_RANGES[2],
+    [rangeKey],
+  );
+  const rangeStart = useMemo(() => rangeStartISO(range.days), [range.days]);
+
+  /** groupId -> owning team/group metadata (for aggregate-scope write routing). */
+  const groupIndex = useMemo(() => {
+    const map = new Map<string, { teamId: string; teamName: string; groupName: string }>();
+    data?.teams.forEach((team) => {
+      team.groups.forEach((group) => {
+        map.set(group.id, { teamId: team.id, teamName: team.name, groupName: group.name });
+      });
+    });
+    return map;
+  }, [data?.teams]);
+
+  const resolveTeamId = useCallback(
+    (taskGroupId: string) => groupIndex.get(taskGroupId)?.teamId ?? teamId,
+    [groupIndex, teamId],
+  );
 
   const loadTasks = useCallback(
     async (silent = false) => {
@@ -142,7 +311,7 @@ export default function TaskOverviewPage() {
       else setLoading(true);
       setError("");
       try {
-        const result = await api.tasks(teamId, groupId);
+        const result = await api.tasks(teamId, groupId, scope);
         setPayload(result);
       } catch (err) {
         setError(messageOf(err, "加载任务台账失败，请稍后重试。"));
@@ -151,7 +320,7 @@ export default function TaskOverviewPage() {
         setRefreshing(false);
       }
     },
-    [teamId, groupId],
+    [teamId, groupId, scope],
   );
 
   useEffect(() => {
@@ -159,28 +328,53 @@ export default function TaskOverviewPage() {
     void loadTasks();
   }, [loadTasks]);
 
-  // Switching development groups must never keep filters pointing at a previous member.
+  // Switching development groups or browsing scope must never keep stale filters.
   useEffect(() => {
     setSearch("");
     setMemberFilter("all");
     setProgressFilter("all");
     setHealthFilter("all");
     setPriorityFilter("all");
+    setTagFilter("all");
     setShowCompleted(true);
+    setRangeKey(DEFAULT_RANGE_KEY);
+    setSort(DEFAULT_SORT);
     setDialog({ open: false, task: null });
     setDeleting(null);
     setBusyId(null);
-  }, [groupId]);
+    setTagLibraryOpen(false);
+  }, [groupId, scope]);
 
   const tasks = payload?.tasks ?? EMPTY_TASKS;
   const workloads = payload?.workloads ?? EMPTY_WORKLOADS;
   const summary = payload?.summary ?? EMPTY_SUMMARY;
   const meta = payload?.meta ?? EMPTY_META;
   const windowLabel = meta.windowLabel || "近 4 周";
+  const aggregate = scope !== "group";
+  const showTeamBadge = scope === "all";
+
+  /** #13 tasks active inside the selected time span. */
+  const windowTasks = useMemo(
+    () => tasks.filter((task) => isTaskActiveInRange(task, rangeStart)),
+    [tasks, rangeStart],
+  );
 
   const inProgressCount = useMemo(
-    () => tasks.filter((task) => task.progressStatus === "in_progress").length,
-    [tasks],
+    () => windowTasks.filter((task) => task.progressStatus === "in_progress").length,
+    [windowTasks],
+  );
+  const openCount = useMemo(
+    () => windowTasks.filter((task) => task.progressStatus !== "completed").length,
+    [windowTasks],
+  );
+  const blockedCount = useMemo(
+    () => windowTasks.filter((task) => task.healthStatus === "blocked").length,
+    [windowTasks],
+  );
+  const overdueCount = useMemo(
+    () =>
+      windowTasks.filter((task) => task.overdue && task.progressStatus !== "completed").length,
+    [windowTasks],
   );
 
   const kpis = useMemo(
@@ -188,9 +382,9 @@ export default function TaskOverviewPage() {
       {
         key: "open",
         label: "未完成任务",
-        value: String(summary.openTasks),
+        value: String(openCount),
         unit: "条",
-        hint: `共 ${summary.tasks} 条任务`,
+        hint: `${range.label}内共 ${windowTasks.length} 条任务`,
         icon: ListTodo,
         tone: "neutral",
       },
@@ -199,8 +393,8 @@ export default function TaskOverviewPage() {
         label: "进行中",
         value: String(inProgressCount),
         unit: "条",
-        hint: summary.openTasks
-          ? `占未完成 ${formatPercent((inProgressCount / summary.openTasks) * 100)}`
+        hint: openCount
+          ? `占未完成 ${formatPercent((inProgressCount / Math.max(1, openCount)) * 100)}`
           : "等待成员开始推进",
         icon: Timer,
         tone: "blue",
@@ -208,18 +402,18 @@ export default function TaskOverviewPage() {
       {
         key: "blocked",
         label: "阻塞任务",
-        value: String(summary.blockedTasks),
+        value: String(blockedCount),
         unit: "条",
-        hint: summary.blockedTasks ? "需要协调解除依赖" : "暂无阻塞",
+        hint: blockedCount ? "需要协调解除依赖" : "暂无阻塞",
         icon: AlertTriangle,
         tone: "amber",
       },
       {
         key: "overdue",
         label: "逾期任务",
-        value: String(summary.overdueTasks),
+        value: String(overdueCount),
         unit: "条",
-        hint: summary.overdueTasks ? "已超过预期完成时间" : "全部按预期推进",
+        hint: overdueCount ? "已超过预期完成时间" : "全部按预期推进",
         icon: Clock,
         tone: "red",
       },
@@ -235,44 +429,169 @@ export default function TaskOverviewPage() {
         tone: "blue",
       },
     ],
-    [summary, inProgressCount, windowLabel],
+    [
+      openCount,
+      inProgressCount,
+      blockedCount,
+      overdueCount,
+      windowTasks.length,
+      range.label,
+      summary.averageLoadPercent,
+      summary.averagePoints,
+      summary.capacityPoints,
+      summary.members,
+      windowLabel,
+    ],
   );
+
+  /** Tag options available for filtering, derived from hydrated task tags. */
+  const tagUsage = useMemo(() => {
+    const map = new Map<string, { tag: TaskTag; count: number }>();
+    windowTasks.forEach((task) => {
+      (task.tags ?? []).forEach((tag) => {
+        const current = map.get(tag.id);
+        if (current) current.count += 1;
+        else map.set(tag.id, { tag, count: 1 });
+      });
+    });
+    return Array.from(map.values()).sort(
+      (a, b) => b.count - a.count || a.tag.name.localeCompare(b.tag.name, "zh-CN"),
+    );
+  }, [windowTasks]);
 
   const filteredTasks = useMemo(() => {
     const keyword = search.trim().toLowerCase();
-    return tasks.filter((task) => {
+    return windowTasks.filter((task) => {
       if (!showCompleted && task.progressStatus === "completed") return false;
       if (progressFilter !== "all" && task.progressStatus !== progressFilter) return false;
       if (healthFilter !== "all" && task.healthStatus !== healthFilter) return false;
       if (priorityFilter !== "all" && task.priority !== priorityFilter) return false;
       if (memberFilter !== "all" && task.memberId !== memberFilter) return false;
+      if (tagFilter !== "all" && !(task.tags ?? []).some((tag) => tag.id === tagFilter)) return false;
       if (keyword) {
+        const tagText = (task.tags ?? []).map((tag) => tag.name).join(" ");
         const haystack =
-          `${task.title} ${task.description} ${task.memberName} ${task.memberTitle}`.toLowerCase();
+          `${task.title} ${task.description} ${task.memberName} ${task.memberTitle} ${tagText} ${task.groupName ?? ""} ${task.teamName ?? ""}`.toLowerCase();
         if (!haystack.includes(keyword)) return false;
       }
       return true;
     });
-  }, [tasks, search, showCompleted, progressFilter, healthFilter, priorityFilter, memberFilter]);
+  }, [
+    windowTasks,
+    search,
+    showCompleted,
+    progressFilter,
+    healthFilter,
+    priorityFilter,
+    memberFilter,
+    tagFilter,
+  ]);
 
-  const dialogMembers = useMemo<TaskMemberOption[]>(
-    () =>
-      workloads.map((workload) => ({
-        id: workload.memberId,
-        name: workload.memberName,
-        title: workload.memberTitle,
-        avatarColor: workload.avatarColor,
-      })),
-    [workloads],
+  const sortedTasks = useMemo(
+    () => [...filteredTasks].sort((a, b) => compareTasks(a, b, sort)),
+    [filteredTasks, sort],
   );
 
+  const memberOptions = useMemo(() => {
+    const map = new Map<string, { id: string; name: string }>();
+    windowTasks.forEach((task) => {
+      if (!map.has(task.memberId)) map.set(task.memberId, { id: task.memberId, name: task.memberName });
+    });
+    workloads.forEach((workload) => {
+      if (!map.has(workload.memberId)) {
+        map.set(workload.memberId, { id: workload.memberId, name: workload.memberName });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
+  }, [windowTasks, workloads]);
+
+  /** Target group of the open dialog: task's own group when editing, current group when creating. */
+  const dialogGroupId = dialog.task ? dialog.task.groupId : groupId;
+  const dialogGroupMeta = groupIndex.get(dialog.task?.groupId ?? "");
+  const dialogTeamId = dialog.task ? resolveTeamId(dialog.task.groupId) : teamId;
+  const dialogGroupName = dialog.task
+    ? dialog.task.groupName ?? dialogGroupMeta?.groupName
+    : currentGroup?.name;
+
+  const dialogMembers = useMemo<TaskMemberOption[]>(() => {
+    const map = new Map<string, TaskMemberOption>();
+    if (scope === "group") {
+      workloads.forEach((workload) => {
+        map.set(workload.memberId, {
+          id: workload.memberId,
+          name: workload.memberName,
+          title: workload.memberTitle,
+          avatarColor: workload.avatarColor,
+        });
+      });
+    }
+    tasks
+      .filter((task) => task.groupId === dialogGroupId)
+      .forEach((task) => {
+        map.set(task.memberId, {
+          id: task.memberId,
+          name: task.memberName,
+          title: task.memberTitle,
+          avatarColor: task.memberAvatarColor,
+        });
+      });
+    if (dialog.task) {
+      map.set(dialog.task.memberId, {
+        id: dialog.task.memberId,
+        name: dialog.task.memberName,
+        title: dialog.task.memberTitle,
+        avatarColor: dialog.task.memberAvatarColor,
+      });
+    }
+    return Array.from(map.values());
+  }, [scope, workloads, tasks, dialogGroupId, dialog.task]);
+
   const defaultMemberId = selfMemberId ?? dialogMembers[0]?.id ?? null;
+
+  /** Groups offered by the tag library manager (aggregate scope can manage every visible group). */
+  const tagGroupOptions = useMemo<TagLibraryGroupOption[]>(() => {
+    const list: TagLibraryGroupOption[] = [];
+    const seen = new Set<string>();
+    const push = (
+      nextTeamId: string,
+      groupIdValue: string,
+      groupNameValue: string,
+      label: string,
+    ) => {
+      if (!nextTeamId || !groupIdValue || seen.has(groupIdValue)) return;
+      seen.add(groupIdValue);
+      list.push({
+        teamId: nextTeamId,
+        groupId: groupIdValue,
+        groupName: groupNameValue,
+        label,
+      });
+    };
+    payload?.scope?.groups?.forEach((group) => {
+      push(
+        group.teamId,
+        group.id,
+        group.name,
+        `${group.teamShortName || group.teamName} / ${group.name}`,
+      );
+    });
+    if (!list.length) {
+      data?.teams.forEach((team) => {
+        team.groups.forEach((group) => {
+          push(team.id, group.id, group.name, `${team.shortName || team.name} / ${group.name}`);
+        });
+      });
+    }
+    return list;
+  }, [payload?.scope, data?.teams]);
+
   const filtersActive =
     Boolean(search.trim()) ||
     memberFilter !== "all" ||
     progressFilter !== "all" ||
     healthFilter !== "all" ||
     priorityFilter !== "all" ||
+    tagFilter !== "all" ||
     !showCompleted;
 
   const canManageTask = useCallback(
@@ -290,7 +609,16 @@ export default function TaskOverviewPage() {
     setProgressFilter("all");
     setHealthFilter("all");
     setPriorityFilter("all");
+    setTagFilter("all");
     setShowCompleted(true);
+  };
+
+  const toggleSort = (key: TaskSortKey) => {
+    setSort((current) =>
+      current.key === key
+        ? { key, direction: current.direction === "asc" ? "desc" : "asc" }
+        : { key, direction: "asc" },
+    );
   };
 
   const openCreate = () => {
@@ -328,7 +656,8 @@ export default function TaskOverviewPage() {
     if (!deleting) return;
     setBusyId(deleting.id);
     try {
-      await api.deleteTask(teamId, groupId, deleting.id);
+      // Aggregate scope: write back to the group that actually owns the task.
+      await api.deleteTask(resolveTeamId(deleting.groupId), deleting.groupId, deleting.id);
       toast("任务已删除", "success");
       setDeleting(null);
       await loadTasks(true);
@@ -382,6 +711,23 @@ export default function TaskOverviewPage() {
     </div>
   ) : null;
 
+  const rangePicker = (
+    <div className="tasks-range" role="group" aria-label="任务时间跨度">
+      {TASK_RANGES.map((option) => (
+        <button
+          key={option.key}
+          type="button"
+          className={cn("tasks-range-btn", rangeKey === option.key && "active")}
+          onClick={() => setRangeKey(option.key)}
+          aria-pressed={rangeKey === option.key}
+          title={`只看${option.label}内活跃的任务`}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+
   const filters = (
     <div className="tasks-filters">
       <div className="tasks-filter-row">
@@ -390,7 +736,7 @@ export default function TaskOverviewPage() {
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="搜索任务标题、说明或成员…"
+            placeholder="搜索任务标题、说明、标签或成员…"
             aria-label="搜索任务"
             type="search"
           />
@@ -414,9 +760,9 @@ export default function TaskOverviewPage() {
             aria-label="按成员筛选"
           >
             <option value="all">全部成员</option>
-            {workloads.map((workload) => (
-              <option key={workload.memberId} value={workload.memberId}>
-                {workload.memberName}
+            {memberOptions.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.name}
               </option>
             ))}
           </select>
@@ -502,44 +848,86 @@ export default function TaskOverviewPage() {
             ))}
           </div>
         </div>
+
+        {tagUsage.length ? (
+          <div className="tasks-filter-group tasks-tag-filter-group">
+            <span className="tasks-filter-label">
+              <Tags size={11} /> 标签
+            </span>
+            <div className="tasks-tag-filters" role="group" aria-label="按标签筛选">
+              <button
+                type="button"
+                className={cn("tasks-tag-filter", tagFilter === "all" && "active")}
+                onClick={() => setTagFilter("all")}
+                aria-pressed={tagFilter === "all"}
+              >
+                全部
+              </button>
+              {tagUsage.map(({ tag, count }) => (
+                <button
+                  key={tag.id}
+                  type="button"
+                  className={cn("tasks-tag-filter", tagFilter === tag.id && "active")}
+                  onClick={() => setTagFilter((current) => (current === tag.id ? "all" : tag.id))}
+                  aria-pressed={tagFilter === tag.id}
+                  title={`按标签「${tag.name}」筛选（${count} 条任务）`}
+                >
+                  <i style={{ background: tag.color }} aria-hidden="true" />
+                  {tag.name}
+                  <small>{count}</small>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
 
   const taskCountLabel = filtersActive
-    ? `筛选 ${filteredTasks.length} / ${tasks.length} 条`
-    : `共 ${tasks.length} 条任务`;
+    ? `筛选 ${sortedTasks.length} / ${windowTasks.length} 条`
+    : `共 ${windowTasks.length} 条任务`;
+
+  const renderTaskTags = (task: MemberTask) => {
+    const tags = task.tags ?? [];
+    if (!tags.length) return null;
+    return <TagChips tags={tags} max={3} className="tasks-task-tag-chips" />;
+  };
 
   const table = (
     <div className="table-wrap tasks-table-wrap">
       <table className="data-table tasks-table">
         <thead>
           <tr>
-            <th scope="col">成员</th>
+            <SortableTh label="成员" sortKey="member" sort={sort} onSort={toggleSort} />
             <th scope="col">任务</th>
-            <th scope="col">进度</th>
-            <th scope="col">健康度</th>
-            <th scope="col">预期完成</th>
-            <th scope="col" title="负载点数 = 1 分基础 + 优先级加成 + 难度加成">
-              负载
-            </th>
+            <SortableTh label="优先级" sortKey="priority" sort={sort} onSort={toggleSort} />
+            <SortableTh label="难度" sortKey="difficulty" sort={sort} onSort={toggleSort} />
+            <SortableTh label="进度" sortKey="progress" sort={sort} onSort={toggleSort} />
+            <SortableTh label="健康度" sortKey="health" sort={sort} onSort={toggleSort} />
+            <SortableTh label="预期完成" sortKey="expected" sort={sort} onSort={toggleSort} />
+            <SortableTh
+              label="负载"
+              sortKey="load"
+              sort={sort}
+              onSort={toggleSort}
+              title="按负载点数排序（负载点数 = 1 分基础 + 优先级加成 + 难度加成）"
+            />
+            <SortableTh label="创建时间" sortKey="created" sort={sort} onSort={toggleSort} />
             <th scope="col">
               <span className="tasks-th-actions">操作</span>
             </th>
           </tr>
         </thead>
         <tbody>
-          {filteredTasks.map((task) => {
+          {sortedTasks.map((task) => {
             const progress = TASK_PROGRESS_META[task.progressStatus] ?? TASK_PROGRESS_META.pending;
             const health = TASK_HEALTH_META[task.healthStatus] ?? TASK_HEALTH_META.normal;
             const priorityKey: TaskPriority = task.priority ?? "normal";
             const difficultyKey: TaskDifficulty = task.difficulty ?? "medium";
             const priority = PRIORITY_META[priorityKey] ?? PRIORITY_META.normal;
             const difficulty = DIFFICULTY_META[difficultyKey] ?? DIFFICULTY_META.medium;
-            const points =
-              typeof task.loadPoints === "number"
-                ? task.loadPoints
-                : taskLoadPoints(priorityKey, difficultyKey);
+            const points = pointsOf(task);
             const manageable = canManageTask(task);
             return (
               <tr
@@ -552,14 +940,20 @@ export default function TaskOverviewPage() {
               >
                 <td>
                   <div className="tasks-member-cell">
-                    <Avatar
-                      name={task.memberName}
-                      color={task.memberAvatarColor}
-                      size="xs"
-                    />
+                    <Avatar name={task.memberName} color={task.memberAvatarColor} size="xs" />
                     <div className="tasks-member-copy">
                       <strong>{task.memberName}</strong>
                       <small>{task.memberTitle || "开发组成员"}</small>
+                      {aggregate && task.groupName ? (
+                        <span
+                          className="tasks-group-badge"
+                          title={`${task.teamName ?? ""} ${task.groupName}`.trim()}
+                        >
+                          <Building2 size={9} />
+                          {task.groupName}
+                          {showTeamBadge && task.teamName ? ` · ${task.teamName}` : ""}
+                        </span>
+                      ) : null}
                     </div>
                   </div>
                 </td>
@@ -569,26 +963,29 @@ export default function TaskOverviewPage() {
                     {task.description ? (
                       <p className="tasks-task-desc">{task.description}</p>
                     ) : null}
-                    <div className="tasks-task-tags">
-                      <span
-                        className={cn("tasks-tag", `is-priority-${priorityKey}`)}
-                        title={`优先级 ${priority.label}（+${priority.weight} 分）`}
-                      >
-                        <i className="tasks-tag-dot" /> 优先级 {priority.label}
-                      </span>
-                      <span
-                        className={cn("tasks-tag", `is-difficulty-${difficultyKey}`)}
-                        title={`难度 ${difficulty.label}（+${difficulty.weight} 分）`}
-                      >
-                        <i className="tasks-tag-dot" /> 难度 {difficulty.label}
-                      </span>
-                    </div>
+                    {renderTaskTags(task)}
                     {task.completedAt ? (
                       <span className="tasks-task-note">
                         完成于 {formatDateTime(task.completedAt)}
                       </span>
                     ) : null}
                   </div>
+                </td>
+                <td>
+                  <span
+                    className={cn("tasks-tag", `is-priority-${priorityKey}`)}
+                    title={`优先级 ${priority.label}（+${priority.weight} 分）`}
+                  >
+                    <i className="tasks-tag-dot" /> {priority.label}
+                  </span>
+                </td>
+                <td>
+                  <span
+                    className={cn("tasks-tag", `is-difficulty-${difficultyKey}`)}
+                    title={`难度 ${difficulty.label}（+${difficulty.weight} 分）`}
+                  >
+                    <i className="tasks-tag-dot" /> {difficulty.label}
+                  </span>
                 </td>
                 <td>
                   <span className={cn("badge", progress.badge)}>{progress.label}</span>
@@ -632,6 +1029,11 @@ export default function TaskOverviewPage() {
                   </div>
                 </td>
                 <td>
+                  <div className="tasks-date-cell">
+                    <span className="tasks-date">{formatDateTime(task.createdAt)}</span>
+                  </div>
+                </td>
+                <td>
                   {manageable ? (
                     <div className="tasks-row-actions">
                       <button
@@ -667,17 +1069,14 @@ export default function TaskOverviewPage() {
 
   const mobileCards = (
     <div className="tasks-card-list">
-      {filteredTasks.map((task) => {
+      {sortedTasks.map((task) => {
         const progress = TASK_PROGRESS_META[task.progressStatus] ?? TASK_PROGRESS_META.pending;
         const health = TASK_HEALTH_META[task.healthStatus] ?? TASK_HEALTH_META.normal;
         const priorityKey: TaskPriority = task.priority ?? "normal";
         const difficultyKey: TaskDifficulty = task.difficulty ?? "medium";
         const priority = PRIORITY_META[priorityKey] ?? PRIORITY_META.normal;
         const difficulty = DIFFICULTY_META[difficultyKey] ?? DIFFICULTY_META.medium;
-        const points =
-          typeof task.loadPoints === "number"
-            ? task.loadPoints
-            : taskLoadPoints(priorityKey, difficultyKey);
+        const points = pointsOf(task);
         const manageable = canManageTask(task);
         return (
           <article
@@ -694,12 +1093,20 @@ export default function TaskOverviewPage() {
                 <div className="tasks-member-copy">
                   <strong>{task.memberName}</strong>
                   <small>{task.memberTitle || "开发组成员"}</small>
+                  {aggregate && task.groupName ? (
+                    <span className="tasks-group-badge">
+                      <Building2 size={9} />
+                      {task.groupName}
+                      {showTeamBadge && task.teamName ? ` · ${task.teamName}` : ""}
+                    </span>
+                  ) : null}
                 </div>
               </div>
               <span className={cn("badge", progress.badge)}>{progress.label}</span>
             </header>
             <h3 className="tasks-card-title">{task.title}</h3>
             {task.description ? <p className="tasks-card-desc">{task.description}</p> : null}
+            {renderTaskTags(task)}
             <div className="tasks-task-tags">
               <span
                 className={cn("tasks-tag", `is-priority-${priorityKey}`)}
@@ -767,6 +1174,9 @@ export default function TaskOverviewPage() {
           <p className="page-subtitle">
             成员自主维护任务进度、健康状态与预期完成时间；任务负载由基础 1 分、优先级与难度加成计算，
             每人每周容量 15 分，帮助团队在过载前及时调整节奏。
+            {aggregate
+              ? ` 当前按「${scope === "all" ? "全部团队" : currentTeam.name}」聚合浏览。`
+              : ""}
           </p>
         </div>
         <div className="page-actions">
@@ -813,7 +1223,11 @@ export default function TaskOverviewPage() {
           ) : workloads.length ? (
             <div className="tasks-workload-rail">
               {workloads.map((workload) => (
-                <WorkloadMeter key={workload.memberId} workload={workload} windowLabel={windowLabel} />
+                <WorkloadMeter
+                  key={workload.memberId}
+                  workload={workload}
+                  windowLabel={windowLabel}
+                />
               ))}
             </div>
           ) : (
@@ -835,15 +1249,22 @@ export default function TaskOverviewPage() {
             </h2>
             <p className="tasks-panel-sub">
               {taskCountLabel}
-              {summary.completedTasks
-                ? ` · 已完成 ${summary.completedTasks} 条`
-                : ""}
+              {summary.completedTasks ? ` · 全量已完成 ${summary.completedTasks} 条` : ""}
             </p>
           </div>
           <div className="tasks-panel-tools">
+            {rangePicker}
             <span className="badge badge-gray tasks-window-badge">
-              <Clock size={11} /> {windowLabel}
+              <Clock size={11} /> {range.label}
             </span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm tasks-tag-library-btn"
+              onClick={() => setTagLibraryOpen(true)}
+              title="管理当前开发组的标签库"
+            >
+              <Tags size={13} /> 标签库
+            </button>
             <button
               type="button"
               className="icon-button"
@@ -873,7 +1294,7 @@ export default function TaskOverviewPage() {
                 </button>
               }
             />
-          ) : filteredTasks.length ? (
+          ) : sortedTasks.length ? (
             <>
               {table}
               {mobileCards}
@@ -881,18 +1302,27 @@ export default function TaskOverviewPage() {
           ) : (
             <EmptyState
               icon={<ListTodo size={24} />}
-              title={tasks.length ? "没有符合筛选条件的任务" : "还没有登记任务"}
+              title={windowTasks.length ? "没有符合筛选条件的任务" : `${range.label}内还没有活跃任务`}
               description={
-                tasks.length
-                  ? "试试放宽成员、进度或健康度筛选条件。"
-                  : canCreate
-                    ? "为成员登记第一项任务，优先级与难度会自动换算成负载点数计入团队负载。"
-                    : "当前为只读视图，暂时没有可查看的任务。"
+                windowTasks.length
+                  ? "试试放宽成员、进度、健康度或标签筛选条件。"
+                  : tasks.length
+                    ? "切换到更长的时间跨度，或者新建一条任务。"
+                    : canCreate
+                      ? "为成员登记第一项任务，优先级与难度会自动换算成负载点数计入团队负载。"
+                      : "当前为只读视图，暂时没有可查看的任务。"
               }
               action={
-                tasks.length ? (
+                windowTasks.length ? (
                   <button className="btn btn-secondary btn-sm" onClick={resetFilters}>
                     <RotateCcw size={14} /> 重置筛选
+                  </button>
+                ) : tasks.length ? (
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => setRangeKey(TASK_RANGES[TASK_RANGES.length - 1].key)}
+                  >
+                    <Clock size={14} /> 查看近 3 个月
                   </button>
                 ) : canCreate ? (
                   <button className="btn btn-primary btn-sm" onClick={openCreate}>
@@ -910,20 +1340,35 @@ export default function TaskOverviewPage() {
         {meta.scoring
           ? `${meta.scoring}；`
           : "负载点数 = 1 分基础 + 优先级加成 + 难度加成；每人每周容量 15 分；"}
-        {windowLabel}平均按滚动窗口统计，仅供团队节奏参考。
+        任务台账按所选时间跨度（{range.label}）过滤活跃任务，点击表头可切换升/降序；{" "}
+        {windowLabel}平均负载按滚动窗口统计，仅供团队节奏参考。
       </p>
 
       <TaskDialog
         open={dialog.open}
         task={dialog.task}
-        teamId={teamId}
-        groupId={groupId}
+        teamId={dialogTeamId}
+        groupId={dialogGroupId}
+        targetGroupName={dialogGroupName}
+        aggregate={aggregate}
         members={dialogMembers}
         canAssignOthers={canManageActiveGroup}
         selfMemberId={selfMemberId}
         defaultMemberId={defaultMemberId}
         onClose={() => setDialog({ open: false, task: null })}
         onSaved={handleSaved}
+      />
+
+      <TagLibraryDialog
+        open={tagLibraryOpen}
+        onClose={() => setTagLibraryOpen(false)}
+        teamId={teamId}
+        groupId={groupId}
+        groupName={currentGroup.name}
+        groupOptions={aggregate && tagGroupOptions.length > 1 ? tagGroupOptions : []}
+        onChanged={() => {
+          void loadTasks(true);
+        }}
       />
 
       <ConfirmDialog

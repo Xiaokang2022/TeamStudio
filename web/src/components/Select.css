@@ -1,0 +1,273 @@
+/* ---------------------------------------------------------------- */
+/* Self-drawn Select (dropdown / listbox)                             */
+/* Panel is portalled to <body>, positioned with `position: fixed`,   */
+/* and uses an opaque solid background so it never shows through.    */
+/* ---------------------------------------------------------------- */
+
+.ts-select {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.ts-select-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 10px 7px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.16s var(--ease), box-shadow 0.16s var(--ease), background 0.16s var(--ease);
+}
+
+.ts-select-sm .ts-select-trigger {
+  min-height: 29px;
+  padding: 4px 8px 4px 9px;
+  border-radius: 9px;
+  font-size: 11.5px;
+}
+
+.ts-select-trigger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--text-3) 45%, var(--border-strong));
+  background: var(--surface-hover);
+}
+
+.ts-select-trigger:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.ts-select.is-open .ts-select-trigger {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+  background: var(--surface);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.ts-select-trigger:disabled,
+.ts-select.is-disabled .ts-select-trigger {
+  cursor: not-allowed;
+  color: var(--text-3);
+  background: var(--surface-2);
+  border-color: var(--border);
+  opacity: 0.72;
+}
+
+.ts-select-value {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+}
+
+.ts-select-value-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ts-select-placeholder {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
+  text-align: left;
+}
+
+.ts-select-caret {
+  flex: none;
+  color: var(--text-3);
+  transition: transform 0.16s var(--ease), color 0.16s var(--ease);
+}
+
+.ts-select.is-open .ts-select-caret {
+  color: var(--accent);
+  transform: rotate(180deg);
+}
+
+.ts-select-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+/* ---------------------------- panel ---------------------------- */
+
+.ts-select-panel {
+  position: fixed;
+  z-index: 260;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* Opaque, never glass: the surrounding modal must not show through. */
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow:
+    0 1px 0 var(--glass-highlight) inset,
+    0 18px 44px -22px color-mix(in srgb, var(--text) 34%, transparent),
+    0 8px 20px -14px color-mix(in srgb, var(--text) 22%, transparent);
+  transform-origin: top center;
+  animation: ts-select-pop-in 0.14s var(--ease);
+}
+
+.ts-select-panel.is-top {
+  transform-origin: bottom center;
+  animation-name: ts-select-pop-up;
+}
+
+@keyframes ts-select-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes ts-select-pop-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.ts-select-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+}
+
+.ts-select-search-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+
+.ts-select-search-input::placeholder {
+  color: var(--text-3);
+}
+
+.ts-select-list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 5px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.ts-select-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.45;
+  cursor: pointer;
+  transition: background 0.12s var(--ease), color 0.12s var(--ease);
+}
+
+.ts-select-option.is-active {
+  background: var(--accent-soft);
+}
+
+.ts-select-option.is-active .ts-select-option-label {
+  color: var(--accent);
+}
+
+.ts-select-option.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.ts-select-option-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  margin-top: 4px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.ts-select-option-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.ts-select-option-label {
+  color: var(--text);
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ts-select-option-desc {
+  color: var(--text-3);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ts-select-check {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.ts-select-empty {
+  padding: 14px 10px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+/* ------------------------ reduced motion ------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  .ts-select-panel {
+    animation: none;
+  }
+
+  .ts-select-caret,
+  .ts-select-trigger,
+  .ts-select-option {
+    transition: none;
+  }
+}

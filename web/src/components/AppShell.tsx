@@ -3,9 +3,11 @@ import {
   Bell,
   Building2,
   CalendarDays,
+  ChartNoAxesColumn,
   ChevronDown,
   ChevronsUpDown,
   Command,
+  Globe2,
   Info,
   Layers3,
   LayoutDashboard,
@@ -26,6 +28,7 @@ import {
   Sun,
   Trophy,
   UserRound,
+  UsersRound,
   Waypoints,
   X,
 } from "lucide-react";
@@ -35,7 +38,9 @@ import { useToast } from "./Toast";
 import { Avatar } from "./Avatar";
 import { AboutDialog } from "./AboutDialog";
 import { cn, formatFullDate } from "../lib/utils";
+import { SCOPE_OPTIONS } from "../lib/scope";
 import type { ModuleFlags } from "../types";
+import "./ShellScope.css";
 
 const NAV_GROUPS: {
   label: string;
@@ -46,6 +51,7 @@ const NAV_GROUPS: {
     items: [
       { key: "overview", label: "团队概览", icon: LayoutDashboard, module: "overview" },
       { key: "tasks", label: "任务总览", icon: ListTodo, module: "tasks" },
+      { key: "insights", label: "数据洞察", icon: ChartNoAxesColumn, module: "insights" },
       { key: "calendar", label: "协作日历", icon: CalendarDays, module: "calendar" },
     ],
   },
@@ -63,6 +69,7 @@ const NAV_GROUPS: {
 const PAGE_LABELS: Record<string, string> = {
   overview: "团队概览",
   tasks: "任务总览",
+  insights: "数据洞察",
   calendar: "协作日历",
   redblack: "红黑榜",
   announcements: "公告栏",
@@ -100,6 +107,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     currentGroup,
     selectTeam,
     selectGroup,
+    scope,
+    scopeLabel,
+    setScope,
     toggleTheme,
     theme,
     moduleVisible,
@@ -285,6 +295,36 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           ) : null}
         </div>
 
+        <div className="scope-switcher" role="group" aria-label="浏览视角">
+          <div className="scope-switcher-label">
+            <Globe2 size={13} /> 浏览视角
+          </div>
+          <div className="scope-switcher-options">
+            {SCOPE_OPTIONS.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                className={cn("scope-option", scope === option.key && "is-active")}
+                aria-pressed={scope === option.key}
+                title={option.description}
+                onClick={() => setScope(option.key)}
+              >
+                {option.key === "group" ? (
+                  <Layers3 size={14} />
+                ) : option.key === "team" ? (
+                  <UsersRound size={14} />
+                ) : (
+                  <Globe2 size={14} />
+                )}
+                <span>{option.shortLabel}</span>
+              </button>
+            ))}
+          </div>
+          <p className="scope-switcher-hint">
+            正在浏览：<strong>{scopeLabel}</strong>
+          </p>
+        </div>
+
         <nav className="main-nav">
           {NAV_GROUPS.map((group) => {
             const items = group.items.filter(
@@ -415,7 +455,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <div className="breadcrumb">
               <span>{currentTeam?.name}</span>
               <i>/</i>
-              <strong>{currentGroup?.name}</strong>
+              <strong>{scope === "group" ? currentGroup?.name : scopeLabel}</strong>
+              {scope !== "group" ? <span className="scope-chip">{scope === "all" ? "全部团队" : "全团队视角"}</span> : null}
               <i>/</i>
               <span className="breadcrumb-page">{PAGE_LABELS[route] ?? "团队工作室"}</span>
             </div>

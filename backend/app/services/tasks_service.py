@@ -9,19 +9,25 @@ easy/medium/hard = 0/1/2, so a single task is worth 1-6 points. Capacity is a fi
 ``CAPACITY_POINTS = 15`` per member per week and the average window is the last 4 completed
 7-day periods (window 0 is the most recent one, ending at "now").
 
+Tasks also carry a shared per-group tag library (``task_tags``); ``member_tasks.tags`` stores
+a JSON array of tag ids that is hydrated into ``tagIds`` + ``tags`` on every read payload.
+
 Timestamps are stored as ISO-8601 strings in the server-local timezone (see ``db.now_iso``).
 Parsing here is deliberately tolerant so hand-edited rows never break the overview:
 unparsable values are ignored for the average calculation while still counting towards the
 current open-task load. The legacy ``effort_hours`` column is intentionally never exposed.
+
+Read payload builders accept either one group id or a list of group ids so the global
+browsing scope (single group / whole team / every team) reuses exactly the same math.
 """
 
 from __future__ import annotations
 
 import sqlite3
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Iterable
 
-from ..db import rows
+from ..db import json_loads, rows
 
 CAPACITY_POINTS = 15
 WINDOW_WEEKS = 4
@@ -44,18 +50,34 @@ HEALTH_SORT_ORDER = {"blocked": 0, "delayed": 1, "normal": 2}
 TASK_SELECT = (
     "SELECT t.*, m.name AS member_name, m.title AS member_title, "
     "m.avatar_color AS member_avatar_color, m.sort_order AS member_sort_order, "
-    "m.created_at AS member_created_at "
+    "m.created_at AS member_created_at, g.name AS group_name, "
+    "g.team_id AS group_team_id, g.sort_order AS group_sort_order, "
+    "tm.name AS team_name "
     "FROM member_tasks t JOIN members m ON m.id=t.member_id "
+    "JOIN groups g ON g.id=t.group_id JOIN teams tm ON tm.id=g.team_id "
 )
 
-# Sorting contract: member sort order first, then blocked/delayed tasks, then expected date
-# (tasks without an expected date last), then creation time.
+# Sorting contract: groups first (single-group scope is unaffected by the leading keys),
+# then member sort order, then blocked/delayed tasks, then expected date (tasks without an
+# expected date last), then creation time.
 TASK_ORDER = (
-    "ORDER BY m.sort_order, m.created_at, "
+    "ORDER BY g.sort_order, g.name, m.sort_order, m.created_at, "
     "CASE t.health_status WHEN 'blocked' THEN 0 WHEN 'delayed' THEN 1 ELSE 2 END, "
     "CASE WHEN t.expected_date IS NULL OR t.expected_date='' THEN 1 ELSE 0 END, "
     "t.expected_date, t.created_at, t.id"
 )
+
+
+def group_id_list(group_ids: str | Iterable[str]) -> list[str]:
+    """Normalise a single group id or an iterable of group ids into a list."""
+    if isinstance(group_ids, str):
+        return [group_ids]
+    return [str(item) for item in group_ids]
+
+
+def in_clause(group_ids: list[str]) -> str:
+    """SQL ``IN`` placeholder list; an empty scope matches nothing (``IN (NULL)``)."""
+    return ",".join("?" for _ in group_ids) if group_ids else "NULL"
 
 
 def local_now() -> datetime:
@@ -166,6 +188,10 @@ def _member_workload(
         "memberName": member.get("name", ""),
         "memberTitle": member.get("title", ""),
         "avatarColor": member.get("avatar_color", "#5865f2"),
+        "groupId": member.get("group_id", ""),
+        "groupName": member.get("group_name", ""),
+        "teamId": member.get("group_team_id") or member.get("team_id", ""),
+        "teamName": member.get("team_name", ""),
         "currentPoints": int(current_points),
         "currentLoadPercent": _round_percent(current_points / CAPACITY_POINTS * 100),
         "averagePoints": _round_points(raw_average),
@@ -180,12 +206,61 @@ def _member_workload(
     }
 
 
-def task_payload(task: dict[str, Any], today: date | None = None) -> dict[str, Any]:
-    """CamelCase projection of one member task row (expects the member join)."""
+def task_tag_ids(task: dict[str, Any]) -> list[str]:
+    """Stored tag ids for one task row (deduplicated, order preserved)."""
+    parsed = json_loads(task.get("tags"), [])
+    if not isinstance(parsed, list):
+        return []
+    result: list[str] = []
+    for item in parsed:
+        if isinstance(item, str) and item and item not in result:
+            result.append(item)
+    return result
+
+
+def load_tag_map(
+    conn: sqlite3.Connection, group_ids: str | Iterable[str]
+) -> dict[str, dict[str, Any]]:
+    """Hydration map ``tag id -> TaskTag`` for a read scope."""
+    groups = group_id_list(group_ids)
+    if not groups:
+        return {}
+    placeholders = in_clause(groups)
+    tag_rows = rows(
+        conn,
+        "SELECT tg.*, g.name AS group_name FROM task_tags tg "
+        "JOIN groups g ON g.id=tg.group_id "
+        f"WHERE tg.group_id IN ({placeholders}) ORDER BY g.sort_order, g.name, tg.name",
+        tuple(groups),
+    )
+    return {
+        tag["id"]: {
+            "id": tag["id"],
+            "groupId": tag.get("group_id", ""),
+            "groupName": tag.get("group_name", ""),
+            "name": tag.get("name", ""),
+            "color": tag.get("color", "#5865f2"),
+        }
+        for tag in tag_rows
+    }
+
+
+def task_payload(
+    task: dict[str, Any],
+    today: date | None = None,
+    tag_map: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """CamelCase projection of one task row (expects the member/group join)."""
     current_day = today or local_now().date()
+    stored_tag_ids = task_tag_ids(task)
+    available = tag_map or {}
+    hydrated_tags = [available[tag_id] for tag_id in stored_tag_ids if tag_id in available]
     return {
         "id": task["id"],
         "groupId": task.get("group_id", ""),
+        "groupName": task.get("group_name", ""),
+        "teamId": task.get("group_team_id", ""),
+        "teamName": task.get("team_name", ""),
         "memberId": task.get("member_id", ""),
         "memberName": task.get("member_name", ""),
         "memberTitle": task.get("member_title", ""),
@@ -198,6 +273,8 @@ def task_payload(task: dict[str, Any], today: date | None = None) -> dict[str, A
         "difficulty": task.get("difficulty") or "medium",
         "loadPoints": load_points(task),
         "expectedDate": task.get("expected_date", "") or "",
+        "tagIds": stored_tag_ids,
+        "tags": hydrated_tags,
         "createdBy": task.get("created_by", ""),
         "createdAt": task.get("created_at", ""),
         "updatedAt": task.get("updated_at", ""),
@@ -207,7 +284,20 @@ def task_payload(task: dict[str, Any], today: date | None = None) -> dict[str, A
 
 
 def list_group_tasks(conn: sqlite3.Connection, group_id: str) -> list[dict[str, Any]]:
-    return rows(conn, f"{TASK_SELECT}WHERE t.group_id=? {TASK_ORDER}", (group_id,))
+    return list_tasks(conn, [group_id])
+
+
+def list_tasks(
+    conn: sqlite3.Connection, group_ids: str | Iterable[str]
+) -> list[dict[str, Any]]:
+    groups = group_id_list(group_ids)
+    if not groups:
+        return []
+    return rows(
+        conn,
+        f"{TASK_SELECT}WHERE t.group_id IN ({in_clause(groups)}) {TASK_ORDER}",
+        tuple(groups),
+    )
 
 
 def get_task_row(
@@ -217,19 +307,42 @@ def get_task_row(
     return found[0] if found else None
 
 
-def build_workload_section(
-    conn: sqlite3.Connection, group_id: str
-) -> dict[str, Any]:
-    """Return the workload array and aggregate summary for one group.
-
-    Every group member is included, even with zero tasks, ordered by member sort order.
-    """
-    members = rows(
+def _member_rows_for_scope(
+    conn: sqlite3.Connection, groups: list[str]
+) -> list[dict[str, Any]]:
+    if not groups:
+        return []
+    return rows(
         conn,
-        "SELECT * FROM members WHERE group_id=? ORDER BY sort_order, created_at, id",
-        (group_id,),
+        "SELECT m.*, g.name AS group_name, g.team_id AS group_team_id, "
+        "tm.name AS team_name FROM members m "
+        "JOIN groups g ON g.id=m.group_id JOIN teams tm ON tm.id=g.team_id "
+        f"WHERE m.group_id IN ({in_clause(groups)}) "
+        "ORDER BY g.sort_order, g.name, m.sort_order, m.created_at, m.id",
+        tuple(groups),
     )
-    task_rows = rows(conn, "SELECT * FROM member_tasks WHERE group_id=?", (group_id,))
+
+
+def build_workload_section(
+    conn: sqlite3.Connection, group_ids: str | Iterable[str]
+) -> dict[str, Any]:
+    """Return the workload array and aggregate summary for one or more groups.
+
+    Every member in scope is included, even with zero tasks, ordered by group then member
+    sort order. A single-group scope produces exactly the legacy payload.
+    """
+    groups = group_id_list(group_ids)
+    members = _member_rows_for_scope(conn, groups)
+    task_rows = (
+        rows(
+            conn,
+            "SELECT * FROM member_tasks "
+            f"WHERE group_id IN ({in_clause(groups)})",
+            tuple(groups),
+        )
+        if groups
+        else []
+    )
     tasks_by_member: dict[str, list[dict[str, Any]]] = {}
     for task in task_rows:
         tasks_by_member.setdefault(task.get("member_id", ""), []).append(task)
@@ -270,14 +383,25 @@ def build_workload_section(
     }
 
 
-def build_tasks_payload(conn: sqlite3.Connection, group_id: str) -> dict[str, Any]:
-    """Full GET /tasks payload: tasks plus workload section plus meta."""
+def build_tasks_payload(
+    conn: sqlite3.Connection,
+    group_ids: str | Iterable[str],
+    scope_ctx: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Full GET /tasks payload: tasks plus workload section plus meta (+ scope metadata)."""
+    groups = group_id_list(group_ids)
     today = local_now().date()
-    tasks = [task_payload(task, today) for task in list_group_tasks(conn, group_id)]
-    section = build_workload_section(conn, group_id)
-    return {
+    tag_map = load_tag_map(conn, groups)
+    tasks = [
+        task_payload(task, today, tag_map) for task in list_tasks(conn, groups)
+    ]
+    section = build_workload_section(conn, groups)
+    payload: dict[str, Any] = {
         "tasks": tasks,
         "workloads": section["workloads"],
         "summary": section["summary"],
         "meta": section["meta"],
     }
+    if scope_ctx is not None:
+        payload["scope"] = scope_ctx
+    return payload
