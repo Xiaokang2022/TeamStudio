@@ -57,7 +57,7 @@ export interface SelectProps {
 const PANEL_GAP = 6;
 const PANEL_EDGE = 8;
 const PANEL_MAX_HEIGHT = 320;
-const PANEL_MIN_WIDTH = 180;
+const PANEL_MIN_WIDTH = 128;
 const TYPEAHEAD_RESET_MS = 700;
 const OPEN_SCROLL_GRACE_MS = 260;
 
@@ -143,6 +143,9 @@ export function Select({
     const rect = trigger.getBoundingClientRect();
     const viewportHeight = window.innerHeight;
     const viewportWidth = window.innerWidth;
+    // Keep the popup flush with the trigger (like a native select) so the list
+    // never looks horizontally offset; only very narrow triggers get a small
+    // minimum for readable option labels.
     const width = Math.min(Math.max(rect.width, PANEL_MIN_WIDTH), viewportWidth - PANEL_EDGE * 2);
     const left = Math.min(
       Math.max(PANEL_EDGE, rect.left),

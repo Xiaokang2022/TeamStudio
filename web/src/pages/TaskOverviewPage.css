@@ -1658,6 +1658,19 @@
   gap: 6px;
 }
 
+/* The legacy filter wrapper used to draw its own chevron and focus ring; the
+   embedded Select now owns both, so cancel the leftovers to avoid a doubled
+   caret and a ghost outline around the trigger. */
+.tasks-filter-select.tasks-filter-select-custom::after {
+  content: none;
+  display: none;
+}
+
+.tasks-filter-select.tasks-filter-select-custom:focus-within {
+  border-color: transparent;
+  box-shadow: none;
+}
+
 .tasks-filter-select-custom > svg {
   flex: none;
   color: var(--text-3);

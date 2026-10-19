@@ -174,7 +174,25 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
       const panel = page.locator(".ts-select-panel").first();
       const bg = await panel.evaluate((el) => getComputedStyle(el).backgroundColor).catch(() => "");
       const opaque = /rgb\(/.test(bg) && !/rgba\([^)]*,\s*0(\.\d+)?\)/.test(bg);
-      record("#9 custom select opens with opaque panel", (await panel.count()) > 0 && opaque, { bg });
+      const [triggerBox, panelBox] = await Promise.all([trigger.boundingBox(), panel.boundingBox()]);
+      const aligned =
+        Boolean(triggerBox && panelBox) &&
+        Math.abs(triggerBox.x - panelBox.x) <= 1 &&
+        Math.abs(triggerBox.width - panelBox.width) <= 1;
+      const legacyChevron = await page.evaluate(() => {
+        const wrap = document.querySelector(".tasks-filter-select-custom");
+        if (!wrap) return null;
+        const after = getComputedStyle(wrap, "::after");
+        // Chromium reports "none" / '""' / "normal" for a suppressed pseudo.
+        const suppressed =
+          after.display === "none" || after.content === "none" || after.content === '""' || after.content === "normal";
+        return suppressed ? "suppressed" : after.content;
+      });
+      record(
+        "#9 custom select opens aligned, opaque, no legacy chevron",
+        (await panel.count()) > 0 && opaque && aligned && legacyChevron === "suppressed",
+        { bg, aligned, legacyChevron, triggerBox, panelBox },
+      );
     } else {
       record("#9 custom select present in task dialog", false, "no .ts-select-trigger");
     }
