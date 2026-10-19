@@ -199,12 +199,22 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* Column headers use a flat tint: light red for the red board, light grey for
+   the black board, with deeper tones in the dark theme. */
 .rb-column-red .rb-column-head {
-  background: linear-gradient(118deg, color-mix(in srgb, var(--red) 12%, transparent), transparent 72%);
+  background: color-mix(in srgb, var(--red) 10%, var(--surface));
 }
 
 .rb-column-black .rb-column-head {
-  background: linear-gradient(118deg, color-mix(in srgb, var(--text) 8%, transparent), transparent 72%);
+  background: color-mix(in srgb, var(--text) 6%, var(--surface));
+}
+
+:root[data-theme="dark"] .rb-column-red .rb-column-head {
+  background: color-mix(in srgb, var(--red) 14%, var(--surface));
+}
+
+:root[data-theme="dark"] .rb-column-black .rb-column-head {
+  background: color-mix(in srgb, var(--text) 7%, var(--surface));
 }
 
 .rb-column-icon {
