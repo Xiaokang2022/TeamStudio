@@ -87,11 +87,7 @@
   width: 68px;
   height: 68px;
   border-radius: 50%;
-  background: radial-gradient(
-    circle at 32% 32%,
-    color-mix(in srgb, var(--email-tone, var(--accent)) var(--deco-blob-alpha, 16%), transparent),
-    transparent 70%
-  );
+  background: color-mix(in srgb, var(--email-tone, var(--accent)) 10%, transparent);
 }
 
 .email-stat.is-green {

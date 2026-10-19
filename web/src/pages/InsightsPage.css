@@ -131,11 +131,7 @@
   width: 74px;
   height: 74px;
   border-radius: 50%;
-  background: radial-gradient(
-    circle at 32% 32%,
-    color-mix(in srgb, var(--kpi-tone, var(--accent)) var(--deco-blob-alpha, 16%), transparent),
-    transparent 70%
-  );
+  background: color-mix(in srgb, var(--kpi-tone, var(--accent)) 9%, transparent);
   pointer-events: none;
 }
 
