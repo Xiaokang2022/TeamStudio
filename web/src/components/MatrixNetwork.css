@@ -1,0 +1,334 @@
+/* ============================================================
+   Responsibility matrix — page chrome + network view
+   NOTE: MatrixPage.css is owned by the theme agent. The small
+   amount of chrome needed by the new view switcher / member
+   filter lives here, scoped to `.mx-page` so nothing leaks.
+   Everything graph-related is scoped to `.mx-network`.
+   ============================================================ */
+
+/* ---------- page chrome (view switcher + member filter) ---------- */
+.mx-page .mx-panel-header {
+  flex-wrap: wrap;
+  row-gap: 10px;
+}
+
+.mx-page .mx-panel-header > .toolbar {
+  min-width: 0;
+}
+
+.mx-page .mx-member-filter {
+  width: auto;
+  min-width: 172px;
+  max-width: 240px;
+  padding: 6px 30px 6px 10px;
+  font-size: 12px;
+  background-color: var(--surface);
+}
+
+.mx-page .mx-view-switch {
+  flex: none;
+}
+
+.mx-page .mx-view-switch button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.mx-page .mx-view-switch button svg {
+  opacity: 0.85;
+}
+
+.mx-page .mx-role-col {
+  width: 104px;
+}
+
+.mx-page .mx-role-badge {
+  font-size: 9.5px;
+}
+
+/* ---------- network view ---------- */
+.mx-network {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  min-width: 0;
+}
+
+.mx-network-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  flex-wrap: wrap;
+}
+
+.mx-network-legend {
+  display: flex;
+  align-items: center;
+  gap: 6px 16px;
+  flex-wrap: wrap;
+}
+
+.mx-network-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.mx-network-legend-line {
+  width: 26px;
+  height: 0;
+  flex: none;
+  border-top: 2px solid var(--accent);
+  border-radius: 2px;
+}
+
+.mx-network-legend-line.is-backup {
+  border-top-style: dashed;
+  border-top-color: var(--text-3);
+}
+
+.mx-network-hint {
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+.mx-network-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  -webkit-overflow-scrolling: touch;
+}
+
+.mx-network-canvas {
+  display: block;
+  width: 100%;
+  min-width: 820px;
+  height: auto;
+  font-family: var(--font-sans);
+}
+
+.mx-network-dot-grid {
+  fill: var(--border-strong);
+  opacity: 0.55;
+}
+
+.mx-network-column-label {
+  fill: var(--text-3);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+}
+
+/* ---------- edges ---------- */
+.mx-network-edges {
+  animation: fade-in 0.45s var(--ease) both;
+}
+
+.mx-network-edge {
+  fill: none;
+  stroke-linecap: round;
+  pointer-events: none;
+  transition:
+    opacity 0.2s var(--ease),
+    stroke-width 0.2s var(--ease),
+    stroke 0.2s var(--ease);
+}
+
+.mx-network-edge.is-owner {
+  stroke: var(--accent);
+  stroke-width: 1.6;
+  opacity: 0.5;
+}
+
+.mx-network-edge.is-backup {
+  stroke: var(--text-3);
+  stroke-width: 1.3;
+  stroke-dasharray: 5 5;
+  opacity: 0.38;
+}
+
+.mx-network-edge.is-active {
+  opacity: 0.95;
+  stroke-width: 2.1;
+}
+
+.mx-network-edge.is-dimmed {
+  opacity: 0.07;
+}
+
+/* ---------- nodes ---------- */
+.mx-network-nodes {
+  animation: fade-in 0.45s var(--ease) both;
+}
+
+.mx-network-node {
+  transition: opacity 0.2s var(--ease);
+}
+
+.mx-network-node.is-dimmed {
+  opacity: 0.16;
+}
+
+.mx-network-person,
+.mx-network-area {
+  cursor: pointer;
+  outline: none;
+}
+
+.mx-network-person-dot {
+  fill: var(--surface-2);
+  stroke: var(--border-strong);
+  stroke-width: 1.4;
+  transition:
+    fill 0.18s var(--ease),
+    stroke 0.18s var(--ease);
+}
+
+.mx-network-person.is-related .mx-network-person-dot {
+  stroke: var(--accent);
+}
+
+.mx-network-person.is-selected .mx-network-person-dot {
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+
+.mx-network-person:hover .mx-network-person-dot,
+.mx-network-person:focus-visible .mx-network-person-dot {
+  fill: var(--accent-soft-2);
+  stroke: var(--accent);
+}
+
+.mx-network-person.is-selected:hover .mx-network-person-dot {
+  fill: var(--accent);
+}
+
+.mx-network-person-initial {
+  fill: var(--text-2);
+  font-size: 10.5px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.mx-network-person.is-selected .mx-network-person-initial {
+  fill: var(--accent-contrast);
+}
+
+.mx-network-person-label {
+  fill: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  pointer-events: none;
+  transition: fill 0.18s var(--ease);
+}
+
+.mx-network-person.is-selected .mx-network-person-label,
+.mx-network-person:hover .mx-network-person-label,
+.mx-network-person:focus-visible .mx-network-person-label {
+  fill: var(--accent);
+}
+
+.mx-network-count {
+  fill: var(--text-3);
+  font-size: 9.5px;
+  font-family: var(--font-mono);
+  pointer-events: none;
+}
+
+.mx-network-focus-ring {
+  fill: none;
+  stroke: var(--accent);
+  stroke-opacity: 0.3;
+  stroke-width: 1;
+}
+
+.mx-network-area-rect {
+  fill: var(--surface-2);
+  stroke: var(--border-strong);
+  stroke-width: 1;
+  transition:
+    fill 0.18s var(--ease),
+    stroke 0.18s var(--ease);
+}
+
+.mx-network-area:hover .mx-network-area-rect,
+.mx-network-area:focus-visible .mx-network-area-rect {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+}
+
+.mx-network-area.is-related .mx-network-area-rect {
+  stroke: var(--accent);
+}
+
+.mx-network-area.is-focused .mx-network-area-rect {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+  stroke-width: 1.6;
+}
+
+.mx-network-area-label {
+  fill: var(--text);
+  font-size: 11.5px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.mx-network-area-state {
+  fill: var(--text-3);
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
+.mx-network-area.is-focused .mx-network-area-state {
+  fill: var(--accent);
+}
+
+.mx-network-person:focus-visible .mx-network-person-dot,
+.mx-network-area:focus-visible .mx-network-area-rect {
+  stroke-width: 2.2;
+}
+
+/* ---------- responsive ---------- */
+@media (max-width: 960px) {
+  .mx-page .mx-member-filter {
+    min-width: 150px;
+  }
+}
+
+@media (max-width: 720px) {
+  .mx-network {
+    padding: 12px;
+    gap: 10px;
+  }
+
+  .mx-network-hint {
+    display: none;
+  }
+
+  .mx-page .mx-panel-header {
+    align-items: flex-start;
+  }
+
+  .mx-page .mx-panel-header > .toolbar {
+    width: 100%;
+  }
+
+  .mx-page .mx-member-filter {
+    flex: 1;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .mx-page .mx-view-switch {
+    margin-left: auto;
+  }
+}

@@ -1,0 +1,27 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+backend/**/__pycache__/
+
+# Node
+web/node_modules/
+web/dist/
+web/tsconfig.tsbuildinfo
+*.log
+npm-debug.log*
+
+# Runtime data and secrets
+data/
+!data/.gitkeep
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local verification artifacts
+artifacts/
+screenshots/
