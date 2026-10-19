@@ -12,12 +12,8 @@
   margin-bottom: 0;
 }
 
-/* Member filter uses the shared custom Select: keep it compact in the toolbar
-   instead of stretching to the full column width. */
-.ts-select.mx-member-filter {
-  width: auto;
-  min-width: 168px;
-}
+/* Member filter sizing lives in MatrixNetwork.css together with the page chrome
+   rules so both views share one source of truth. */
 
 /* Aggregate scope: owning development group badge. */
 .mx-group-badge {

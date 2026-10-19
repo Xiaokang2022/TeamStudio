@@ -161,6 +161,27 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   record("#13 range chips + #10 tag library + #11 group labels", info.hasTagLibrary && info.hasGroupBadge, info);
   await page.screenshot({ path: SHOT("tasks-light") });
 
+  const filterTrigger = page.locator(".tasks-filter-select-custom .ts-select-trigger").first();
+  if (await filterTrigger.count()) {
+    await filterTrigger.click();
+    await page.waitForTimeout(280);
+    const filterPanel = page.locator(".ts-select-panel").first();
+    const filterSearch = filterPanel.locator(".ts-select-search-input");
+    const hasFilterSearch = (await filterSearch.count()) > 0;
+    let filteredLabels = [];
+    if (hasFilterSearch) {
+      await filterSearch.fill("苏");
+      await page.waitForTimeout(260);
+      filteredLabels = await filterPanel.locator(".ts-select-option-label").allInnerTexts();
+    }
+    record("#9 task member filter supports search", hasFilterSearch && filteredLabels.length === 1, {
+      hasFilterSearch,
+      filteredLabels,
+    });
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.waitForTimeout(200);
+  }
+
   const create = page.getByRole("button", { name: /新建任务/ }).first();
   if (await create.count()) {
     await create.click();

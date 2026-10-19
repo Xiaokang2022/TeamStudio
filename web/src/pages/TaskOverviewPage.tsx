@@ -760,6 +760,7 @@ export default function TaskOverviewPage() {
             onChange={setMemberFilter}
             ariaLabel="按成员筛选"
             className="tasks-member-select"
+            searchable
             options={[
               { value: "all", label: "全部成员" },
               ...memberOptions.map((option) => ({ value: option.id, label: option.name })),

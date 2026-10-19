@@ -16,13 +16,13 @@
   min-width: 0;
 }
 
+/* The member filter is a self-drawn Select now: size the wrapper only, never
+   paint a second box around the trigger (that used to leave a mismatched slab
+   around the control, especially visible in the dark theme). */
 .mx-page .mx-member-filter {
   width: auto;
   min-width: 172px;
   max-width: 240px;
-  padding: 6px 30px 6px 10px;
-  font-size: 12px;
-  background-color: var(--surface);
 }
 
 .mx-page .mx-view-switch {
