@@ -3387,34 +3387,23 @@ select option:checked {
   }
 }
 
-/* ---------- Reduced motion ---------- */
-/* Light theme only: deepen the KPI corner washes so they read clearly on paper.
-   The dark theme intentionally keeps the original hard-edged 9/10/5% circles. */
+/* ---------- Theme-specific decoration ---------- */
+/* Light theme only: same simple flat corner block as the dark theme, just with
+   deeper pigment so it stays visible on paper. No gradients, no extra shapes. */
 :root[data-theme="light"] .tasks-kpi::after,
 :root[data-theme="light"] .ins-kpi::after {
-  background: radial-gradient(
-    circle at 32% 32%,
-    color-mix(in srgb, var(--kpi-tone, var(--accent)) var(--deco-blob-alpha, 18%), transparent),
-    transparent 72%
-  );
+  background: color-mix(in srgb, var(--kpi-tone, var(--accent)) var(--deco-blob-alpha, 18%), transparent);
 }
 
 :root[data-theme="light"] .email-stat::after {
-  background: radial-gradient(
-    circle at 32% 32%,
-    color-mix(in srgb, var(--email-tone, var(--accent)) var(--deco-email-alpha, 19%), transparent),
-    transparent 72%
-  );
+  background: color-mix(in srgb, var(--email-tone, var(--accent)) var(--deco-email-alpha, 19%), transparent);
 }
 
 :root[data-theme="light"] .links-card::after {
-  background: radial-gradient(
-    circle at 32% 32%,
-    color-mix(in srgb, var(--accent) var(--deco-soft-alpha, 10%), transparent),
-    transparent 72%
-  );
+  background: color-mix(in srgb, var(--accent) var(--deco-soft-alpha, 10%), transparent);
 }
 
+/* ---------- Reduced motion ---------- */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
