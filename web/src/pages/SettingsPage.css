@@ -2135,3 +2135,570 @@
     flex: 1 1 100%;
   }
 }
+
+/* ============================================================
+   Round 6 · whole-system reset (device Admin only · danger zone)
+   ============================================================ */
+
+/* Tab modifier: keeps the settings-tab structure, tinted as destructive. */
+.settings-tab.settings-danger-tab .settings-tab-icon {
+  color: var(--red);
+  background: var(--red-soft);
+}
+
+.settings-tab.settings-danger-tab .settings-tab-copy small {
+  color: color-mix(in srgb, var(--red) 66%, var(--text-3));
+}
+
+.settings-tab.settings-danger-tab:hover {
+  background: color-mix(in srgb, var(--red-soft) 62%, var(--surface-2));
+  color: var(--text);
+}
+
+.settings-tab.settings-danger-tab.active {
+  background: var(--red-soft);
+  border-color: color-mix(in srgb, var(--red) 34%, var(--border));
+}
+
+.settings-tab.settings-danger-tab.active .settings-tab-icon {
+  color: #fff;
+  background: var(--danger-solid);
+  box-shadow: 0 7px 16px -10px color-mix(in srgb, var(--danger-solid) 70%, transparent);
+}
+
+/* ---------- load error / forbidden helpers ---------- */
+
+.settings-danger-load-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 13px;
+}
+
+.settings-danger-load-icon {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.settings-danger-load-copy {
+  flex: 1;
+  min-width: 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.settings-danger-load-copy strong {
+  font-size: 13px;
+}
+
+.settings-danger-load-copy p {
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--text-3);
+}
+
+.settings-danger-load-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---------- danger hero ---------- */
+
+.settings-danger-hero {
+  position: relative;
+  overflow: hidden;
+  padding: 20px;
+  border-color: color-mix(in srgb, var(--red) 26%, var(--border));
+  background:
+    var(--surface-raised),
+    linear-gradient(150deg, var(--red-soft), var(--surface) 62%);
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    var(--shadow-card);
+}
+
+.settings-danger-hero:hover {
+  border-color: color-mix(in srgb, var(--red) 44%, var(--border-strong));
+}
+
+.settings-danger-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: linear-gradient(
+    180deg,
+    var(--danger-solid),
+    color-mix(in srgb, var(--red) 30%, transparent)
+  );
+}
+
+.settings-danger-hero-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+}
+
+.settings-danger-hero-icon {
+  width: 42px;
+  height: 42px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  background: var(--red-soft);
+  color: var(--red);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--red) 20%, transparent);
+}
+
+.settings-danger-hero-head > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-danger-hero-eyebrow {
+  display: inline-block;
+  margin-bottom: 4px;
+  font-size: 9.5px;
+  font-weight: 750;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--red);
+}
+
+.settings-danger-hero h2 {
+  font-size: 16px;
+  letter-spacing: -0.015em;
+}
+
+.settings-danger-hero-head p {
+  margin-top: 5px;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text-2);
+}
+
+/* the phase that must be typed verbatim */
+
+.settings-danger-target {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 16px;
+  padding: 13px 15px;
+  border: 1px dashed color-mix(in srgb, var(--red) 38%, var(--border-strong));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 74%, transparent);
+}
+
+.settings-danger-target-label {
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  color: var(--text-3);
+}
+
+.settings-danger-target-name {
+  max-width: 100%;
+  padding: 3px 10px;
+  border: 1px solid color-mix(in srgb, var(--red) 30%, var(--border));
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--red);
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  word-break: break-word;
+}
+
+.settings-danger-target-hint {
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+.settings-danger-target-empty {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.6;
+  color: var(--red);
+}
+
+/* ---------- what gets destroyed ---------- */
+
+.settings-danger-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-danger-notes li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--text-2);
+}
+
+.settings-danger-notes li svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--red);
+  opacity: 0.85;
+}
+
+/* ---------- trigger row ---------- */
+
+.settings-danger-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid color-mix(in srgb, var(--red) 18%, var(--border));
+}
+
+.settings-danger-actions-hint {
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+/* ---------- stats card ---------- */
+
+.settings-danger-card {
+  overflow: hidden;
+}
+
+.settings-danger-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 16px 18px 14px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(
+    180deg,
+    var(--surface),
+    color-mix(in srgb, var(--surface-2) 62%, var(--surface))
+  );
+}
+
+.settings-danger-card-head h2 {
+  font-size: 14.5px;
+  letter-spacing: -0.012em;
+}
+
+.settings-danger-card-head p {
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+.settings-danger-card-total {
+  flex: none;
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--red) 30%, var(--border));
+  border-radius: 99px;
+  background: var(--red-soft);
+  color: var(--red);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 1.5;
+}
+
+.settings-danger-stats {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+  padding: 16px 18px 0;
+}
+
+.settings-danger-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--surface-2);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+}
+
+.settings-danger-stat-icon {
+  width: 27px;
+  height: 27px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 5px;
+  border-radius: 8px;
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.settings-danger-stat-value {
+  font-size: 20px;
+  font-weight: 750;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.settings-danger-stat-label {
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+.settings-danger-stats-compact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 14px 18px 0;
+}
+
+.settings-danger-stat-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  background: var(--surface-2);
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+.settings-danger-stat-mini strong {
+  color: var(--text-2);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-danger-last-reset {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 0;
+  padding: 13px 18px 16px;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+.settings-danger-last-reset svg {
+  flex: none;
+}
+
+.settings-danger-last-reset strong {
+  color: var(--text-2);
+  font-weight: 650;
+}
+
+/* ---------- success panel ---------- */
+
+.settings-danger-success {
+  padding: 18px;
+  border-color: color-mix(in srgb, var(--green) 30%, var(--border));
+  background:
+    var(--surface-raised),
+    linear-gradient(150deg, var(--green-soft), var(--surface) 62%);
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    var(--shadow-card);
+}
+
+.settings-danger-success:hover {
+  border-color: color-mix(in srgb, var(--green) 44%, var(--border-strong));
+}
+
+.settings-danger-success-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+}
+
+.settings-danger-success-icon {
+  width: 42px;
+  height: 42px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  background: var(--green-soft);
+  color: var(--green);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 22%, transparent);
+}
+
+.settings-danger-success-head h2 {
+  font-size: 16px;
+  letter-spacing: -0.015em;
+}
+
+.settings-danger-success-head p {
+  margin-top: 3px;
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--text-2);
+}
+
+.settings-danger-success-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 15px 0 0;
+}
+
+.settings-danger-success-meta > div {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 76%, transparent);
+}
+
+.settings-danger-success-meta dt {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.settings-danger-success-meta dd {
+  margin: 0;
+  font-size: 11.5px;
+  font-weight: 650;
+  line-height: 1.5;
+  color: var(--text-2);
+  word-break: break-word;
+}
+
+.settings-danger-success-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface-2);
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--text-2);
+}
+
+.settings-danger-success-note svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--green);
+}
+
+.settings-danger-success-note strong {
+  color: var(--text);
+}
+
+.settings-danger-success-note code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+
+/* ---------- responsive ---------- */
+
+@media (max-width: 1280px) {
+  .settings-danger-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .settings-danger-hero {
+    padding: 16px;
+  }
+
+  .settings-danger-hero-head {
+    gap: 10px;
+  }
+
+  .settings-danger-hero h2 {
+    font-size: 14.5px;
+  }
+
+  .settings-danger-target-name {
+    font-size: 14px;
+  }
+
+  .settings-danger-actions {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 9px;
+  }
+
+  .settings-danger-actions .btn {
+    width: 100%;
+  }
+
+  .settings-danger-actions-hint {
+    text-align: center;
+  }
+
+  .settings-danger-card-head {
+    padding: 14px 14px 12px;
+  }
+
+  .settings-danger-card-total {
+    align-self: flex-start;
+  }
+
+  .settings-danger-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    padding: 14px 14px 0;
+  }
+
+  .settings-danger-stats-compact {
+    padding: 12px 14px 0;
+  }
+
+  .settings-danger-last-reset {
+    padding: 12px 14px 14px;
+  }
+
+  .settings-danger-success {
+    padding: 15px;
+  }
+
+  .settings-danger-success-meta {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-danger-load-actions {
+    width: 100%;
+  }
+
+  .settings-danger-load-actions .btn {
+    flex: 1;
+  }
+}

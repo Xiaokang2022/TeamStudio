@@ -210,6 +210,36 @@ def _load_secret() -> bytes:
 _SECRET = _load_secret()
 
 
+def rotate_session_secret() -> bool:
+    """Replace the in-process session signing secret with a fresh random value.
+
+    A factory reset must invalidate every session cookie that was issued before it, so
+    the signing secret is regenerated in place. When ``TEAMSTUDIO_SESSION_SECRET`` pins
+    the secret through the environment nothing is overwritten and ``False`` is returned;
+    otherwise ``data/.session_secret`` is rewritten in the same format as
+    :func:`_load_secret` (chmod 0600 best effort), the module-level secret is replaced
+    immediately and ``True`` is returned. Cookies signed with the previous secret stop
+    verifying; ``hash_verification_code`` output changes as well, so pending e-mail codes
+    are invalidated too.
+    """
+    global _SECRET
+    if os.environ.get("TEAMSTUDIO_SESSION_SECRET"):
+        return False
+    secret = base64.urlsafe_b64encode(os.urandom(48)).decode("ascii")
+    path = _secret_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(secret + "\n", encoding="utf-8")
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    except OSError:  # pragma: no cover - best effort; the in-process secret still rotates
+        pass
+    _SECRET = secret.encode("utf-8")
+    return True
+
+
 def _b64encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 

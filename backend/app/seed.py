@@ -5,7 +5,7 @@ from __future__ import annotations
 import calendar
 from datetime import date, datetime, timedelta
 
-from .db import db, json_dumps, new_id, now_iso, rows, scalar
+from .db import db, get_meta, json_dumps, new_id, now_iso, rows, scalar
 
 TEAMS = [
     {
@@ -222,7 +222,17 @@ def _future_day(base: date, offset: int) -> str:
 
 
 def seed_if_empty() -> bool:
+    """Populate the demo workspace once for a brand-new database.
+
+    An intentional factory reset (``POST /api/system/reset``) empties every table and
+    writes the ``factoryResetAt`` marker to ``app_meta``. That reset is a product
+    decision: the deployment must stay totally empty (default settings, no demo teams,
+    members or accounts) until its operator creates real data again, so the seeder
+    refuses to run while the marker exists — including after every restart.
+    """
     with db() as conn:
+        if get_meta(conn, "factoryResetAt") is not None:
+            return False
         if scalar(conn, "SELECT COUNT(*) FROM teams", default=0):
             return False
         now = now_iso()

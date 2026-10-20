@@ -21,6 +21,7 @@ from .routers import bootstrap as bootstrap_router
 from .routers import email as email_router
 from .routers import profile as profile_router
 from .routers import settings as settings_router
+from .routers import system as system_router
 from .routers import users as users_router
 from .routers import workspaces as workspaces_router
 
@@ -135,6 +136,7 @@ app.include_router(email_router.router)
 app.include_router(users_router.router)
 app.include_router(profile_router.router)
 app.include_router(workspaces_router.router)
+app.include_router(system_router.router)
 if workspace and calendar and boards and tasks:
     app.include_router(workspace.router)
     app.include_router(calendar.router)

@@ -63,7 +63,7 @@ import {
 import { api, ApiError } from "../api";
 import { useApp } from "../store";
 import { useToast } from "../components/Toast";
-import { ConfirmDialog } from "../components/Modal";
+import { ConfirmDialog, ConfirmInputDialog } from "../components/Modal";
 import { LoadingBlock } from "../components/Feedback";
 import { Avatar } from "../components/Avatar";
 import { WorkspaceManager } from "../components/WorkspaceManager";
@@ -90,6 +90,9 @@ import type {
   EmailStatus,
   ModuleFlags,
   SettingsMeta,
+  SystemResetInfo,
+  SystemResetResult,
+  SystemResetStats,
   UserAccount,
   UserRole,
   UsersData,
@@ -106,7 +109,8 @@ type TabKey =
   | "accounts"
   | "sso"
   | "email"
-  | "json";
+  | "json"
+  | "reset";
 type UpdateSettings = (mutate: (next: AppSettings) => void) => void;
 type ErrorsFor = (prefix: string) => ValidationDetail[];
 type Whitelist = AppSettings["auth"]["adminWhitelist"];
@@ -141,6 +145,18 @@ const TABS: { key: TabKey; label: string; hint: string; icon: LucideIcon }[] = [
   { key: "email", label: "邮件服务", hint: "SMTP 中继与验证码邮件", icon: Mail },
   { key: "json", label: "高级 JSON", hint: "完整配置与校验", icon: Braces },
 ];
+
+/**
+ * The factory-reset tab is appended only for the deployment device's built-in Admin.
+ * It is deliberately kept out of `TABS` / `TAB_KEYS` so no other identity can deep-link
+ * into it: `#/settings?tab=reset` falls back to a normal tab for stored super admins.
+ */
+const RESET_TAB: { key: TabKey; label: string; hint: string; icon: LucideIcon } = {
+  key: "reset",
+  label: "重置系统",
+  hint: "仅设备管理员 · 危险操作",
+  icon: ShieldAlert,
+};
 
 const MODULE_META: {
   key: keyof ModuleFlags;
@@ -3873,6 +3889,383 @@ function WorkspaceSettingsSection() {
   );
 }
 
+/* ------------------------------------------------------------------ */
+/* Whole-system factory reset (deployment device Admin only)           */
+/* ------------------------------------------------------------------ */
+
+const RESET_PRIMARY_STATS: { key: keyof SystemResetStats; label: string; icon: LucideIcon }[] = [
+  { key: "teams", label: "团队", icon: Building2 },
+  { key: "groups", label: "开发组", icon: Layers3 },
+  { key: "members", label: "成员", icon: UsersRound },
+  { key: "tasks", label: "任务", icon: ListTodo },
+  { key: "todos", label: "待办", icon: CheckCircle2 },
+  { key: "accounts", label: "账号", icon: Users },
+];
+
+const RESET_EXTRA_STATS: { key: keyof SystemResetStats; label: string }[] = [
+  { key: "works", label: "工作记录" },
+  { key: "boards", label: "红黑榜" },
+  { key: "entries", label: "红黑记录" },
+  { key: "links", label: "常用链接" },
+  { key: "matrix", label: "责任田" },
+  { key: "announcements", label: "公告" },
+  { key: "tags", label: "任务标签" },
+  { key: "emailCodes", label: "邮箱验证码" },
+  { key: "activationTokens", label: "激活令牌" },
+  { key: "emailLogs", label: "邮件日志" },
+  { key: "auditLogs", label: "审计日志" },
+];
+
+/**
+ * Dangerous "restore defaults and erase everything" panel. It is rendered only for the
+ * deployment device's built-in Admin, requires two confirmations (a yes/no dialog and an
+ * exact site-name input) and refreshes the whole shell after the backend wiped the data.
+ */
+function SystemResetSection({ onCompleted }: { onCompleted: () => Promise<void> }) {
+  const { toast } = useToast();
+  const [info, setInfo] = useState<SystemResetInfo | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [forbidden, setForbidden] = useState(false);
+  const [step, setStep] = useState<"closed" | "confirm" | "input">("closed");
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<SystemResetResult | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setLoadError("");
+    try {
+      const next = await api.systemResetInfo();
+      setInfo(next);
+      setForbidden(false);
+    } catch (error) {
+      if (error instanceof ApiError && (error.status === 403 || error.status === 401)) {
+        setForbidden(true);
+      } else {
+        setLoadError(error instanceof ApiError ? error.message : "读取系统重置信息失败");
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const submitReset = useCallback(
+    async (value: string) => {
+      if (!info || !info.siteName.trim() || submitting) return;
+      setSubmitting(true);
+      let payload: SystemResetResult;
+      try {
+        payload = await api.resetSystem({ confirmName: value.trim(), acknowledge: true });
+      } catch (error) {
+        if (error instanceof ApiError) {
+          if (error.status === 403) {
+            setStep("closed");
+            setForbidden(true);
+            toast("仅部署设备内置 Admin 可以重置系统", "error");
+          } else if (error.status === 422 && error.code === "confirm_mismatch") {
+            const expected =
+              error.details && typeof error.details === "object"
+                ? (error.details as { expected?: unknown }).expected
+                : undefined;
+            toast(
+              typeof expected === "string" && expected
+                ? `站点名称不匹配，请完整输入「${expected}」`
+                : "站点名称不匹配，重置未执行",
+              "error",
+            );
+            // Return to the first confirmation so the operator retries deliberately.
+            setStep("confirm");
+          } else if (error.status === 422 && error.code === "acknowledge_required") {
+            toast("请确认你已了解该操作的危险性", "error");
+          } else {
+            toast(error.message || "重置失败，请稍后重试", "error");
+          }
+        } else {
+          toast("重置失败，请稍后重试", "error");
+        }
+        setSubmitting(false);
+        return;
+      }
+      setSubmitting(false);
+      setStep("closed");
+      setResult(payload);
+      toast("已重置整个系统，全部数据已清除");
+      try {
+        localStorage.removeItem("teamstudio.team");
+        localStorage.removeItem("teamstudio.group");
+      } catch {
+        // ignore storage failures
+      }
+      try {
+        await onCompleted();
+        await load();
+      } catch {
+        toast("数据已清除，但页面状态刷新失败，请手动重新加载", "error");
+      }
+    },
+    [info, load, onCompleted, submitting, toast],
+  );
+
+  if (forbidden) {
+    return (
+      <div className="state-screen compact">
+        <div className="state-card">
+          <span className="state-icon danger">
+            <ShieldAlert size={26} />
+          </span>
+          <h1>仅部署设备内置 Admin 可重置系统</h1>
+          <p>
+            系统重置会清空整个部署的数据，只对运行在部署设备上的内置 <code>Admin</code>{" "}
+            开放。存储在册的超级管理员账号即使拥有站点设置权限，也不能查看或执行该操作。
+          </p>
+          <div className="state-actions">
+            <button className="btn btn-primary" onClick={() => void load()}>
+              <RefreshCw size={16} /> 重新检查权限
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (loading && !info) {
+    return (
+      <div className="card card-pad">
+        <LoadingBlock label="正在读取系统重置信息…" rows={4} />
+      </div>
+    );
+  }
+
+  if (loadError || !info) {
+    return (
+      <div className="card card-pad settings-danger-load-error">
+        <span className="settings-danger-load-icon">
+          <AlertTriangle size={22} />
+        </span>
+        <div className="settings-danger-load-copy">
+          <strong>读取系统重置信息失败</strong>
+          <p>{loadError || "服务器没有返回可用的系统状态。"}</p>
+        </div>
+        <div className="settings-danger-load-actions">
+          <button className="btn btn-primary btn-sm" onClick={() => void load()} disabled={loading}>
+            {loading ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+            {loading ? "读取中…" : "重试"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const stats = info.stats;
+  const resetTarget = info.siteName.trim();
+  const totalRecords = (Object.values(stats) as number[]).reduce((sum, value) => sum + value, 0);
+
+  return (
+    <>
+      <div className="settings-sections">
+        {result ? (
+          <section className="card settings-danger-success" role="status" aria-live="polite">
+            <div className="settings-danger-success-head">
+              <span className="settings-danger-success-icon">
+                <CheckCircle2 size={24} />
+              </span>
+              <div>
+                <h2>重置完成</h2>
+                <p>已恢复默认设置并清空全部数据，工作区现在是空的。</p>
+              </div>
+            </div>
+            <dl className="settings-danger-success-meta">
+              <div>
+                <dt>重置时间</dt>
+                <dd>{formatDateTime(result.resetAt)}</dd>
+              </div>
+              <div>
+                <dt>站点名称</dt>
+                <dd>{result.siteName || info.defaultSiteName}（已恢复默认）</dd>
+              </div>
+              <div>
+                <dt>移除上传头像</dt>
+                <dd>{result.uploadsRemoved} 个</dd>
+              </div>
+              <div>
+                <dt>会话密钥</dt>
+                <dd>{result.sessionSecretRotated ? "已轮换，其他账号会话已失效" : "未轮换"}</dd>
+              </div>
+            </dl>
+            <p className="settings-danger-success-note">
+              <ShieldCheck size={15} />
+              <span>
+                <strong>设备管理员身份保留</strong>
+                ：你仍以部署设备内置 <code>Admin</code> 身份登录，不会被登出。需要重建工作区时，前往
+                「工作区设置」重新创建团队与开发组即可。
+              </span>
+            </p>
+          </section>
+        ) : null}
+
+        <section className="card settings-danger-hero">
+          <div className="settings-danger-hero-head">
+            <span className="settings-danger-hero-icon">
+              <ShieldAlert size={22} />
+            </span>
+            <div>
+              <span className="settings-danger-hero-eyebrow">DANGER ZONE · 仅设备管理员</span>
+              <h2>重置整个系统为默认设置并清除所有数据</h2>
+              <p>
+                这是一次不可撤销的出厂重置：全部业务数据与账号记录会被永久删除，所有设置恢复为默认值，
+                已上传的头像文件也会被移除。系统不会自动备份，也无法回滚。
+              </p>
+            </div>
+          </div>
+
+          <div className="settings-danger-target">
+            <span className="settings-danger-target-label">当前完整站点名称（最终确认时必须逐字输入）</span>
+            <code className="settings-danger-target-name">
+              {resetTarget || "（站点名称为空）"}
+            </code>
+            <span className="settings-danger-target-hint">
+              重置后将恢复为默认站点名称「{info.defaultSiteName}」。
+            </span>
+            {resetTarget ? null : (
+              <p className="settings-danger-target-empty">
+                当前站点名称为空，无法执行重置。请先在「外观与站点」中设置站点名称。
+              </p>
+            )}
+          </div>
+
+          <ul className="settings-danger-notes">
+            <li>
+              <Trash2 size={14} />
+              <span>
+                删除所有团队、开发组、成员、工作记录、任务、待办、红黑榜、公告、任务标签、常用链接与责任田数据。
+              </span>
+            </li>
+            <li>
+              <Users size={14} />
+              <span>删除全部账号、邮箱验证码、激活令牌、邮件日志与审计日志，并移除已上传的头像文件。</span>
+            </li>
+            <li>
+              <RotateCcw size={14} />
+              <span>站点名称、短名、主题、模块开关、权限、SSO 与 SMTP 等所有设置恢复为默认值。</span>
+            </li>
+            <li>
+              <ShieldCheck size={14} />
+              <span>
+                设备管理员身份不写入配置，因此会保留；重置后工作区变为空白，可在「工作区设置」中重新创建。
+              </span>
+            </li>
+          </ul>
+
+          <div className="settings-danger-actions">
+            <button
+              type="button"
+              className="btn btn-danger btn-lg"
+              onClick={() => setStep("confirm")}
+              disabled={!resetTarget}
+            >
+              <ShieldAlert size={17} /> 重置整个系统
+            </button>
+            <span className="settings-danger-actions-hint">
+              需要连续两次确认，其中一次必须输入完整站点名称。
+            </span>
+          </div>
+        </section>
+
+        <section className="card settings-danger-card">
+          <header className="settings-danger-card-head">
+            <div>
+              <h2>将被清除的数据</h2>
+              <p>以下为当前系统中即将被永久删除的记录数量。</p>
+            </div>
+            <span className="settings-danger-card-total">共 {totalRecords} 条记录</span>
+          </header>
+          <div className="settings-danger-stats">
+            {RESET_PRIMARY_STATS.map((item) => {
+              const Icon = item.icon;
+              return (
+                <div key={item.key} className="settings-danger-stat">
+                  <span className="settings-danger-stat-icon">
+                    <Icon size={15} />
+                  </span>
+                  <span className="settings-danger-stat-value">{stats[item.key]}</span>
+                  <span className="settings-danger-stat-label">{item.label}</span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="settings-danger-stats-compact">
+            {RESET_EXTRA_STATS.map((item) => (
+              <span key={item.key} className="settings-danger-stat-mini">
+                {item.label}
+                <strong>{stats[item.key]}</strong>
+              </span>
+            ))}
+          </div>
+          <p className="settings-danger-last-reset">
+            <Clock size={13} />
+            {info.lastResetAt ? (
+              <>
+                上次重置 <strong>{formatDateTime(info.lastResetAt)}</strong>
+                {info.lastResetBy ? (
+                  <>
+                    <span className="settings-meta-divider">·</span>
+                    操作者 <strong>{info.lastResetBy}</strong>
+                  </>
+                ) : null}
+              </>
+            ) : (
+              "该系统从未执行过完整重置。"
+            )}
+          </p>
+        </section>
+      </div>
+
+      <ConfirmDialog
+        open={step === "confirm"}
+        title="确定要重置整个系统吗？"
+        message="重置会永久删除全部团队、开发组、成员、任务、待办、账号、日志与上传文件，并把所有设置恢复为默认值。设备管理员身份会保留，但所有业务数据都无法恢复。确认后还需要输入完整站点名称。"
+        confirmLabel="确认重置"
+        onClose={() => setStep("closed")}
+        onConfirm={() => setStep("input")}
+        tone="danger"
+      />
+
+      <ConfirmInputDialog
+        open={step === "input"}
+        title="最后一步：输入完整站点名称"
+        description="名称必须与当前站点完全一致，最终按钮才会解锁。"
+        message={
+          <>
+            <p>
+              即将<strong>永久删除全部数据</strong>并恢复默认设置：所有团队、开发组、成员、任务、待办、
+              账号、邮件验证码、激活令牌、邮件日志与审计日志，以及已上传的头像文件。
+            </p>
+            <p>
+              该操作<strong>不可撤销、无法恢复</strong>。设备管理员身份会保留，但工作区将变为空白，需要重新创建。
+            </p>
+            <p>
+              请输入当前完整站点名称 <strong>{info.siteName}</strong> 以解锁最终按钮。
+            </p>
+          </>
+        }
+        expected={info.siteName}
+        inputLabel="完整站点名称"
+        confirmLabel="重置并清除全部数据"
+        actionLabel="重置"
+        loading={submitting}
+        onClose={() => {
+          if (!submitting) setStep("closed");
+        }}
+        onConfirm={(value) => void submitReset(value)}
+      />
+    </>
+  );
+}
+
 function DomainSettingsPage() {
   const { data, navigate } = useApp();
   const me = data?.me;
@@ -3953,6 +4346,15 @@ function SiteSettingsPage() {
   const { data, reload, navigate } = useApp();
   const { toast } = useToast();
 
+  // Only the built-in Admin of the deployment device may see / execute the factory reset.
+  // Stored super administrators (`isSuperAdmin` true, `isDeviceAdmin` false) never get it.
+  const isDeviceAdmin = Boolean(data?.me.isDeviceAdmin);
+  const tabs = useMemo(
+    () => (isDeviceAdmin ? [...TABS, RESET_TAB] : TABS),
+    [isDeviceAdmin],
+  );
+  const allowedTabKeys = useMemo(() => tabs.map((tab) => tab.key), [tabs]);
+
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [denied, setDenied] = useState(false);
@@ -3961,7 +4363,9 @@ function SiteSettingsPage() {
   const [meta, setMeta] = useState<SettingsMeta | null>(null);
   const [workspace, setWorkspace] = useState<WorkspaceOption>({ teams: [], groups: [], members: [] });
   const [workspaceError, setWorkspaceError] = useState("");
-  const [activeTab, setActiveTab] = useState<TabKey>(() => readTabFromHash(TAB_KEYS, "appearance"));
+  const [activeTab, setActiveTab] = useState<TabKey>(() =>
+    readTabFromHash(allowedTabKeys, "appearance"),
+  );
   const [saving, setSaving] = useState(false);
   const [serverErrors, setServerErrors] = useState<ValidationDetail[]>([]);
   const [jsonText, setJsonText] = useState("");
@@ -3982,8 +4386,8 @@ function SiteSettingsPage() {
     }
   }, []);
 
-  const loadSettings = useCallback(async () => {
-    setLoading(true);
+  const loadSettings = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setLoadError("");
     try {
       const result = await api.getSettings();
@@ -4005,7 +4409,7 @@ function SiteSettingsPage() {
         setLoadError(error instanceof ApiError ? error.message : "加载工作室配置失败");
       }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
@@ -4014,14 +4418,37 @@ function SiteSettingsPage() {
     void loadWorkspace();
   }, [loadSettings, loadWorkspace]);
 
+  /**
+   * After a successful factory reset: drop the stale selected team / group ids and re-read
+   * settings, workspace options and the bootstrap data. `loadSettings(true)` refreshes in the
+   * background so the reset success panel stays visible instead of a full-page loader.
+   */
+  const handleResetCompleted = useCallback(async () => {
+    try {
+      localStorage.removeItem("teamstudio.team");
+      localStorage.removeItem("teamstudio.group");
+    } catch {
+      // ignore storage failures
+    }
+    await loadSettings(true);
+    await loadWorkspace();
+    await reload(true);
+  }, [loadSettings, loadWorkspace, reload]);
+
   /* ---------- tab navigation (hash query: #/settings?tab=email) ---------- */
 
   useEffect(() => {
-    const sync = () => setActiveTab(readTabFromHash(TAB_KEYS, "appearance"));
+    const sync = () => setActiveTab(readTabFromHash(allowedTabKeys, "appearance"));
     sync();
     window.addEventListener("hashchange", sync);
     return () => window.removeEventListener("hashchange", sync);
-  }, []);
+  }, [allowedTabKeys]);
+
+  // Defensive guard: if the device-admin identity ever disappears while the reset tab is
+  // active, fall back to a normal tab instead of rendering a forbidden section.
+  useEffect(() => {
+    if (!isDeviceAdmin && activeTab === "reset") setActiveTab("appearance");
+  }, [activeTab, isDeviceAdmin]);
 
   const selectTab = useCallback(
     (tab: TabKey) => {
@@ -4515,7 +4942,8 @@ function SiteSettingsPage() {
   const canSave = hasUnsaved && !saving;
   const adminName = data?.me.name ?? "Admin";
   const identityLabel = data?.me.isDeviceAdmin ? "部署设备管理员" : "超级管理员";
-  const isSiteTab = activeTab !== "workspace" && activeTab !== "accounts";
+  const isSiteTab =
+    activeTab !== "workspace" && activeTab !== "accounts" && activeTab !== "reset";
   const saveLabel = activeTab === "json" ? "校验并保存" : "保存设置";
 
   return (
@@ -4614,13 +5042,17 @@ function SiteSettingsPage() {
 
       <div className="settings-layout">
         <nav className="settings-tabs" aria-label="设置分组">
-          {TABS.map((tab) => {
+          {tabs.map((tab) => {
             const Icon = tab.icon;
             return (
               <button
                 key={tab.key}
                 type="button"
-                className={cn("settings-tab", tab.key === activeTab && "active")}
+                className={cn(
+                  "settings-tab",
+                  tab.key === activeTab && "active",
+                  tab.key === "reset" && "settings-danger-tab",
+                )}
                 aria-pressed={tab.key === activeTab}
                 onClick={() => selectTab(tab.key)}
               >
@@ -4737,6 +5169,9 @@ function SiteSettingsPage() {
               onCopy={() => void copyJson()}
               onJumpTab={selectTab}
             />
+          ) : null}
+          {activeTab === "reset" && isDeviceAdmin ? (
+            <SystemResetSection onCompleted={handleResetCompleted} />
           ) : null}
         </div>
       </div>

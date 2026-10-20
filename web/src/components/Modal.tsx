@@ -137,8 +137,10 @@ interface ConfirmInputDialogProps {
   expected: string;
   inputLabel?: string;
   confirmLabel?: string;
+  /** Verb used in the live hint copy ("可以确认<actionLabel>"), defaults to 删除. */
+  actionLabel?: string;
   onClose: () => void;
-  onConfirm: () => void;
+  onConfirm: (value: string) => void;
   loading?: boolean;
 }
 
@@ -157,6 +159,7 @@ export function ConfirmInputDialog({
   expected,
   inputLabel = "输入名称以确认",
   confirmLabel = "永久删除",
+  actionLabel = "删除",
   onClose,
   onConfirm,
   loading = false,
@@ -197,7 +200,7 @@ export function ConfirmInputDialog({
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!matches || loading) return;
-    onConfirm();
+    onConfirm(trimmed);
   };
 
   return (
@@ -246,14 +249,15 @@ export function ConfirmInputDialog({
             aria-live="polite"
           >
             {matches ? (
-              "名称已匹配，可以确认删除。"
+              `名称已匹配，可以确认${actionLabel}。`
             ) : mismatch ? (
               <>
                 名称不匹配，请完整输入 <code className="confirm-input-target">{expected}</code>。
               </>
             ) : (
               <>
-                请输入完整名称 <code className="confirm-input-target">{expected}</code> 以启用删除按钮。
+                请输入完整名称 <code className="confirm-input-target">{expected}</code>
+                {` 以启用${actionLabel}按钮。`}
               </>
             )}
           </span>

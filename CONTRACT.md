@@ -59,6 +59,10 @@ Roles (`users` table, `userRole`): `member | group_admin | team_admin | super`.
 - `member` = linked member self-service: own profile, own works, own tasks and own todos;
   read-only elsewhere.
 - A member whose e-mail matches a group-scoped `members` row is linked (`linkedMemberId`).
+- Only the deployment device's built-in Admin may perform the destructive **system reset**
+  (`/api/system/reset`, see [System reset](#system-reset-deployment-device-admin-only)). A stored
+  `super` account — even while browsing from the deployment machine — can neither read nor execute
+  it and gets `403 device_admin_required`; the settings UI hides the tab for every other identity.
 
 Permission flags:
 
@@ -466,6 +470,56 @@ Legacy round-4 keys (`email.deliveryMode`, `email.builtin`, `email.reminders`,
 - `canEdit` marks each entity the caller may change. Team/group admins cannot read site
   settings (403); the frontend only renders the domain tab for them.
 
+## System reset (deployment device Admin only)
+
+A destructive "restore defaults and erase everything" operation lives under `/api/system`. It is
+reserved for the built-in Admin of the deployment device: a stored `super` account (even while
+running on the deployment machine) can neither read nor execute it (`403 device_admin_required`),
+and the settings page only renders the tab for `isDeviceAdmin` identities.
+
+- `GET /api/system/reset` → device-admin only. Returns the current site name (the exact phrase
+  required for confirmation), the default site name and the row counts of everything that would be
+  deleted:
+
+```json
+{
+  "deviceAdmin": true,
+  "canReset": true,
+  "siteName": "星港团队工作室",
+  "siteShortName": "星港",
+  "defaultSiteName": "星港团队工作室",
+  "defaultSiteShortName": "星港",
+  "stats": { "teams": 1, "groups": 4, "members": 12, "works": 30, "todos": 20, "tasks": 40,
+             "boards": 4, "entries": 12, "links": 12, "matrix": 12, "announcements": 8,
+             "tags": 10, "accounts": 12, "emailCodes": 0, "activationTokens": 0,
+             "emailLogs": 0, "auditLogs": 25 },
+  "lastResetAt": null,
+  "lastResetBy": ""
+}
+```
+
+- `POST /api/system/reset` `{ confirmName, acknowledge: true }` → device-admin only.
+  - `confirmName.trim()` must equal the current `settings.site.name` (`422 confirm_mismatch`,
+    `details.expected`) and `acknowledge` must be exactly `true` (`422 acknowledge_required`);
+    otherwise nothing is touched.
+  - On success it deletes every row of the business database (`teams`, `groups`, `members`,
+    `works`, `todos`, `member_tasks`, red-black boards/entries, `links`, `matrix_areas`,
+    `announcements`, `task_tags`, `users`, e-mail codes/logs, activation tokens, `audit_logs`,
+    `app_meta`), removes every uploaded avatar file, restores `data/settings.json` to the defaults,
+    rotates the session signing key (all issued account sessions become invalid), and writes one
+    audit row (`system.factory_reset`) plus the `app_meta` markers
+    `factoryResetAt` / `factoryResetBy`.
+  - A factory-reset database stays empty across restarts: `seed_if_empty()` skips the demo seed
+    whenever `app_meta.factoryResetAt` exists, so the restored system is truly clean. The
+    built-in device Admin identity is not stored, so it survives the reset and can rebuild teams
+    through the workspace manager.
+  - Response: `{ reset: true, resetAt, sessionSecretRotated, uploadsRemoved, cleared: {…stats…},
+    siteName, siteShortName }`.
+
+UI: `#/settings?tab=reset` — a 「重置系统」 tab rendered only for the device Admin. Two
+confirmations are required: a dialog asking whether to reset, then a dialog that only unlocks the
+final destructive button once the complete current site name is typed.
+
 ## E-mail service (SMTP relay only)
 
 Round 5 removed the bundled SMTP server, the local mailbox centre and the calendar reminder
@@ -509,6 +563,9 @@ relay configured in `settings.email`:
   `user_activation_tokens`, `email_logs`, `audit_logs`, `app_meta`.
 - `data/.session_secret` – generated HMAC signing key (never exposed).
 - `data/uploads/avatars/` – uploaded profile photos, served under `/uploads/avatars/...`.
+- `app_meta.factoryResetAt` / `factoryResetBy` – written by the device-Admin-only system reset;
+  presence of `factoryResetAt` stops `seed_if_empty()` from refilling the demo data after a
+  factory reset. A reset clears every other `app_meta` key.
 - There is no local mailbox, outbox mirror or reminder bookkeeping any more: the legacy
   `mailbox_messages` and `email_reminders_sent` tables (plus the `todos` reminder columns) are
   dropped during the additive round-5 migration.
@@ -527,6 +584,9 @@ relay configured in `settings.email`:
   - super admin: `workspace` (工作区设置), `appearance` (外观与站点), `modules` (模块与展示),
     `access` (成员与权限), `accounts` (账号与角色), `sso` (企业 SSO), `email` (邮件服务),
     `json` (高级 JSON) — hash form `#/settings?tab=workspace|appearance|modules|access|accounts|sso|email|json`.
+  - deployment-device Admin only: additionally `reset` (重置系统) — the destructive factory reset
+    in [System reset](#system-reset-deployment-device-admin-only). Stored `super` accounts never
+    see this tab and `#/settings?tab=reset` falls back to a normal site tab for them.
   - team / group admins: only `workspace` (domain settings), rendered without site settings.
 - Module flags hide nav entries; a direct hash remains accessible to admins so a hidden settings
   module can be restored. The `所有团队` (`?scope=all`) browsing scope is available to every
@@ -562,3 +622,7 @@ relay configured in `settings.email`:
   `components/WorkloadDetailDialog.tsx/.css`, workload rail in `pages/TaskOverviewPage.tsx/.css`.
 - Docs/QA owner: `CONTRACT.md`, `README.md`, `TASKS_CONTRACT.md`, `docs/ROUND5_CONTRACT.md`,
   `web/package.json`, `web/e2e/*` (round-5 acceptance: `web/e2e/round5-acceptance.mjs`).
+- System reset (device Admin only): `backend/app/routers/system.py`,
+  `backend/app/auth.py` (`rotate_session_secret`), `backend/app/seed.py` (factory-reset marker),
+  `backend/tests/test_system_reset.py`, `web/src/pages/SettingsPage.tsx/.css` (重置系统 tab),
+  `web/src/components/Modal.tsx` (`ConfirmInputDialog` value), `web/e2e/system-reset.mjs`.

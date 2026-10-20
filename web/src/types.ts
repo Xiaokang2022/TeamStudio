@@ -555,6 +555,52 @@ export interface SettingsResponse {
   meta: SettingsMeta;
 }
 
+/* ------------------------------------------------------------------ */
+/* Whole-system factory reset (deployment device Admin only)          */
+/* ------------------------------------------------------------------ */
+
+export interface SystemResetStats {
+  teams: number;
+  groups: number;
+  members: number;
+  works: number;
+  todos: number;
+  tasks: number;
+  boards: number;
+  entries: number;
+  links: number;
+  matrix: number;
+  announcements: number;
+  tags: number;
+  accounts: number;
+  emailCodes: number;
+  activationTokens: number;
+  emailLogs: number;
+  auditLogs: number;
+}
+
+export interface SystemResetInfo {
+  deviceAdmin: true;
+  canReset: true;
+  siteName: string;
+  siteShortName: string;
+  defaultSiteName: string;
+  defaultSiteShortName: string;
+  stats: SystemResetStats;
+  lastResetAt: string | null;
+  lastResetBy: string;
+}
+
+export interface SystemResetResult {
+  reset: true;
+  resetAt: string;
+  sessionSecretRotated: boolean;
+  uploadsRemoved: number;
+  cleared: SystemResetStats;
+  siteName: string;
+  siteShortName: string;
+}
+
 export interface WorkspaceOption {
   teams: { id: string; name: string; short_name: string; color: string }[];
   groups: { id: string; team_id: string; name: string; color: string }[];

@@ -27,6 +27,8 @@ import type {
   ScopeKind,
   SettingsMeta,
   SettingsResponse,
+  SystemResetInfo,
+  SystemResetResult,
   TagLibraryData,
   TaskOverviewData,
   Todo,
@@ -416,6 +418,13 @@ export const api = {
     request<{ schema: Record<string, unknown>; meta: SettingsMeta }>("/api/settings/schema"),
   settingsDefaults: () => request<AppSettings>("/api/settings/defaults"),
   settingsWorkspace: () => request<WorkspaceOption>("/api/settings/workspace"),
+
+  /* ---------------------------------------------------------------- */
+  /* Whole-system reset (deployment device Admin only)                 */
+  /* ---------------------------------------------------------------- */
+  systemResetInfo: () => request<SystemResetInfo>("/api/system/reset"),
+  resetSystem: (body: { confirmName: string; acknowledge: boolean }) =>
+    request<SystemResetResult>("/api/system/reset", { method: "POST", body }),
 
   domainSettings: () => request<DomainSettingsData>("/api/settings/domain"),
   updateDomainTeam: (
