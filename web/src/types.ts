@@ -346,20 +346,68 @@ export interface LinkItem {
   sortOrder: number;
 }
 
+export interface MatrixBackupMember {
+  id: string;
+  name: string;
+  color: string;
+}
+
 export interface MatrixArea {
   id: string;
   groupId: string;
   area: string;
   description: string;
+  /** Exactly one primary owner per area (null means unclaimed). */
   ownerMemberId: string | null;
   ownerName: string;
   ownerColor?: string;
-  backupMemberId: string | null;
-  backupName: string;
+  /** Multiple backups are allowed and may also own other areas. */
+  backupMemberIds: string[];
+  backups: MatrixBackupMember[];
+  /** Legacy single-backup projection (first backup) kept for compatibility. */
+  backupMemberId?: string | null;
+  backupName?: string;
   backupColor?: string;
   channel: string;
   contact: string;
   sortOrder: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* Workspace administration (teams / development groups)              */
+/* ------------------------------------------------------------------ */
+
+export interface ManagedGroup {
+  id: string;
+  teamId: string;
+  name: string;
+  description: string;
+  color: string;
+  icon: string;
+  memberCount: number;
+  canDelete: boolean;
+}
+
+export interface ManagedTeam {
+  id: string;
+  name: string;
+  shortName: string;
+  description: string;
+  color: string;
+  groupCount: number;
+  memberCount: number;
+  canDelete: boolean;
+  canCreateGroup: boolean;
+  groups: ManagedGroup[];
+}
+
+export interface WorkspaceManageData {
+  teams: ManagedTeam[];
+  permissions: {
+    canCreateTeam: boolean;
+    canCreateGroup: boolean;
+    canManageAnyTeam: boolean;
+  };
 }
 
 export interface Announcement {

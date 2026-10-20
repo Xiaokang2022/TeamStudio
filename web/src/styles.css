@@ -25,22 +25,24 @@
   color-scheme: light;
   --harmony-accent: #0a59f7;
   --harmony-accent-secondary: #4d8dff;
-  /* Paper palette: warm, low-glare stock with clearly separated sheet layers. */
-  --paper: #f3f1ea;
-  --paper-deep: #e9e5da;
-  --bg: #f3f1ea;
-  --bg-accent: #ece7dc;
-  --surface: #fbfaf6;
-  --surface-2: #f5f3ec;
-  --surface-3: #eae6db;
-  --surface-hover: #f8f6ef;
-  --text: #211f1a;
-  --text-2: #544f47;
-  --text-3: #746f65;
-  --text-inverse: #fbfaf6;
-  --border: #d9d3c6;
-  --border-strong: #c2bbaa;
-  --hairline: rgba(52, 45, 31, 0.07);
+  /* Neutral paper palette: low-glare off-white stock with clearly separated
+     sheet layers. Kept deliberately neutral (no warm/brown cast) while the
+     surface steps preserve the same depth hierarchy as before. */
+  --paper: #f7f7f5;
+  --paper-deep: #e9e9e7;
+  --bg: #f7f7f5;
+  --bg-accent: #f0f0ee;
+  --surface: #fdfdfc;
+  --surface-2: #f8f8f6;
+  --surface-3: #ededeb;
+  --surface-hover: #fbfbf9;
+  --text: #1f1f1d;
+  --text-2: #55554f;
+  --text-3: #6c6c66;
+  --text-inverse: #fdfdfc;
+  --border: #dededa;
+  --border-strong: #c6c6c0;
+  --hairline: rgba(48, 48, 46, 0.07);
   --accent-soft: #e9effc;
   --accent-soft-2: #dce7fb;
   --accent-contrast: #ffffff;
@@ -54,7 +56,7 @@
   --blue-soft: #e7eefc;
   --violet: #4f6f8f;
   --violet-soft: #eceff4;
-  --ink: #211f1a;
+  --ink: #1f1f1d;
   --steel: #616b76;
   /* Decorative corner washes on KPI cards: light paper needs a touch more
      pigment than graphite to stay visible without becoming noisy. The dark
@@ -62,20 +64,20 @@
   --deco-blob-alpha: 18%;
   --deco-email-alpha: 19%;
   --deco-soft-alpha: 10%;
-  --shadow-xs: 0 1px 2px rgba(58, 48, 32, 0.05);
-  --shadow-sm: 0 2px 10px rgba(58, 48, 32, 0.07), 0 1px 2px rgba(58, 48, 32, 0.04);
-  --shadow-md: 0 18px 44px -24px rgba(58, 48, 32, 0.2), 0 6px 16px -10px rgba(58, 48, 32, 0.09);
-  --shadow-lg: 0 36px 90px -34px rgba(58, 48, 32, 0.32), 0 12px 32px -18px rgba(58, 48, 32, 0.14);
-  --sidebar-bg: #f8f6f0;
-  --sidebar-bg-2: #f0ece2;
-  --sidebar-text: #24211b;
-  --sidebar-muted: #6f6a5f;
-  --sidebar-border: rgba(52, 45, 31, 0.14);
-  --sidebar-hover: rgba(52, 45, 31, 0.055);
-  --sidebar-active-bg: #e9e7df;
-  --sidebar-active-text: #1c1a15;
-  --glass: rgba(251, 250, 246, 0.8);
-  --glass-strong: rgba(251, 250, 246, 0.92);
+  --shadow-xs: 0 1px 2px rgba(48, 48, 46, 0.05);
+  --shadow-sm: 0 2px 10px rgba(48, 48, 46, 0.07), 0 1px 2px rgba(48, 48, 46, 0.04);
+  --shadow-md: 0 18px 44px -24px rgba(48, 48, 46, 0.2), 0 6px 16px -10px rgba(48, 48, 46, 0.09);
+  --shadow-lg: 0 36px 90px -34px rgba(48, 48, 46, 0.32), 0 12px 32px -18px rgba(48, 48, 46, 0.14);
+  --sidebar-bg: #fafaf8;
+  --sidebar-bg-2: #f2f2f0;
+  --sidebar-text: #232321;
+  --sidebar-muted: #696963;
+  --sidebar-border: rgba(48, 48, 46, 0.14);
+  --sidebar-hover: rgba(48, 48, 46, 0.055);
+  --sidebar-active-bg: #eaeae8;
+  --sidebar-active-text: #1b1b19;
+  --glass: rgba(253, 253, 252, 0.8);
+  --glass-strong: rgba(253, 253, 252, 0.92);
   --glass-highlight: rgba(255, 255, 255, 0.78);
   --glass-edge: rgba(255, 255, 255, 0.85);
   --surface-raised: linear-gradient(
@@ -84,17 +86,17 @@
     rgba(255, 255, 255, 0.32) 16%,
     rgba(255, 255, 255, 0) 48%
   );
-  --surface-sunken: linear-gradient(180deg, rgba(52, 45, 31, 0.03), rgba(52, 45, 31, 0) 60%);
+  --surface-sunken: linear-gradient(180deg, rgba(48, 48, 46, 0.03), rgba(48, 48, 46, 0) 60%);
   --shadow-card:
-    0 1px 1px rgba(58, 48, 32, 0.04),
-    0 2px 6px -3px rgba(58, 48, 32, 0.08),
-    0 18px 38px -30px rgba(58, 48, 32, 0.28);
+    0 1px 1px rgba(48, 48, 46, 0.04),
+    0 2px 6px -3px rgba(48, 48, 46, 0.08),
+    0 18px 38px -30px rgba(48, 48, 46, 0.28);
   --shadow-float:
-    0 2px 4px rgba(58, 48, 32, 0.05),
-    0 26px 60px -34px rgba(58, 48, 32, 0.3);
-  --press-shadow: inset 0 1px 2px rgba(58, 48, 32, 0.1);
-  --overlay: rgba(41, 35, 24, 0.44);
-  --scrim: rgba(41, 35, 24, 0.44);
+    0 2px 4px rgba(48, 48, 46, 0.05),
+    0 26px 60px -34px rgba(48, 48, 46, 0.3);
+  --press-shadow: inset 0 1px 2px rgba(48, 48, 46, 0.1);
+  --overlay: rgba(38, 38, 36, 0.44);
+  --scrim: rgba(38, 38, 36, 0.44);
   --code-bg: #0d0e11;
   --code-surface: #111217;
   --code-border: #26272c;
@@ -791,7 +793,7 @@ ol {
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--accent) 13%, transparent),
     inset 3px 0 0 color-mix(in srgb, var(--accent) 58%, transparent),
-    0 10px 22px -20px rgba(58, 48, 32, 0.5);
+    0 10px 22px -20px rgba(48, 48, 46, 0.5);
 }
 
 :root[data-theme="light"] .nav-item.active svg {
@@ -801,7 +803,7 @@ ol {
 :root[data-theme="light"] .sidebar.is-collapsed .nav-item.active {
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent),
-    0 8px 18px -16px rgba(58, 48, 32, 0.4);
+    0 8px 18px -16px rgba(48, 48, 46, 0.4);
 }
 
 .nav-item > span:not(.nav-count) {

@@ -21,6 +21,7 @@ from .routers import auth as auth_router
 from .routers import bootstrap as bootstrap_router
 from .routers import email as email_router
 from .routers import settings as settings_router
+from .routers import workspaces as workspaces_router
 
 try:  # Feature routers are developed in parallel; keep API bootable during scaffolding.
     from .routers import boards, calendar, tasks, workspace
@@ -142,6 +143,7 @@ app.include_router(auth_router.router)
 app.include_router(bootstrap_router.router)
 app.include_router(settings_router.router)
 app.include_router(email_router.router)
+app.include_router(workspaces_router.router)
 if workspace and calendar and boards and tasks:
     app.include_router(workspace.router)
     app.include_router(calendar.router)

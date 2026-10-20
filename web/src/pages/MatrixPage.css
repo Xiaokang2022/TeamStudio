@@ -270,6 +270,67 @@
   font-style: italic;
 }
 
+/* ---------- multiple backup members (table + cards) ---------- */
+.mx-backup-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 250px;
+}
+
+.mx-backup-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 116px;
+  padding: 1px 7px 1px 2px;
+  border: 1px solid color-mix(in srgb, var(--blue, var(--accent)) 22%, var(--border));
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--blue, var(--accent)) 6%, var(--surface));
+  color: var(--text-2);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.6;
+  transition: background 0.16s, border-color 0.16s, color 0.16s;
+}
+
+.mx-backup-chip .avatar {
+  width: 18px;
+  height: 18px;
+  font-size: 7px;
+}
+
+.mx-backup-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mx-backup-chip:hover {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.mx-backup-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.6;
+  cursor: default;
+}
+
 .mx-channel {
   display: inline-flex;
   align-items: center;
@@ -330,6 +391,21 @@
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+/* Description column (after 业务领域). Muted, two-line clamp with title. */
+.mx-desc-cell {
+  min-width: 150px;
+  max-width: 280px;
+}
+
+.mx-desc-cell .mx-desc {
+  cursor: help;
+}
+
+.mx-desc-empty {
+  color: var(--text-3);
+  font-size: 11.5px;
 }
 
 .mx-th-actions {
@@ -439,6 +515,39 @@
   text-transform: uppercase;
 }
 
+.mx-card-desc-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.mx-card-desc-row small {
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  text-transform: uppercase;
+}
+
+.mx-card-desc {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 11.5px;
+  line-height: 1.65;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.mx-card-desc.is-empty {
+  color: var(--text-3);
+}
+
+.mx-card-people .mx-backup-chips {
+  max-width: none;
+}
+
 .mx-card-people .mx-member {
   padding-left: 0;
 }
@@ -486,10 +595,60 @@
   gap: 14px;
 }
 
+.mx-textarea {
+  min-height: 88px;
+}
+
+.mx-optional {
+  padding: 0 5px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 5px;
+  color: var(--text-3);
+  font-size: 9.5px;
+  font-style: normal;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.mx-desc-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mx-char-count {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.mx-char-count.is-near {
+  color: var(--orange);
+}
+
+.mx-char-count.is-full {
+  color: var(--red);
+}
+
 /* ---------- responsive ---------- */
 @media (max-width: 1180px) {
   .mx-table .mx-desc {
     max-width: 210px;
+  }
+
+  .mx-desc-cell {
+    max-width: 210px;
+  }
+
+  .mx-backup-chips {
+    max-width: 198px;
+  }
+}
+
+@media (max-width: 1040px) {
+  .mx-col-desc,
+  .mx-desc-cell {
+    display: none;
   }
 }
 

@@ -691,11 +691,11 @@
 /* ---------- live preview ---------- */
 
 .settings-preview {
-  --pv-bg: #f2f2ef;
-  --pv-surface: #fafaf8;
-  --pv-text: #111214;
-  --pv-muted: #6a6d73;
-  --pv-border: #dedbd3;
+  --pv-bg: #f7f7f5;
+  --pv-surface: #fdfdfc;
+  --pv-text: #1f1f1d;
+  --pv-muted: #6c6c66;
+  --pv-border: #dededa;
   position: relative;
   display: flex;
   flex-direction: column;

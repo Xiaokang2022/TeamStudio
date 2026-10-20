@@ -31,7 +31,8 @@ class StrictModel(BaseModel):
 
 
 class ThemeSettings(StrictModel):
-    mode: Literal["light", "dark", "auto"] = "light"
+    # "auto" (default) follows the operating system / browser colour scheme.
+    mode: Literal["light", "dark", "auto"] = "auto"
     accent: str = "#0a59f7"
     accentSecondary: str = "#4d8dff"
     radius: int = Field(default=18, ge=8, le=32)

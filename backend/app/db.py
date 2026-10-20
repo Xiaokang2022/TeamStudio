@@ -191,6 +191,7 @@ CREATE TABLE IF NOT EXISTS matrix_areas (
     description TEXT NOT NULL DEFAULT '',
     owner_member_id TEXT,
     backup_member_id TEXT,
+    backup_member_ids TEXT NOT NULL DEFAULT '[]',
     channel TEXT NOT NULL DEFAULT '企业微信',
     contact TEXT NOT NULL DEFAULT '',
     sort_order INTEGER NOT NULL DEFAULT 0,
@@ -374,11 +375,43 @@ def _migrate_task_tags(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_matrix_backups(conn: sqlite3.Connection) -> None:
+    """Additive v3 migration: multiple backups per responsibility area.
+
+    ``matrix_areas`` gained a ``backup_member_ids`` JSON array while the legacy single
+    ``backup_member_id`` column is kept for compatibility. Existing deployments get the
+    column added and every legacy single backup is folded into the array exactly once, so
+    repeated ``init_db()`` calls are safe.
+    """
+    columns = {
+        str(info[1]) for info in conn.execute("PRAGMA table_info(matrix_areas)").fetchall()
+    }
+    if not columns:
+        return
+    if "backup_member_ids" not in columns:
+        conn.execute(
+            "ALTER TABLE matrix_areas ADD COLUMN backup_member_ids TEXT NOT NULL DEFAULT '[]'"
+        )
+    legacy_rows = conn.execute(
+        "SELECT id, backup_member_id, backup_member_ids FROM matrix_areas "
+        "WHERE backup_member_id IS NOT NULL AND backup_member_id <> ''"
+    ).fetchall()
+    for legacy in legacy_rows:
+        parsed = json_loads(legacy["backup_member_ids"], None)
+        if isinstance(parsed, list) and parsed:
+            continue  # Already migrated (or written by the new code path).
+        conn.execute(
+            "UPDATE matrix_areas SET backup_member_ids=? WHERE id=?",
+            (json_dumps([legacy["backup_member_id"]]), legacy["id"]),
+        )
+
+
 def init_db() -> None:
     with db() as conn:
         conn.executescript(SCHEMA)
         _migrate_member_tasks(conn)
         _migrate_task_tags(conn)
+        _migrate_matrix_backups(conn)
 
 
 def rows(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:

@@ -32,6 +32,9 @@ All write endpoints require an admin unless explicitly marked "member-self".
 Admin roles: `super` (deployment device, name always `Admin`, never stored in config),
 `team_admin` (all groups of `teamIds`), `group_admin` (specific `groupIds`). A member
 without an admin role may only edit their linked member profile/works and their own todos.
+`team_admin` may also create/delete development groups inside its `teamIds`; creating or
+deleting a whole team is reserved for the `super` device Admin (`group_admin` cannot
+restructure the workspace).
 
 Local requests (loopback or one of the deployment machine's own IPv4 addresses) are always
 the `Admin` super user. SSO identities are matched against `auth.adminWhitelist.ids` by
@@ -64,6 +67,28 @@ first team/group.
 
 - `GET /api/teams` – teams + groups visible to current user (all demo data is visible)
 - `GET /api/teams/{teamId}/groups/{groupId}` – group detail with members
+
+## Workspace administration (admins)
+
+Base: `/api/workspace`. All routes return `403 not_admin` for identities outside their
+permission domain. Destructive routes require the exact target name in the JSON body and
+answer `422 confirm_mismatch` (details `{ "expected": "<name>" }`) when it does not match.
+
+- `GET /api/workspace/manage` – management tree for the caller's domain: device Admin sees
+  every team, `team_admin` only its `teamIds`. Team: `{ id, name, shortName, description,
+  color, groupCount, memberCount, canDelete, canCreateGroup, groups[] }`; group: `{ id,
+  teamId, name, description, color, icon, memberCount, canDelete }`. Top-level `permissions`:
+  `{ canCreateTeam, canCreateGroup, canManageAnyTeam }`.
+- `POST /api/workspace/teams` (super) – `{ name, shortName?, description?, color? }`
+- `DELETE /api/workspace/teams/{teamId}` (super) – `{ confirmName }`; cascades groups,
+  members, works, todos, tasks, boards, links, matrix, announcements and tags.
+- `POST /api/workspace/teams/{teamId}/groups` (super or that team's `team_admin`) –
+  `{ name, description?, color?, icon? }`
+- `DELETE /api/workspace/teams/{teamId}/groups/{groupId}` (super or that team's
+  `team_admin`) – `{ confirmName }`; cascades the group's business data.
+
+The workspace manager UI (`工作区管理`) lives in the user menu for the device Admin and
+team admins (`web/src/components/WorkspaceManager.tsx`).
 
 ## Group-scoped feature routes
 
@@ -166,9 +191,16 @@ Full task/workload payloads and the load-point model live in `TASKS_CONTRACT.md`
 
 ### Responsibility matrix
 
-- `GET /matrix?scope=` – `{ areas: [{ id, groupId, groupName, area, description, ownerMemberId, ownerName,
-  backupMemberId, backupName, channel, contact, sortOrder }], scope }`
-- `POST /matrix` (admin), `PATCH /matrix/{id}` (admin), `DELETE /matrix/{id}` (admin)
+- `GET /matrix?scope=` – `{ areas: [{ id, groupId, groupName, area, description, ownerMemberId,
+  ownerName, backupMemberIds: string[], backups: [{ id, name, color }], backupMemberId,
+  backupName, backupColor, channel, contact, sortOrder }], scope }`
+  Each area has exactly one primary owner (single id or null). Backups are a list: a member
+  may back up any number of areas and may also own other areas. `backupMemberId/backupName/
+  backupColor` are the legacy projection of the first backup, kept for compatibility.
+- `POST /matrix` (admin), `PATCH /matrix/{id}` (admin), `DELETE /matrix/{id}` (admin).
+  Writes accept `backupMemberIds: string[]` (max 10, deduplicated, group-scoped; the owner
+  cannot also be a backup) and still accept the legacy `backupMemberId`. `[]` clears backups;
+  `description` is optional (≤500 chars). The area list shows a dedicated description column.
 
 ### Announcements (max 3 pinned)
 
@@ -186,6 +218,11 @@ Full task/workload payloads and the load-point model live in `TASKS_CONTRACT.md`
 - `GET /api/settings/schema` – JSON Schema for the GUI/JSON editor
 - `GET /api/settings/defaults` – default config (no secrets)
 - `GET /api/settings/workspace` – admin: team/group/member summary for GUI selectors
+
+`site.theme.mode` accepts `auto | light | dark` and defaults to `auto`: the public config
+tells the frontend to follow `prefers-color-scheme` until the visitor explicitly picks a
+theme (stored only in that browser's `localStorage`). The light palette is a neutral
+low-glare paper white (`--bg #f7f7f5`), not warm/cream.
 
 ## Email reminders & bundled mail server (admin)
 
@@ -242,9 +279,18 @@ remains accessible to admins so a hidden settings module can be restored. Settin
   `components/MemberDrawer.tsx`.
 - Frontend settings owner: `pages/SettingsPage.tsx/.css`, `components/CodeEditor.tsx/.css`,
   `web/vite.config.ts`.
-- Frontend interaction owner: `components/Select.tsx/.css`, `TodoDialog.tsx`,
-  `pages/CalendarPage.tsx/.css`, `MatrixPage.tsx`, `LinksPage.tsx`,
+- Frontend interaction owner: `components/Select.tsx/.css`, `components/MultiSelect.tsx/.css`,
+  `TodoDialog.tsx`, `pages/CalendarPage.tsx/.css`, `MatrixPage.tsx`, `LinksPage.tsx`,
   `AnnouncementsPage.tsx`, `RedBlackPage.tsx`.
 - Frontend data owner: `pages/TaskOverviewPage.tsx/.css`, `pages/InsightsPage.tsx/.css`,
   `components/TaskDialog.tsx`, `components/TagPicker.tsx/.css`.
-- QA owner: `backend/tests/*` read-only except their own new tests, `web/e2e/*`.
+- Workspace-admin owner (round 3): `routers/workspaces.py`, auth helpers
+  `can_manage_team/can_create_team/require_team_manager`, `components/WorkspaceManager.tsx/.css`,
+  `components/Modal.tsx` (`ConfirmInputDialog`), `backend/tests/test_workspace_admin.py`.
+- Matrix multi-backup owner (round 3): `db.py` (`_migrate_matrix_backups`), matrix section of
+  `routers/boards.py`, `routers/workspace.py` `delete_member`, `seed.py` `_seed_matrix`,
+  `components/MatrixNetwork.tsx`, `backend/tests/test_matrix_backups.py`.
+- Workload-detail owner (round 3): `components/WorkloadMeter.tsx`,
+  `components/WorkloadDetailDialog.tsx/.css`, workload rail in `pages/TaskOverviewPage.tsx/.css`.
+- QA owner: `backend/tests/*` read-only except their own new tests, `web/e2e/*`
+  (new: `web/e2e/round3-features.mjs`).

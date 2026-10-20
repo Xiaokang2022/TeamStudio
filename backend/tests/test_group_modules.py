@@ -560,7 +560,8 @@ def test_links_matrix_and_announcements_crud(api: TestApi) -> None:
     assert response.json()["data"]["link"]["title"] == "改名链接"
     assert api.client.post(url("/links"), json={"title": "坏链接", "url": "ftp://x"}).status_code == 422
 
-    # Matrix
+    # Matrix — the legacy single `backupMemberId` payload is still accepted and is
+    # mirrored into the new `backupMemberIds` array (first backup = legacy projection).
     response = api.client.post(
         url("/matrix"),
         json={
@@ -575,8 +576,12 @@ def test_links_matrix_and_announcements_crud(api: TestApi) -> None:
     area = response.json()["data"]["area"]
     area_id = area["id"]
     assert area["groupId"] == GROUP_ID
+    assert area["description"] == "职责说明"
     assert area["ownerName"] == "林知夏"
     assert area["ownerColor"]
+    assert area["backupMemberIds"] == [MEMBER_ID]
+    assert area["backups"] == [{"id": MEMBER_ID, "name": "陈屿", "color": area["backupColor"]}]
+    assert area["backupMemberId"] == MEMBER_ID
     assert area["backupName"] == "陈屿"
     response = api.client.patch(url(f"/matrix/{area_id}"), json={"contact": "#new-channel"})
     assert response.status_code == 200

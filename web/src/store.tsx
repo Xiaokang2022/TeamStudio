@@ -62,13 +62,22 @@ function readScope(): ScopeKind {
   return "group";
 }
 
+function systemTheme(): ThemeMode {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return "light";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
 function resolveTheme(preferred: PublicConfig["site"]["theme"] | undefined): ThemeMode {
-  const saved = localStorage.getItem(STORAGE_THEME);
-  if (saved === "light" || saved === "dark") return saved;
-  const mode = preferred?.mode ?? "light";
-  if (mode === "auto") {
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  try {
+    const saved = localStorage.getItem(STORAGE_THEME);
+    if (saved === "light" || saved === "dark") return saved;
+  } catch {
+    // ignore storage failures
   }
+  // The site default is "auto": follow the operating system when the visitor has
+  // never picked an explicit theme on this browser.
+  const mode = preferred?.mode ?? "auto";
+  if (mode === "auto") return systemTheme();
   return mode;
 }
 
@@ -79,7 +88,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [route, setRoute] = useState(() => hashRoute().page);
-  const [theme, setTheme] = useState<ThemeMode>(() => resolveTheme(undefined));
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    const resolved = resolveTheme(undefined);
+    // Apply before the first paint so "follow the system" never flashes a
+    // different palette than the one the visitor's OS asks for.
+    document.documentElement.dataset.theme = resolved;
+    return resolved;
+  });
   const [scope, setScopeState] = useState<ScopeKind>(readScope);
   const selectionRef = useRef({
     teamId: localStorage.getItem(STORAGE_TEAM) ?? "",

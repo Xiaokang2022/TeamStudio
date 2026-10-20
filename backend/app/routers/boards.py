@@ -12,11 +12,11 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from ..auth import CurrentUser, get_current_user
 from ..config import settings_service
-from ..db import db, new_id, now_iso, row, rows, scalar
+from ..db import db, json_dumps, json_loads, new_id, now_iso, row, rows, scalar
 from ..http import fail, get_group, get_member, int_value, ok, parse_month, text
 from ..permissions import audit, require_admin, require_read_access
 from ..scope import resolve_scope
@@ -514,18 +514,58 @@ def delete_link(
 
 # --------------------------------------------------------------------------- responsibility matrix
 
+MAX_MATRIX_BACKUPS = 10
+
 _MATRIX_SELECT = (
-    "SELECT a.id, a.group_id, a.area, a.description, a.owner_member_id, o.name AS owner_name, "
-    "o.avatar_color AS owner_color, a.backup_member_id, b.name AS backup_name, "
-    "b.avatar_color AS backup_color, a.channel, a.contact, a.sort_order, "
+    "SELECT a.id, a.group_id, a.area, a.description, a.owner_member_id, "
+    "a.backup_member_id, a.backup_member_ids, a.channel, a.contact, a.sort_order, "
+    "o.name AS owner_name, o.avatar_color AS owner_color, "
     "g.name AS group_name, g.team_id AS group_team_id, tm.name AS team_name "
     "FROM matrix_areas a LEFT JOIN members o ON o.id=a.owner_member_id "
-    "LEFT JOIN members b ON b.id=a.backup_member_id "
     "JOIN groups g ON g.id=a.group_id JOIN teams tm ON tm.id=g.team_id "
 )
 
 
-def _area_payload(area: dict[str, Any]) -> dict[str, Any]:
+def _backup_ids(area: dict[str, Any]) -> list[str]:
+    """Parsed, de-duplicated backup member ids stored on an area row."""
+    parsed = json_loads(area.get("backup_member_ids"), None)
+    # A row written before the v3 migration only has the legacy single column.
+    candidates = parsed if isinstance(parsed, list) else [area.get("backup_member_id")]
+    ids: list[str] = []
+    for raw in candidates:
+        if isinstance(raw, str) and raw and raw not in ids:
+            ids.append(raw)
+    return ids
+
+
+def _backup_member_map(conn, areas: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Hydrate every backup member referenced by ``areas`` with one members query."""
+    member_ids = sorted({member_id for area in areas for member_id in _backup_ids(area)})
+    if not member_ids:
+        return {}
+    found = rows(
+        conn,
+        "SELECT id, name, avatar_color FROM members WHERE id IN ("
+        + ",".join("?" for _ in member_ids)
+        + ")",
+        tuple(member_ids),
+    )
+    return {member["id"]: member for member in found}
+
+
+def _area_payload(
+    area: dict[str, Any], backup_members: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    backups = [
+        {
+            "id": member_id,
+            "name": backup_members[member_id].get("name") or "",
+            "color": backup_members[member_id].get("avatar_color") or "",
+        }
+        for member_id in _backup_ids(area)
+        if member_id in backup_members
+    ]
+    first = backups[0] if backups else None
     return {
         "id": area["id"],
         "groupId": area.get("group_id", ""),
@@ -537,13 +577,21 @@ def _area_payload(area: dict[str, Any]) -> dict[str, Any]:
         "ownerMemberId": area.get("owner_member_id"),
         "ownerName": area.get("owner_name") or "",
         "ownerColor": area.get("owner_color") or "",
-        "backupMemberId": area.get("backup_member_id"),
-        "backupName": area.get("backup_name") or "",
-        "backupColor": area.get("backup_color") or "",
+        # One primary owner stays single; any number of backups may be configured.
+        "backupMemberIds": [backup["id"] for backup in backups],
+        "backups": backups,
+        # Legacy single-backup projection of the first backup, kept for compatibility.
+        "backupMemberId": first["id"] if first else None,
+        "backupName": first["name"] if first else "",
+        "backupColor": first["color"] if first else "",
         "channel": area.get("channel", ""),
         "contact": area.get("contact", ""),
         "sortOrder": int(area.get("sort_order") or 0),
     }
+
+
+def _area_with_backups(conn, area: dict[str, Any]) -> dict[str, Any]:
+    return _area_payload(area, _backup_member_map(conn, [area]))
 
 
 def _get_area_detail(conn, area_id: str, group_id: str) -> dict[str, Any]:
@@ -551,6 +599,49 @@ def _get_area_detail(conn, area_id: str, group_id: str) -> dict[str, Any]:
     if not found:
         raise fail(404, "职责分工不存在", "matrix_not_found")
     return found
+
+
+def _backup_id_list(value: Any) -> list[str]:
+    """Validate + normalise the ``backupMemberIds`` write payload (max 10, deduped)."""
+    if not isinstance(value, list):
+        raise fail(422, "备份人必须是成员 ID 列表", "validation_error")
+    member_ids: list[str] = []
+    for raw in value:
+        member_id = _optional_id(raw, "备份人")
+        if member_id is None or member_id in member_ids:
+            continue
+        member_ids.append(member_id)
+    if len(member_ids) > MAX_MATRIX_BACKUPS:
+        raise fail(422, f"备份人最多 {MAX_MATRIX_BACKUPS} 人", "too_many_backups")
+    return member_ids
+
+
+def _resolve_backups(conn, group_id: str, payload: dict[str, Any]) -> list[str] | None:
+    """Validated backup ids from a write payload; ``None`` when the field is untouched.
+
+    ``backupMemberIds`` is preferred; the legacy single ``backupMemberId`` is still honoured
+    as a one-element list when the new field is absent, and ``[]`` clears the backups.
+    """
+    if "backupMemberIds" in payload:
+        member_ids = _backup_id_list(payload.get("backupMemberIds"))
+    elif "backupMemberId" in payload:
+        legacy = _optional_id(payload.get("backupMemberId"), "备份人")
+        member_ids = [legacy] if legacy else []
+    else:
+        return None
+    for member_id in member_ids:
+        try:
+            _member_ref(conn, group_id, member_id, "备份人")
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                raise fail(422, "备份人不存在或不属于该开发组", "validation_error") from exc
+            raise
+    return member_ids
+
+
+def _ensure_owner_not_backup(owner_member_id: str | None, backup_ids: list[str]) -> None:
+    if owner_member_id and owner_member_id in backup_ids:
+        raise fail(422, "负责人不能同时担任备份人", "owner_is_backup")
 
 
 @router.get("/matrix")
@@ -571,7 +662,10 @@ def list_matrix(
             "ORDER BY g.sort_order, g.name, a.sort_order, a.created_at",
             tuple(group_ids),
         )
-    return ok({"areas": [_area_payload(area) for area in items], "scope": ctx})
+        backup_members = _backup_member_map(conn, items)
+    return ok(
+        {"areas": [_area_payload(area, backup_members) for area in items], "scope": ctx}
+    )
 
 
 @router.post("/matrix")
@@ -591,17 +685,21 @@ def create_matrix_area(
             if payload.get("sortOrder") is not None
             else _next_sort_order(conn, "matrix_areas", group_id)
         )
+        owner_member_id = _member_ref(conn, group_id, payload.get("ownerMemberId"), "负责人")
+        backup_ids = _resolve_backups(conn, group_id, payload) or []
+        _ensure_owner_not_backup(owner_member_id, backup_ids)
         conn.execute(
             "INSERT INTO matrix_areas (id,group_id,area,description,owner_member_id,"
-            "backup_member_id,channel,contact,sort_order,created_at,updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "backup_member_id,backup_member_ids,channel,contact,sort_order,created_at,"
+            "updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 area_id,
                 group_id,
                 text(payload.get("area"), "职责领域", 80, required=True),
                 text(payload.get("description"), "职责说明", 500),
-                _member_ref(conn, group_id, payload.get("ownerMemberId"), "负责人"),
-                _member_ref(conn, group_id, payload.get("backupMemberId"), "备份人"),
+                owner_member_id,
+                backup_ids[0] if backup_ids else None,
+                json_dumps(backup_ids),
                 text(payload.get("channel"), "沟通渠道", 40) or "企业微信",
                 text(payload.get("contact"), "联系方式", 120),
                 sort_order,
@@ -610,7 +708,7 @@ def create_matrix_area(
             ),
         )
         audit(conn, user, "matrix.create", "matrix_area", area_id)
-        area = _area_payload(_get_area_detail(conn, area_id, group_id))
+        area = _area_with_backups(conn, _get_area_detail(conn, area_id, group_id))
     return ok({"area": area})
 
 
@@ -624,7 +722,7 @@ def update_matrix_area(
 ):
     with db() as conn:
         get_group(conn, team_id, group_id)
-        _get_area_detail(conn, area_id, group_id)
+        current = _get_area_detail(conn, area_id, group_id)
         require_admin(user, team_id, group_id)
 
         updates: dict[str, Any] = {}
@@ -632,14 +730,20 @@ def update_matrix_area(
             updates["area"] = text(payload.get("area"), "职责领域", 80, required=True)
         if "description" in payload:
             updates["description"] = text(payload.get("description"), "职责说明", 500)
+        owner_member_id = current.get("owner_member_id")
         if "ownerMemberId" in payload:
-            updates["owner_member_id"] = _member_ref(
+            owner_member_id = _member_ref(
                 conn, group_id, payload.get("ownerMemberId"), "负责人"
             )
-        if "backupMemberId" in payload:
-            updates["backup_member_id"] = _member_ref(
-                conn, group_id, payload.get("backupMemberId"), "备份人"
-            )
+            updates["owner_member_id"] = owner_member_id
+        backup_ids = _resolve_backups(conn, group_id, payload)
+        if backup_ids is not None:
+            updates["backup_member_ids"] = json_dumps(backup_ids)
+            updates["backup_member_id"] = backup_ids[0] if backup_ids else None
+        _ensure_owner_not_backup(
+            owner_member_id,
+            backup_ids if backup_ids is not None else _backup_ids(current),
+        )
         if "channel" in payload:
             updates["channel"] = text(payload.get("channel"), "沟通渠道", 40) or "企业微信"
         if "contact" in payload:
@@ -654,7 +758,7 @@ def update_matrix_area(
                 (*updates.values(), area_id, group_id),
             )
             audit(conn, user, "matrix.update", "matrix_area", area_id, {"fields": sorted(payload)})
-        area = _area_payload(_get_area_detail(conn, area_id, group_id))
+        area = _area_with_backups(conn, _get_area_detail(conn, area_id, group_id))
     return ok({"area": area})
 
 

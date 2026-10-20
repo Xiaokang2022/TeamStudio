@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronsUpDown,
   Command,
+  FolderCog,
   Globe2,
   Info,
   Layers3,
@@ -37,6 +38,7 @@ import { useApp } from "../store";
 import { useToast } from "./Toast";
 import { Avatar } from "./Avatar";
 import { AboutDialog } from "./AboutDialog";
+import { WorkspaceManager } from "./WorkspaceManager";
 import { cn, formatFullDate } from "../lib/utils";
 import { SCOPE_OPTIONS } from "../lib/scope";
 import type { ModuleFlags } from "../types";
@@ -126,6 +128,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [teamMenuOpen, setTeamMenuOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const groupMenuRef = useRef<HTMLDivElement>(null);
   const teamMenuRef = useRef<HTMLDivElement>(null);
@@ -201,6 +204,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (!data || !config) return null;
   const me = data.me;
   const isGuest = me.source === "guest";
+  const canManageWorkspace = Boolean(me.isDeviceAdmin || me.admin.role === "team_admin");
   const showGuestBanner = isGuest && config.features.showGuestBanner;
   const settingsVisible = isAdmin && moduleVisible("settings");
   const todayLabel = formatFullDate(data.serverTime || new Date().toISOString());
@@ -534,6 +538,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                       <Settings2 size={16} /> 工作室设置
                     </button>
                   ) : null}
+                  {canManageWorkspace ? (
+                    <button
+                      className="menu-row"
+                      onClick={() => {
+                        setUserMenuOpen(false);
+                        setWorkspaceOpen(true);
+                      }}
+                    >
+                      <FolderCog size={16} /> 工作区管理
+                    </button>
+                  ) : null}
                   {isAdmin ? (
                     <button
                       className="menu-row"
@@ -598,6 +613,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       <AboutDialog open={aboutOpen} onClose={() => setAboutOpen(false)} />
+      <WorkspaceManager open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} />
     </div>
   );
 }

@@ -67,6 +67,26 @@ class CurrentUser:
     def can_edit_any_group(self) -> bool:
         return self.is_device_admin or bool(self.team_ids or self.group_ids)
 
+    def can_manage_team(self, team_id: str) -> bool:
+        """The device Admin manages every team; a team_admin only its own ``teamIds``."""
+        return self.is_device_admin or team_id in self.team_ids
+
+    def can_create_team(self) -> bool:
+        """Creating a whole team is reserved for the device Admin."""
+        return self.is_device_admin
+
+    def require_team_manager(self, team_id: str) -> None:
+        """Raise 403 ``not_admin`` unless the user may restructure ``team_id``."""
+        if not self.can_manage_team(team_id):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "not_admin",
+                    "message": "你没有该团队的管理权限",
+                    "details": None,
+                },
+            )
+
     def can_edit_self(self) -> bool:
         return bool(self.linked_member_id) and settings_service.get().features.allowMemberSelfEdit
 

@@ -1,0 +1,387 @@
+/* ---------------------------------------------------------------- */
+/* Self-drawn MultiSelect (multi-select listbox / member picker)      */
+/* Mirrors Select.css: the panel is portalled to <body>, positioned   */
+/* with `position: fixed`, and uses an opaque solid background.       */
+/* ---------------------------------------------------------------- */
+
+.ts-multiselect {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.ts-multiselect-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 5px 9px 5px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.16s var(--ease), box-shadow 0.16s var(--ease), background 0.16s var(--ease);
+}
+
+.ts-multiselect-sm .ts-multiselect-trigger {
+  min-height: 29px;
+  padding: 3px 8px 3px 5px;
+  border-radius: 9px;
+  font-size: 11.5px;
+}
+
+.ts-multiselect-trigger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--text-3) 45%, var(--border-strong));
+  background: var(--surface-hover);
+}
+
+.ts-multiselect-trigger:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.ts-multiselect.is-open .ts-multiselect-trigger {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+  background: var(--surface);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.ts-multiselect-trigger:disabled,
+.ts-multiselect.is-disabled .ts-multiselect-trigger {
+  cursor: not-allowed;
+  color: var(--text-3);
+  background: var(--surface-2);
+  border-color: var(--border);
+  opacity: 0.72;
+}
+
+.ts-multiselect-value {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ts-multiselect-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  max-width: 132px;
+  padding: 1px 7px 1px 2px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  color: var(--text);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.ts-multiselect-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ts-multiselect-chip .avatar {
+  width: 18px;
+  height: 18px;
+  font-size: 7px;
+}
+
+.ts-multiselect-chip.is-more {
+  max-width: none;
+  padding: 1px 7px;
+  border-color: var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.ts-multiselect-placeholder {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
+  text-align: left;
+}
+
+.ts-multiselect-caret {
+  flex: none;
+  color: var(--text-3);
+  transition: transform 0.16s var(--ease), color 0.16s var(--ease);
+}
+
+.ts-multiselect.is-open .ts-multiselect-caret {
+  color: var(--accent);
+  transform: rotate(180deg);
+}
+
+/* ---------------------------- panel ---------------------------- */
+
+.ts-multiselect-panel {
+  position: fixed;
+  z-index: 260;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* Opaque, never glass: the surrounding modal must not show through. */
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow:
+    0 1px 0 var(--glass-highlight) inset,
+    0 18px 44px -22px color-mix(in srgb, var(--text) 34%, transparent),
+    0 8px 20px -14px color-mix(in srgb, var(--text) 22%, transparent);
+  transform-origin: top center;
+  animation: ts-multiselect-pop-in 0.14s var(--ease);
+}
+
+.ts-multiselect-panel.is-top {
+  transform-origin: bottom center;
+  animation-name: ts-multiselect-pop-up;
+}
+
+@keyframes ts-multiselect-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes ts-multiselect-pop-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.ts-multiselect-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+}
+
+.ts-multiselect-search-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+
+.ts-multiselect-search-input::placeholder {
+  color: var(--text-3);
+}
+
+.ts-multiselect-list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 5px;
+  list-style: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.ts-multiselect-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.45;
+  cursor: pointer;
+  transition: background 0.12s var(--ease), color 0.12s var(--ease);
+}
+
+.ts-multiselect-option.is-active {
+  background: var(--accent-soft);
+}
+
+.ts-multiselect-option.is-selected {
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+
+.ts-multiselect-option.is-selected.is-active {
+  background: var(--accent-soft);
+}
+
+.ts-multiselect-option.is-blocked {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.ts-multiselect-check {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--accent-contrast);
+  transition: background 0.12s var(--ease), border-color 0.12s var(--ease);
+}
+
+.ts-multiselect-option.is-selected .ts-multiselect-check {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.ts-multiselect-option.is-active .ts-multiselect-check {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+}
+
+.ts-multiselect-option-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.ts-multiselect-option-label {
+  color: var(--text);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ts-multiselect-option.is-active .ts-multiselect-option-label {
+  color: var(--accent);
+}
+
+.ts-multiselect-option-desc {
+  color: var(--text-3);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ts-multiselect-option-tag {
+  flex: none;
+  padding: 0 5px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 5px;
+  color: var(--text-3);
+  font-size: 9px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.ts-multiselect-empty {
+  padding: 18px 10px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.ts-multiselect-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: none;
+  padding: 6px 8px 6px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-size: 10.5px;
+}
+
+.ts-multiselect-footer b {
+  color: var(--text-2);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.ts-multiselect-footer-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+.ts-multiselect-clear,
+.ts-multiselect-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.14s var(--ease), color 0.14s var(--ease), border-color 0.14s var(--ease);
+}
+
+.ts-multiselect-clear:hover {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--error, var(--red));
+}
+
+.ts-multiselect-done {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+}
+
+.ts-multiselect-done:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  color: var(--accent);
+}
+
+/* ------------------------ reduced motion ------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  .ts-multiselect-panel {
+    animation: none;
+  }
+
+  .ts-multiselect-caret,
+  .ts-multiselect-trigger,
+  .ts-multiselect-option,
+  .ts-multiselect-check,
+  .ts-multiselect-clear,
+  .ts-multiselect-done {
+    transition: none;
+  }
+}

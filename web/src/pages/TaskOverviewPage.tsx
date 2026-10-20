@@ -33,6 +33,7 @@ import type { TaskMemberOption } from "../components/TaskDialog";
 import { TagChips, TagLibraryDialog } from "../components/TagPicker";
 import type { TagLibraryGroupOption } from "../components/TagPicker";
 import { WorkloadMeter } from "../components/WorkloadMeter";
+import { WorkloadDetailDialog } from "../components/WorkloadDetailDialog";
 import { Select } from "../components/Select";
 import { cn, formatDate, formatDateTime } from "../lib/utils";
 import { TASK_RANGES, isWithinRange, rangeStartISO } from "../lib/scope";
@@ -250,7 +251,7 @@ function SortableTh({
 }
 
 export default function TaskOverviewPage() {
-  const { data, currentTeam, currentGroup, canManageActiveGroup, reload, scope } = useApp();
+  const { data, currentTeam, currentGroup, canManageActiveGroup, reload, scope, navigate } = useApp();
   const { toast } = useToast();
   const me = data?.me ?? null;
   const teamId = currentTeam?.id ?? "";
@@ -269,6 +270,8 @@ export default function TaskOverviewPage() {
   const [deleting, setDeleting] = useState<MemberTask | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [tagLibraryOpen, setTagLibraryOpen] = useState(false);
+  /** Member workload opened from the rail; null = dialog closed. */
+  const [workloadDetail, setWorkloadDetail] = useState<Workload | null>(null);
 
   const [search, setSearch] = useState("");
   const [memberFilter, setMemberFilter] = useState<string>("all");
@@ -344,6 +347,7 @@ export default function TaskOverviewPage() {
     setDeleting(null);
     setBusyId(null);
     setTagLibraryOpen(false);
+    setWorkloadDetail(null);
   }, [groupId, scope]);
 
   const tasks = payload?.tasks ?? EMPTY_TASKS;
@@ -1225,7 +1229,7 @@ export default function TaskOverviewPage() {
               <Gauge size={15} /> 成员负载
             </h2>
             <p className="tasks-panel-sub">
-              {windowLabel}滚动平均 · 每人容量 {formatPoints(meta.capacityPoints)} / 周
+              {windowLabel}滚动平均 · 每人容量 {formatPoints(meta.capacityPoints)} / 周 · 点击负载卡片查看逐任务明细
             </p>
           </div>
           <span className="tasks-panel-meta">
@@ -1243,6 +1247,7 @@ export default function TaskOverviewPage() {
                   key={workload.memberId}
                   workload={workload}
                   windowLabel={windowLabel}
+                  onOpen={() => setWorkloadDetail(workload)}
                 />
               ))}
             </div>
@@ -1385,6 +1390,19 @@ export default function TaskOverviewPage() {
         onChanged={() => {
           void loadTasks(true);
         }}
+      />
+
+      <WorkloadDetailDialog
+        open={Boolean(workloadDetail)}
+        workload={workloadDetail}
+        tasks={tasks}
+        windowLabel={windowLabel}
+        capacityPoints={meta.capacityPoints}
+        scoring={meta.scoring}
+        showGroupBadge={aggregate}
+        onClose={() => setWorkloadDetail(null)}
+        onFilterMember={(memberId) => setMemberFilter(memberId)}
+        onOpenProfile={(memberId) => navigate("overview", { member: memberId })}
       />
 
       <ConfirmDialog

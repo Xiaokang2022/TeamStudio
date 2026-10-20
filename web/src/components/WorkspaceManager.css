@@ -1,0 +1,617 @@
+/* ============================================================
+   Workspace manager — teams / development groups administration
+   Global class names are prefixed with `wm-`; `.confirm-input*`
+   styles below belong to the reusable ConfirmInputDialog in
+   components/Modal.tsx (that component has no stylesheet of its
+   own and is currently rendered from this feature).
+   ============================================================ */
+
+/* ---------- shell ---------- */
+/* Two classes so the width also wins over `.modal-lg` from styles.css. */
+.modal-panel.wm-modal {
+  max-width: 880px;
+}
+
+.wm {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.wm-footer-note {
+  margin-right: auto;
+  font-size: 11px;
+  color: var(--text-3);
+  letter-spacing: 0.01em;
+}
+
+/* ---------- toolbar / permission note ---------- */
+.wm-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+  flex-wrap: wrap;
+}
+
+.wm-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-width: 0;
+}
+
+.wm-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  background: var(--surface-raised), var(--surface-2);
+  font-size: 10.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.wm-stat svg {
+  color: var(--accent);
+  flex: none;
+}
+
+.wm-stat strong {
+  font-size: 12px;
+  font-weight: 750;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.wm-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
+}
+
+.wm-scope-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 11px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-sunken), color-mix(in srgb, var(--surface-2) 60%, transparent);
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+.wm-scope-note svg {
+  color: var(--accent);
+  flex: none;
+  margin-top: 1px;
+}
+
+/* ---------- loading ---------- */
+.wm-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.wm-loading-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.wm-skeleton-card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface-raised), var(--surface);
+}
+
+.wm-skeleton-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 3px;
+}
+
+/* ---------- inline create forms ---------- */
+.wm-create-form {
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px 13px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+  border-radius: 15px;
+  background:
+    var(--surface-raised),
+    radial-gradient(
+      420px 160px at 0% -40%,
+      color-mix(in srgb, var(--accent) 12%, transparent),
+      transparent 70%
+    ),
+    var(--surface);
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    var(--shadow-card);
+  animation: fade-up 0.3s var(--ease) backwards;
+}
+
+.wm-create-group {
+  margin: 0 16px 12px;
+  border-color: var(--border-strong);
+}
+
+.wm-form-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.wm-form-icon {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.wm-form-head > div {
+  min-width: 0;
+}
+
+.wm-form-head > div > strong {
+  display: block;
+  font-size: 13px;
+  letter-spacing: -0.01em;
+}
+
+/* Only the copy block below the title, never the icon tile. */
+.wm-form-head > div > span {
+  display: block;
+  margin-top: 2px;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+.wm-form-grid {
+  margin-top: 13px;
+}
+
+.wm-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 13px;
+}
+
+/* ---------- color swatches ---------- */
+.wm-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 3px 0 1px;
+}
+
+.wm-swatch {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  color: #ffffff;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+  transition: transform 0.16s var(--ease), box-shadow 0.16s var(--ease);
+}
+
+.wm-swatch:hover:not(:disabled) {
+  transform: translateY(-1px) scale(1.05);
+}
+
+.wm-swatch.is-active {
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.08),
+    0 0 0 2px var(--surface),
+    0 0 0 3.5px var(--accent);
+}
+
+.wm-swatch:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* ---------- team cards ---------- */
+.wm-teams {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.wm-team {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface-raised), var(--surface);
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    var(--shadow-card);
+  overflow: hidden;
+  transition: border-color 0.18s var(--ease), box-shadow 0.18s var(--ease);
+}
+
+.wm-team:hover {
+  border-color: var(--border-strong);
+}
+
+.wm-team-stripe {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  border-radius: 16px 0 0 16px;
+  opacity: 0.85;
+}
+
+.wm-team-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 15px 16px 13px 18px;
+}
+
+.wm-team-mark {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.wm-team-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.wm-team-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-width: 0;
+}
+
+.wm-team-title h3 {
+  font-size: 14.5px;
+  font-weight: 750;
+  letter-spacing: -0.015em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wm-team-desc {
+  margin-top: 4px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-3);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.wm-team-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 13px;
+  margin-top: 7px;
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+.wm-team-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.wm-team-meta svg {
+  color: var(--text-3);
+  flex: none;
+}
+
+.wm-team-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: none;
+}
+
+/* `.btn`/`.icon-button` come from the global stylesheet loaded after this file,
+   so destructive colours need the extra class specificity. */
+.btn.wm-delete {
+  color: var(--red);
+}
+
+.btn.wm-delete:hover:not(:disabled) {
+  color: var(--red);
+  background: var(--red-soft);
+}
+
+/* ---------- nested development groups ---------- */
+.wm-groups {
+  padding: 7px 16px 12px 18px;
+  border-top: 1px dashed var(--border);
+  background: var(--surface-sunken), color-mix(in srgb, var(--surface-2) 42%, transparent);
+}
+
+.wm-groups-empty {
+  margin: 0;
+  padding: 8px 2px;
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+.wm-group-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.wm-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 9px;
+  border-radius: 10px;
+  transition: background 0.16s var(--ease);
+}
+
+.wm-group:hover {
+  background: var(--surface-hover);
+}
+
+.wm-group-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.wm-group-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.wm-group-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.wm-group-title svg {
+  color: var(--text-3);
+  flex: none;
+}
+
+.wm-group-title strong {
+  font-size: 12.5px;
+  letter-spacing: -0.005em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wm-group-copy p {
+  margin-top: 1px;
+  padding-left: 19px;
+  font-size: 10.5px;
+  color: var(--text-3);
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wm-group-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  background: var(--surface);
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.wm-group-count svg {
+  color: var(--text-3);
+}
+
+.icon-button.wm-group-delete {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 8px;
+  color: var(--text-3);
+}
+
+.icon-button.wm-group-delete:hover:not(:disabled) {
+  color: var(--red);
+  background: var(--red-soft);
+}
+
+/* ---------- ConfirmInputDialog (components/Modal.tsx) ---------- */
+.confirm-input {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.confirm-input .confirm-content {
+  margin-bottom: 2px;
+}
+
+.confirm-input-message {
+  min-width: 0;
+}
+
+.confirm-input-message p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-2);
+}
+
+.confirm-input-message p + p {
+  margin-top: 8px;
+}
+
+.confirm-input-message strong {
+  color: var(--text);
+  font-weight: 700;
+  word-break: break-word;
+}
+
+.confirm-input-message .wm-cascade-warning {
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--red) 26%, transparent);
+  border-radius: 10px;
+  background: var(--red-soft);
+  color: var(--red);
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+
+.confirm-input-target {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  word-break: break-all;
+}
+
+.confirm-input .input.is-invalid {
+  border-color: var(--red);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 14%, transparent);
+}
+
+.confirm-input-hint-error {
+  color: var(--red);
+}
+
+/* ---------- responsive ---------- */
+@media (max-width: 720px) {
+  .wm-toolbar {
+    align-items: stretch;
+  }
+
+  .wm-toolbar-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .wm-toolbar-actions .btn {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .wm-team-head {
+    flex-wrap: wrap;
+    padding-left: 16px;
+  }
+
+  .wm-team-copy {
+    flex-basis: calc(100% - 52px);
+  }
+
+  .wm-team-actions {
+    width: 100%;
+  }
+
+  .wm-team-actions .btn {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .wm-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .wm-form-grid .span-2 {
+    grid-column: auto;
+  }
+
+  .wm-form-actions .btn {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .wm-create-group {
+    margin: 0 12px 10px;
+  }
+
+  .wm-groups {
+    padding-left: 14px;
+    padding-right: 12px;
+  }
+
+  .wm-group-copy p {
+    white-space: normal;
+  }
+}
+
+@media (max-width: 520px) {
+  .wm-stats {
+    width: 100%;
+  }
+
+  .wm-stat {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .wm-group {
+    gap: 8px;
+  }
+
+  .wm-group-copy p {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wm-create-form {
+    animation: none;
+  }
+
+  .wm-swatch:hover:not(:disabled) {
+    transform: none;
+  }
+}

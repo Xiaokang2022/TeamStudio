@@ -54,6 +54,15 @@ const displayMark = (name: string): string => {
 
 const truncate = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
+/** All backup ids of one area, with a defensive legacy fallback. */
+const backupIdsOf = (area: MatrixArea): string[] => {
+  const list = Array.isArray(area.backupMemberIds) ? area.backupMemberIds.filter(Boolean) : [];
+  if (list.length) return Array.from(new Set(list));
+  const hydrated = Array.isArray(area.backups) ? area.backups.map((backup) => backup.id).filter(Boolean) : [];
+  if (hydrated.length) return Array.from(new Set(hydrated));
+  return area.backupMemberId ? [area.backupMemberId] : [];
+};
+
 const distribute = (count: number, top: number, bottom: number): number[] => {
   if (count <= 0) return [];
   const available = Math.max(bottom - top, 1);
@@ -85,9 +94,26 @@ export function MatrixNetwork({ areas, selectedMemberId, onSelectMember }: Matri
       return person;
     };
 
+    // Hydrated backup names come with the area payload; the legacy fields cover
+    // an older payload while the backend rollout is in flight.
+    const backupNames = new Map<string, string>();
+    areas.forEach((area) => {
+      if (!Array.isArray(area.backups)) return;
+      area.backups.forEach((backup) => {
+        if (backup?.id && backup.name) backupNames.set(backup.id, backup.name);
+      });
+    });
+    const backupNameOf = (area: MatrixArea, backupId: string): string =>
+      backupNames.get(backupId) ||
+      (area.backupMemberId === backupId ? area.backupName || "" : "") ||
+      "未命名成员";
+
     areas.forEach((area) => {
       if (area.ownerMemberId) ensurePerson(area.ownerMemberId, area.ownerName).ownerOf.add(area.id);
-      if (area.backupMemberId) ensurePerson(area.backupMemberId, area.backupName).backupOf.add(area.id);
+      // Include backup-only members as person nodes and count every backup area.
+      backupIdsOf(area).forEach((backupId) => {
+        ensurePerson(backupId, backupNameOf(area, backupId)).backupOf.add(area.id);
+      });
     });
 
     const persons = Array.from(personMap.values()).sort((a, b) => {
@@ -109,23 +135,39 @@ export function MatrixNetwork({ areas, selectedMemberId, onSelectMember }: Matri
     const edges: GraphEdge[] = [];
     areaNodes.forEach((area) => {
       const areaY = areaYs.get(area.id) ?? 0;
-      const pushEdge = (personId: string, role: EdgeRole) => {
+      const pushEdge = (personId: string, role: EdgeRole, offset: number) => {
         const personY = personYs.get(personId) ?? 0;
-        // Slight offset keeps an owner edge and a backup edge between the same pair readable.
-        const offset = role === "backup" ? 3 : 0;
         edges.push({
-          key: `${area.id}-${personId}-${role}`,
+          key: `${area.id}-${personId}-${role}-${offset}`,
           personId,
           areaId: area.id,
           role,
           d: bezier(MEMBER_X + MEMBER_RADIUS, personY + offset, AREA_X, areaY + offset),
         });
       };
-      if (area.ownerMemberId) pushEdge(area.ownerMemberId, "owner");
-      if (area.backupMemberId) pushEdge(area.backupMemberId, "backup");
+      if (area.ownerMemberId) pushEdge(area.ownerMemberId, "owner", 0);
+      // One dashed edge per backup member; fan them out slightly so overlapping
+      // endpoints stay readable.
+      const backupIds = backupIdsOf(area);
+      backupIds.forEach((backupId, index) => {
+        const offset = 3 + (index - (backupIds.length - 1) / 2) * 2.4;
+        pushEdge(backupId, "backup", offset);
+      });
     });
 
     return { persons, areaNodes, height, personYs, areaYs, edges };
+  }, [areas]);
+
+  // Hydrated backup names for the area tooltip (same defensive fallback as the graph).
+  const backupNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    areas.forEach((area) => {
+      if (!Array.isArray(area.backups)) return;
+      area.backups.forEach((backup) => {
+        if (backup?.id && backup.name) map.set(backup.id, backup.name);
+      });
+    });
+    return map;
   }, [areas]);
 
   // A new member filter starts from a clean canvas.
@@ -139,7 +181,7 @@ export function MatrixNetwork({ areas, selectedMemberId, onSelectMember }: Matri
         <EmptyState
           compact
           title="暂无可视化关系"
-          description="给责任田指定负责人或备份人后，这里会自动生成协作网络。"
+          description="给责任田指定负责人或备份成员后，这里会自动生成协作网络。"
           icon={<Network size={22} />}
         />
       </div>
@@ -267,6 +309,21 @@ export function MatrixNetwork({ areas, selectedMemberId, onSelectMember }: Matri
             {graph.areaNodes.map((area) => {
               const y = graph.areaYs.get(area.id) ?? 0;
               const isFocused = focusedAreaId === area.id;
+              const areaBackupNames = backupIdsOf(area).map(
+                (backupId) =>
+                  backupNameMap.get(backupId) ||
+                  (area.backupMemberId === backupId ? area.backupName || "" : "") ||
+                  "未命名成员",
+              );
+              const description = area.description?.trim() ?? "";
+              const tooltip = [
+                area.area,
+                `主责 ${area.ownerName || "待认领"}`,
+                `备份 ${areaBackupNames.length ? areaBackupNames.join("、") : "暂无"}`,
+                description ? `描述 ${description}` : "",
+              ]
+                .filter(Boolean)
+                .join(" · ");
               return (
                 <g
                   key={area.id}
@@ -290,7 +347,7 @@ export function MatrixNetwork({ areas, selectedMemberId, onSelectMember }: Matri
                     }
                   }}
                 >
-                  <title>{`${area.area} · 主责 ${area.ownerName || "待认领"} · 备份 ${area.backupName || "暂无"}`}</title>
+                  <title>{tooltip}</title>
                   <rect
                     className="mx-network-area-rect"
                     x={0}
@@ -300,10 +357,14 @@ export function MatrixNetwork({ areas, selectedMemberId, onSelectMember }: Matri
                     rx={12}
                   />
                   <text x={16} y={4} className="mx-network-area-label">
-                    {truncate(area.area, 19)}
+                    {truncate(area.area, areaBackupNames.length ? 15 : 19)}
                   </text>
                   <text x={AREA_WIDTH - 14} y={4} textAnchor="end" className="mx-network-area-state">
-                    {area.ownerMemberId ? "已认领" : "待认领"}
+                    {area.ownerMemberId
+                      ? areaBackupNames.length
+                        ? `已认领 · 备份 ${areaBackupNames.length}`
+                        : "已认领"
+                      : "待认领"}
                   </text>
                 </g>
               );

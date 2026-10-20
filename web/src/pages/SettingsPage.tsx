@@ -758,13 +758,17 @@ function AppearanceSection({
         icon={<Palette size={18} />}
       >
         <div className="settings-theme-grid">
-          <Field label="主题模式" error={errorText(errorsFor("site.theme.mode"))}>
+          <Field
+            label="主题模式"
+            error={errorText(errorsFor("site.theme.mode"))}
+            hint="默认选项：跟随系统会自动匹配操作系统 / 浏览器的明暗偏好，并在系统切换时实时同步。"
+          >
             <div className="segmented settings-mode-switch">
               {(
                 [
+                  { value: "auto", label: "跟随系统（推荐）" },
                   { value: "light", label: "纸白" },
                   { value: "dark", label: "暗黑" },
-                  { value: "auto", label: "跟随系统" },
                 ] as const
               ).map((option) => (
                 <button
@@ -803,7 +807,7 @@ function AppearanceSection({
           <Field
             label="统一色板"
             className="span-2"
-            hint="当前版本采用固定鸿蒙色板，避免出现多套高饱和主题；主题仅切换纸白与暗黑两种模式。"
+            hint="当前版本采用固定鸿蒙色板，避免出现多套高饱和主题；主题模式支持跟随系统、纸白与暗黑三种。"
           >
             <div className="settings-locked-palette">
               <span className="settings-locked-swatch">
@@ -813,7 +817,7 @@ function AppearanceSection({
                 <i style={{ background: "#4d8dff" }} /> 辅助色 #4d8dff
               </span>
               <span className="settings-locked-swatch">
-                <i style={{ background: "#f2f2ef" }} /> 纸白 #f2f2ef
+                <i style={{ background: "#f7f7f5" }} /> 纸白 #f7f7f5
               </span>
               <span className="settings-locked-swatch">
                 <i style={{ background: "#09090b" }} /> 暗黑 #09090b

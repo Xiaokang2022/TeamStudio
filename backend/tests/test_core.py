@@ -101,6 +101,17 @@ def test_settings_validation_errors_are_path_specific(client):
     assert response.status_code == 422
 
 
+def test_default_theme_follows_system(client):
+    """The site default theme mode must be "auto" (follow the OS colour scheme)."""
+    assert DEFAULT_SETTINGS.site.theme.mode == "auto"
+    boot = client.get("/api/bootstrap").json()["data"]
+    assert boot["config"]["site"]["theme"]["mode"] == "auto"
+    payload = _base_settings()
+    payload["site"]["theme"]["mode"] = "system"
+    response = client.put("/api/settings", json=payload)
+    assert response.status_code == 422
+
+
 def test_settings_save_and_public_projection(client):
     payload = _base_settings()
     payload["site"]["name"] = "测试工作室"

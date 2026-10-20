@@ -494,49 +494,53 @@ def _seed_links(conn, now: str) -> None:
 
 
 def _seed_matrix(conn, now: str) -> None:
+    # (area, description, owner, backups, channel, contact) — several areas deliberately have
+    # more than one backup so the multi-backup UI is demonstrable out of the box.
     areas = {
         "grp-frontend": [
-            ("Web 工作台", "团队主页、导航与全局搜索", "m-lin", "m-chen", "企业微信", "#frontend-workbench"),
-            ("协作日历", "日历、待办与提醒联动", "m-chen", "m-su", "企业微信", "#frontend-calendar"),
-            ("身份与权限", "SSO、访客模式与管理员白名单", "m-su", "m-he", "飞书", "#frontend-auth"),
-            ("实时通知", "公告、站内消息与 SSE", "m-he", "m-chen", "企业微信", "#frontend-realtime"),
-            ("设计系统", "组件、视觉规范与无障碍", "m-tang", "m-lin", "飞书", "#frontend-design-system"),
+            ("Web 工作台", "团队主页、导航与全局搜索", "m-lin", ["m-chen", "m-he"], "企业微信", "#frontend-workbench"),
+            ("协作日历", "日历、待办与提醒联动", "m-chen", ["m-su", "m-he"], "企业微信", "#frontend-calendar"),
+            ("身份与权限", "SSO、访客模式与管理员白名单", "m-su", ["m-he"], "飞书", "#frontend-auth"),
+            ("实时通知", "公告、站内消息与 SSE", "m-he", ["m-chen", "m-lin"], "企业微信", "#frontend-realtime"),
+            ("设计系统", "组件、视觉规范与无障碍", "m-tang", ["m-lin"], "飞书", "#frontend-design-system"),
         ],
         "grp-platform": [
-            ("权限平台", "多租户范围与操作审计", "m-zhou", "m-luo", "企业微信", "#platform-auth"),
-            ("邮件基础设施", "SMTP、模板与发送队列", "m-wu", "m-xu", "企业微信", "#platform-email"),
-            ("发布与稳定性", "CI/CD、回滚与 SLO", "m-xu", "m-zhou", "电话", "oncall@corp.example"),
-            ("开放 API", "接口契约与第三方接入", "m-luo", "m-wu", "飞书", "#platform-api"),
+            ("权限平台", "多租户范围与操作审计", "m-zhou", ["m-luo", "m-xu"], "企业微信", "#platform-auth"),
+            ("邮件基础设施", "SMTP、模板与发送队列", "m-wu", ["m-xu"], "企业微信", "#platform-email"),
+            ("发布与稳定性", "CI/CD、回滚与 SLO", "m-xu", ["m-zhou", "m-luo"], "电话", "oncall@corp.example"),
+            ("开放 API", "接口契约与第三方接入", "m-luo", ["m-wu"], "飞书", "#platform-api"),
         ],
         "grp-design": [
-            ("品牌体验", "品牌语言、视觉与内容", "m-yu", "m-tang", "飞书", "#design-brand"),
-            ("用户研究", "访谈、可用性测试与洞察", "m-qin", "m-yu", "企业微信", "#design-research"),
-            ("增长实验", "实验设计、内容与复盘", "m-shen", "m-qin", "企业微信", "#design-growth"),
+            ("品牌体验", "品牌语言、视觉与内容", "m-yu", ["m-shen"], "飞书", "#design-brand"),
+            ("用户研究", "访谈、可用性测试与洞察", "m-qin", ["m-yu"], "企业微信", "#design-research"),
+            ("增长实验", "实验设计、内容与复盘", "m-shen", ["m-qin"], "企业微信", "#design-growth"),
         ],
         "grp-data": [
-            ("指标中台", "指标口径、认证与字典", "m-gu", "m-jia", "企业微信", "#data-metrics"),
-            ("实时数仓", "实时链路、数据质量", "m-li", "m-han", "企业微信", "#data-realtime"),
-            ("智能推荐", "推荐策略与可解释性", "m-fang", "m-gu", "飞书", "#data-recommend"),
-            ("经营分析", "月报、专题与决策支持", "m-jia", "m-gu", "飞书", "#data-insights"),
+            ("指标中台", "指标口径、认证与字典", "m-gu", ["m-jia", "m-li"], "企业微信", "#data-metrics"),
+            ("实时数仓", "实时链路、数据质量", "m-li", ["m-jia"], "企业微信", "#data-realtime"),
+            ("智能推荐", "推荐策略与可解释性", "m-fang", ["m-gu"], "飞书", "#data-recommend"),
+            ("经营分析", "月报、专题与决策支持", "m-jia", ["m-gu"], "飞书", "#data-insights"),
         ],
         "grp-infra": [
-            ("数据治理", "分级、血缘与生命周期", "m-pei", "m-han", "企业微信", "#infra-governance"),
-            ("调度平台", "任务编排、自愈与告警", "m-han", "m-pei", "电话", "oncall@corp.example"),
+            ("数据治理", "分级、血缘与生命周期", "m-pei", ["m-han"], "企业微信", "#infra-governance"),
+            ("调度平台", "任务编排、自愈与告警", "m-han", ["m-pei"], "电话", "oncall@corp.example"),
         ],
     }
     for group_id, items in areas.items():
-        for index, (area, description, owner, backup, channel, contact) in enumerate(items):
+        for index, (area, description, owner, backups, channel, contact) in enumerate(items):
+            backup_ids = list(backups)
             conn.execute(
                 "INSERT INTO matrix_areas (id,group_id,area,description,owner_member_id,"
-                "backup_member_id,channel,contact,sort_order,created_at,updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "backup_member_id,backup_member_ids,channel,contact,sort_order,created_at,"
+                "updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     f"matrix-{group_id}-{index}",
                     group_id,
                     area,
                     description,
                     owner,
-                    backup,
+                    backup_ids[0] if backup_ids else None,
+                    json_dumps(backup_ids),
                     channel,
                     contact,
                     index,

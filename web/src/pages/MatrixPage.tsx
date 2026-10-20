@@ -19,6 +19,7 @@ import { useToast } from "../components/Toast";
 import { Avatar } from "../components/Avatar";
 import { Modal, ConfirmDialog } from "../components/Modal";
 import { Select } from "../components/Select";
+import { MultiSelect, type MultiSelectOption } from "../components/MultiSelect";
 import { MatrixNetwork } from "../components/MatrixNetwork";
 import { EmptyState, LoadingBlock } from "../components/Feedback";
 import { cn } from "../lib/utils";
@@ -27,17 +28,81 @@ import "./MatrixPage.css";
 
 interface MatrixDraft {
   area: string;
+  description: string;
   ownerMemberId: string;
-  backupMemberId: string;
+  backupMemberIds: string[];
   sortOrder: string;
 }
 
 const emptyDraft = (): MatrixDraft => ({
   area: "",
+  description: "",
   ownerMemberId: "",
-  backupMemberId: "",
+  backupMemberIds: [],
   sortOrder: "",
 });
+
+const MAX_BACKUPS = 10;
+const DESCRIPTION_MAX = 500;
+
+/**
+ * Backups are a list now, but the payload keeps a legacy single-backup
+ * projection. Read the list defensively so the page still renders while an
+ * older backend (or an in-flight save) returns only the legacy fields.
+ */
+function backupIdsOf(area: MatrixArea): string[] {
+  const list = Array.isArray(area.backupMemberIds) ? area.backupMemberIds.filter(Boolean) : [];
+  if (list.length) return list;
+  const hydrated = Array.isArray(area.backups) ? area.backups.map((backup) => backup.id) : [];
+  if (hydrated.length) return hydrated;
+  return area.backupMemberId ? [area.backupMemberId] : [];
+}
+
+interface BackupView {
+  id: string;
+  name: string;
+  color?: string;
+}
+
+function BackupChips({
+  backups,
+  onNavigate,
+  max = 3,
+}: {
+  backups: BackupView[];
+  onNavigate?: (memberId: string) => void;
+  max?: number;
+}) {
+  if (!backups.length) {
+    return <span className="mx-unassigned">暂无备份</span>;
+  }
+  const visible = max > 0 ? backups.slice(0, max) : backups;
+  const rest = backups.slice(visible.length);
+  return (
+    <div className="mx-backup-chips">
+      {visible.map((backup) => (
+        <button
+          key={backup.id}
+          type="button"
+          className="mx-backup-chip"
+          onClick={() => onNavigate?.(backup.id)}
+          title={`查看 ${backup.name} 的成员卡片`}
+        >
+          <Avatar name={backup.name} color={backup.color} size="xs" />
+          <span>{backup.name}</span>
+        </button>
+      ))}
+      {rest.length ? (
+        <span
+          className="mx-backup-more"
+          title={rest.map((backup) => backup.name).join("、")}
+        >
+          +{rest.length}
+        </span>
+      ) : null}
+    </div>
+  );
+}
 
 function GroupBadge({ name, color }: { name: string; color: string }) {
   return (
@@ -82,7 +147,7 @@ type MemberRole = "owner" | "backup" | "both";
 
 const roleOfMember = (area: MatrixArea, memberId: string): MemberRole | null => {
   const isOwner = area.ownerMemberId === memberId;
-  const isBackup = area.backupMemberId === memberId;
+  const isBackup = backupIdsOf(area).includes(memberId);
   if (isOwner && isBackup) return "both";
   if (isOwner) return "owner";
   if (isBackup) return "backup";
@@ -195,13 +260,40 @@ export default function MatrixPage() {
   const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
   const colorOf = (memberId: string | null) => (memberId ? memberById.get(memberId)?.avatarColor : undefined);
 
+  /** Resolve every backup of one area to a displayable id/name/color triple. */
+  const backupDetailsOf = useCallback(
+    (area: MatrixArea): BackupView[] => {
+      const hydrated = Array.isArray(area.backups) ? area.backups : [];
+      const hydratedMap = new Map(hydrated.map((backup) => [backup.id, backup]));
+      const ids = Array.isArray(area.backupMemberIds) && area.backupMemberIds.length
+        ? area.backupMemberIds.filter(Boolean)
+        : hydrated.length
+          ? hydrated.map((backup) => backup.id)
+          : area.backupMemberId
+            ? [area.backupMemberId]
+            : [];
+      return ids.map((backupId) => {
+        const info = hydratedMap.get(backupId);
+        const member = memberById.get(backupId);
+        const isLegacy = area.backupMemberId === backupId;
+        return {
+          id: backupId,
+          name: info?.name || member?.name || (isLegacy ? area.backupName : "") || "未命名成员",
+          color: info?.color || member?.avatarColor || (isLegacy ? area.backupColor : undefined),
+        };
+      });
+    },
+    [memberById],
+  );
+
   const sortedAreas = useMemo(
     () => [...areas].sort((a, b) => a.sortOrder - b.sortOrder || a.area.localeCompare(b.area, "zh-CN")),
     [areas],
   );
 
   const ownerCount = useMemo(() => areas.filter((area) => Boolean(area.ownerMemberId)).length, [areas]);
-  const backupCount = useMemo(() => areas.filter((area) => Boolean(area.backupMemberId)).length, [areas]);
+  // An area "已配置备份" as soon as it has at least one backup member.
+  const backupCount = useMemo(() => areas.filter((area) => backupIdsOf(area).length > 0).length, [areas]);
 
   const filterMembers = useMemo(() => {
     const seen = new Set<string>();
@@ -216,13 +308,14 @@ export default function MatrixPage() {
         seen.add(area.ownerMemberId);
         list.push({ id: area.ownerMemberId, name: area.ownerName || "未命名" });
       }
-      if (area.backupMemberId && !seen.has(area.backupMemberId)) {
-        seen.add(area.backupMemberId);
-        list.push({ id: area.backupMemberId, name: area.backupName || "未命名" });
+      for (const backup of backupDetailsOf(area)) {
+        if (!backup.id || seen.has(backup.id)) continue;
+        seen.add(backup.id);
+        list.push({ id: backup.id, name: backup.name });
       }
     }
     return list.sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
-  }, [members, areas]);
+  }, [members, areas, backupDetailsOf]);
 
   useEffect(() => {
     if (!selectedMemberId) return;
@@ -251,28 +344,33 @@ export default function MatrixPage() {
   const ownerOptions = useMemo(
     () => [
       { value: "", label: "待认领" },
-      ...dialogMembers.map((member) => ({
-        value: member.id,
-        label: member.name,
-        description: member.title || undefined,
-        color: member.avatarColor,
-        disabled: member.id === draft.backupMemberId,
-      })),
+      ...dialogMembers.map((member) => {
+        const isBackup = draft.backupMemberIds.includes(member.id);
+        return {
+          value: member.id,
+          label: member.name,
+          description: isBackup ? "已是备份成员，不能兼任负责人" : member.title || undefined,
+          color: member.avatarColor,
+          disabled: isBackup,
+        };
+      }),
     ],
-    [dialogMembers, draft.backupMemberId],
+    [dialogMembers, draft.backupMemberIds],
   );
 
-  const backupOptions = useMemo(
-    () => [
-      { value: "", label: "暂无备份" },
-      ...dialogMembers.map((member) => ({
-        value: member.id,
-        label: member.name,
-        description: member.title || undefined,
-        color: member.avatarColor,
-        disabled: member.id === draft.ownerMemberId,
-      })),
-    ],
+  const backupOptions = useMemo<MultiSelectOption[]>(
+    () =>
+      dialogMembers.map((member) => {
+        const isOwner = member.id === draft.ownerMemberId;
+        return {
+          value: member.id,
+          label: member.name,
+          description: isOwner ? "当前负责人不能兼任备份" : member.title || undefined,
+          color: member.avatarColor,
+          disabled: isOwner,
+          disabledHint: isOwner ? "当前负责人" : undefined,
+        };
+      }),
     [dialogMembers, draft.ownerMemberId],
   );
 
@@ -288,7 +386,7 @@ export default function MatrixPage() {
     if (!selectedMemberId) return null;
     const person = filterMembers.find((member) => member.id === selectedMemberId);
     const owned = areas.filter((area) => area.ownerMemberId === selectedMemberId).length;
-    const backed = areas.filter((area) => area.backupMemberId === selectedMemberId).length;
+    const backed = areas.filter((area) => backupIdsOf(area).includes(selectedMemberId)).length;
     return { name: person?.name ?? "该成员", owned, backed };
   }, [selectedMemberId, filterMembers, areas]);
 
@@ -306,8 +404,10 @@ export default function MatrixPage() {
     setEditing(area);
     setDraft({
       area: area.area,
+      description: area.description ?? "",
       ownerMemberId: area.ownerMemberId ?? "",
-      backupMemberId: area.backupMemberId ?? "",
+      // `backupMemberIds` wins; legacy single-backup fields are the fallback.
+      backupMemberIds: backupIdsOf(area),
       sortOrder: String(area.sortOrder ?? 0),
     });
     setEditorOpen(true);
@@ -325,16 +425,27 @@ export default function MatrixPage() {
       toast("排序需要是数字", "error");
       return;
     }
-    if (draft.ownerMemberId && draft.ownerMemberId === draft.backupMemberId) {
-      toast("负责人与备份人不能是同一人", "error");
+    const description = draft.description.trim();
+    if (description.length > DESCRIPTION_MAX) {
+      toast(`责任田描述最多 ${DESCRIPTION_MAX} 字`, "error");
+      return;
+    }
+    const backupMemberIds = Array.from(new Set(draft.backupMemberIds.filter(Boolean)));
+    if (backupMemberIds.length > MAX_BACKUPS) {
+      toast(`每块责任田最多 ${MAX_BACKUPS} 位备份成员`, "error");
+      return;
+    }
+    if (draft.ownerMemberId && backupMemberIds.includes(draft.ownerMemberId)) {
+      toast("负责人不能同时担任备份成员，请先移除该备份", "error");
       return;
     }
     setSaving(true);
     try {
       const body = {
         area: areaName,
+        description,
         ownerMemberId: draft.ownerMemberId || null,
-        backupMemberId: draft.backupMemberId || null,
+        backupMemberIds,
         sortOrder: sortOrder === "" ? undefined : Number(sortOrder),
       };
       if (editing) {
@@ -430,7 +541,7 @@ export default function MatrixPage() {
               <Target size={13} /> 唯一主责：每块领域只认一个负责人
             </span>
             <span>
-              <HandHelping size={13} /> 备份补位：负责人不在时由备份人接手
+              <HandHelping size={13} /> 备份补位：每块领域可配多位备份，负责人不在时按序接手
             </span>
           </div>
         </div>
@@ -483,7 +594,7 @@ export default function MatrixPage() {
           title="还没有划分业务责任田"
           description={
             canManageActiveGroup
-              ? "从最常被问到「这个找谁」的领域开始，为每块田指定负责人与备份人。"
+              ? "从最常被问到「这个找谁」的领域开始，为每块田指定负责人与备份成员。"
               : "管理员还没有整理业务责任田，稍后再来看看吧。"
           }
           icon={<Waypoints size={24} />}
@@ -546,7 +657,7 @@ export default function MatrixPage() {
               <EmptyState
                 compact
                 title="该成员暂无责任田"
-                description="在当前开发组中，这位成员既不是任何责任田的主责人，也不是备份人。"
+                description="在当前开发组中，这位成员既不是任何责任田的主责人，也不是备份成员。"
                 icon={<Users size={22} />}
                 action={
                   <button type="button" className="btn btn-secondary" onClick={() => setSelectedMemberId("")}>
@@ -562,9 +673,10 @@ export default function MatrixPage() {
                   <thead>
                     <tr>
                       <th>业务领域</th>
+                      <th className="mx-col-desc">责任田描述</th>
                       {selectedMemberId ? <th className="mx-role-col">与该成员的关系</th> : null}
                       <th>负责人</th>
-                      <th>备份人</th>
+                      <th className="mx-col-backups">备份成员</th>
                       {canManageActiveGroup ? <th className="mx-th-actions">操作</th> : null}
                     </tr>
                   </thead>
@@ -579,6 +691,15 @@ export default function MatrixPage() {
                               <GroupBadge name={targetOf(area).groupName} color={targetOf(area).groupColor} />
                             ) : null}
                           </div>
+                        </td>
+                        <td className="mx-desc-cell">
+                          {area.description?.trim() ? (
+                            <span className="mx-desc" title={area.description}>
+                              {area.description}
+                            </span>
+                          ) : (
+                            <span className="mx-desc-empty">—</span>
+                          )}
                         </td>
                         {selectedMemberId ? (
                           <td>
@@ -595,13 +716,7 @@ export default function MatrixPage() {
                           />
                         </td>
                         <td>
-                          <MemberCell
-                            memberId={area.backupMemberId}
-                            name={area.backupName}
-                            color={colorOf(area.backupMemberId)}
-                            emptyLabel="暂无备份"
-                            onNavigate={goToMember}
-                          />
+                          <BackupChips backups={backupDetailsOf(area)} onNavigate={goToMember} />
                         </td>
                         {canManageActiveGroup ? (
                           <td>
@@ -648,6 +763,16 @@ export default function MatrixPage() {
                         ) : null}
                       </div>
                     </header>
+                    <div className="mx-card-desc-row">
+                      <small>责任田描述</small>
+                      {area.description?.trim() ? (
+                        <p className="mx-card-desc" title={area.description}>
+                          {area.description}
+                        </p>
+                      ) : (
+                        <p className="mx-card-desc is-empty">—</p>
+                      )}
+                    </div>
                     <div className="mx-card-people">
                       <div>
                         <small>负责人</small>
@@ -660,13 +785,11 @@ export default function MatrixPage() {
                         />
                       </div>
                       <div>
-                        <small>备份人</small>
-                        <MemberCell
-                          memberId={area.backupMemberId}
-                          name={area.backupName}
-                          color={colorOf(area.backupMemberId)}
-                          emptyLabel="暂无备份"
+                        <small>备份成员</small>
+                        <BackupChips
+                          backups={backupDetailsOf(area)}
                           onNavigate={goToMember}
+                          max={0}
                         />
                       </div>
                     </div>
@@ -710,7 +833,7 @@ export default function MatrixPage() {
             ? `当前在聚合视角编辑「${targetOf(editing).groupName}」的责任田，保存会写回该开发组。`
             : !editing && aggregate
               ? `聚合视角下新增的责任田会写入当前开发组：${currentGroup?.name ?? "当前开发组"}。`
-              : "负责人决定这块领域谁拍板，备份人保证负责人缺席时仍有人接住。"
+              : "负责人决定这块领域谁拍板，多位备份成员保证负责人缺席时仍有人接住。"
         }
         size="lg"
         footer={
@@ -737,11 +860,48 @@ export default function MatrixPage() {
                 autoFocus
               />
             </div>
+            <div className="field span-2">
+              <span className="field-label">
+                责任田描述 <em className="mx-optional">选填</em>
+              </span>
+              <textarea
+                className="textarea mx-textarea"
+                value={draft.description}
+                maxLength={DESCRIPTION_MAX}
+                rows={3}
+                placeholder="用一两句话说明这块责任田覆盖的业务范围、边界和交接要点…"
+                onChange={(event) =>
+                  setDraft((prev) => ({ ...prev, description: event.target.value }))
+                }
+                aria-label="责任田描述（选填）"
+              />
+              <span className="field-hint mx-desc-hint">
+                <span>展示在责任田表格与成员卡片中，方便快速了解这块田的边界。</span>
+                <span
+                  className={cn(
+                    "mx-char-count",
+                    draft.description.length > DESCRIPTION_MAX - 50 && "is-near",
+                    draft.description.length >= DESCRIPTION_MAX && "is-full",
+                  )}
+                >
+                  {draft.description.length} / {DESCRIPTION_MAX}
+                </span>
+              </span>
+            </div>
             <div className="field">
               <span className="field-label">负责人</span>
               <Select
                 value={draft.ownerMemberId}
-                onChange={(next) => setDraft((prev) => ({ ...prev, ownerMemberId: next }))}
+                onChange={(next) =>
+                  setDraft((prev) => ({
+                    ...prev,
+                    ownerMemberId: next,
+                    // Making someone the owner removes them from the backup list.
+                    backupMemberIds: next
+                      ? prev.backupMemberIds.filter((memberId) => memberId !== next)
+                      : prev.backupMemberIds,
+                  }))
+                }
                 options={ownerOptions}
                 ariaLabel="负责人"
                 placeholder="待认领"
@@ -749,15 +909,21 @@ export default function MatrixPage() {
               />
             </div>
             <div className="field">
-              <span className="field-label">备份人</span>
-              <Select
-                value={draft.backupMemberId}
-                onChange={(next) => setDraft((prev) => ({ ...prev, backupMemberId: next }))}
+              <span className="field-label">
+                备份成员 <em className="mx-optional">可多选</em>
+              </span>
+              <MultiSelect
+                value={draft.backupMemberIds}
+                onChange={(next) => setDraft((prev) => ({ ...prev, backupMemberIds: next }))}
                 options={backupOptions}
-                ariaLabel="备份人"
-                placeholder="暂无备份"
-                searchable={dialogMembers.length > 6}
+                ariaLabel="备份成员（可多选）"
+                placeholder={dialogMembers.length ? "选择备份成员" : "暂无可选成员"}
+                max={MAX_BACKUPS}
+                emptyLabel="没有可选的成员"
               />
+              <span className="field-hint">
+                每块责任田可配置多位备份成员；负责人缺席时按顺序接手，同一成员可备份多块责任田。
+              </span>
             </div>
             <div className="field">
               <span className="field-label">排序（可选）</span>

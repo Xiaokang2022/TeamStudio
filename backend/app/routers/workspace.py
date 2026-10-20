@@ -515,6 +515,27 @@ def create_member(
     return ok({"member": member})
 
 
+def _prune_matrix_backups(conn, member_id: str) -> None:
+    """Remove a deleted member id from every responsibility area's backup JSON array."""
+    for area in rows(
+        conn,
+        "SELECT id, backup_member_ids FROM matrix_areas WHERE backup_member_ids LIKE ?",
+        (f"%{member_id}%",),
+    ):
+        parsed = json_loads(area.get("backup_member_ids"), None)
+        if not isinstance(parsed, list) or member_id not in parsed:
+            continue
+        remaining = [item for item in parsed if item != member_id]
+        conn.execute(
+            "UPDATE matrix_areas SET backup_member_ids=?, backup_member_id=? WHERE id=?",
+            (
+                json_dumps(remaining),
+                remaining[0] if remaining else None,
+                area["id"],
+            ),
+        )
+
+
 @router.delete("/members/{member_id}")
 def delete_member(
     team_id: str,
@@ -535,6 +556,7 @@ def delete_member(
         conn.execute(
             "UPDATE matrix_areas SET backup_member_id=NULL WHERE backup_member_id=?", (member_id,)
         )
+        _prune_matrix_backups(conn, member_id)
         conn.execute("UPDATE todos SET assignee_member_id=NULL WHERE assignee_member_id=?", (member_id,))
         conn.execute("DELETE FROM members WHERE id=? AND group_id=?", (member_id, group_id))
         audit(conn, user, "member.delete", "member", member_id, {"name": member["name"]})

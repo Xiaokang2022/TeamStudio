@@ -1,4 +1,4 @@
-import { AlertTriangle, CalendarDays, Clock, ListTodo } from "lucide-react";
+import { AlertTriangle, CalendarDays, Clock, ListTodo, Maximize2 } from "lucide-react";
 import { Avatar } from "./Avatar";
 import { cn } from "../lib/utils";
 import {
@@ -14,6 +14,8 @@ export interface WorkloadMeterProps {
   /** Rolling window label from the API meta payload, e.g. 近 4 周. */
   windowLabel?: string;
   className?: string;
+  /** When provided the card becomes a button that opens the detailed workload view. */
+  onOpen?: () => void;
 }
 
 /**
@@ -23,7 +25,12 @@ export interface WorkloadMeterProps {
  * `.workload-fill`, `.workload-meta`, `.load-pill` and `.is-*` classes are styled by the
  * shared design system; `.tasks-wl-*` classes below add the page-specific layout fallback.
  */
-export function WorkloadMeter({ workload, windowLabel = "近 4 周", className }: WorkloadMeterProps) {
+export function WorkloadMeter({
+  workload,
+  windowLabel = "近 4 周",
+  className,
+  onOpen,
+}: WorkloadMeterProps) {
   const currentLevel =
     WORKLOAD_LEVEL_META[workloadLevel(workload.currentLoadPercent)] ?? WORKLOAD_LEVEL_META.balanced;
   const averageLevel =
@@ -35,8 +42,25 @@ export function WorkloadMeter({ workload, windowLabel = "近 4 周", className }
 
   return (
     <article
-      className={cn("workload", "tasks-wl", currentLevel.className, className)}
-      aria-label={`${workload.memberName} 工作量负载`}
+      className={cn("workload", "tasks-wl", currentLevel.className, onOpen && "is-clickable", className)}
+      aria-label={
+        onOpen
+          ? `查看 ${workload.memberName} 的详细负载`
+          : `${workload.memberName} 工作量负载`
+      }
+      role={onOpen ? "button" : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      onClick={onOpen}
+      onKeyDown={
+        onOpen
+          ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onOpen();
+              }
+            }
+          : undefined
+      }
     >
       <header className="workload-head tasks-wl-head">
         <Avatar name={workload.memberName} color={workload.avatarColor} size="md" />
@@ -45,6 +69,7 @@ export function WorkloadMeter({ workload, windowLabel = "近 4 周", className }
           <small>{workload.memberTitle || "开发组成员"}</small>
         </div>
         <span className={cn("load-pill", currentLevel.className)}>{currentLevel.label}</span>
+        {onOpen ? <Maximize2 size={13} className="tasks-wl-open-icon" aria-hidden="true" /> : null}
       </header>
 
       <div className="tasks-wl-current">

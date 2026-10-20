@@ -10,6 +10,8 @@ import type {
   LinkItem,
   MailMessage,
   MailboxData,
+  ManagedGroup,
+  ManagedTeam,
   MatrixArea,
   Member,
   MemberTask,
@@ -24,6 +26,7 @@ import type {
   Todo,
   ValidationDetail,
   WorkItem,
+  WorkspaceManageData,
   WorkspaceOption,
 } from "./types";
 
@@ -306,6 +309,41 @@ export const api = {
     request<{ schema: Record<string, unknown>; meta: SettingsMeta }>("/api/settings/schema"),
   settingsDefaults: () => request<AppSettings>("/api/settings/defaults"),
   settingsWorkspace: () => request<WorkspaceOption>("/api/settings/workspace"),
+
+  /* ---------------------------------------------------------------- */
+  /* Workspace administration: create / delete teams and groups.      */
+  /* The backend rejects out-of-scope writes with 403 and requires the */
+  /* exact name to confirm every destructive action.                   */
+  /* ---------------------------------------------------------------- */
+  manageWorkspace: () => request<WorkspaceManageData>("/api/workspace/manage"),
+  createTeam: (body: {
+    name: string;
+    shortName?: string;
+    description?: string;
+    color?: string;
+  }) =>
+    request<{ team: ManagedTeam }>("/api/workspace/teams", {
+      method: "POST",
+      body,
+    }),
+  deleteTeam: (teamId: string, confirmName: string) =>
+    request<{ deleted: boolean; id: string }>(
+      `/api/workspace/teams/${encodeURIComponent(teamId)}`,
+      { method: "DELETE", body: { confirmName } },
+    ),
+  createGroup: (
+    teamId: string,
+    body: { name: string; description?: string; color?: string; icon?: string },
+  ) =>
+    request<{ group: ManagedGroup }>(
+      `/api/workspace/teams/${encodeURIComponent(teamId)}/groups`,
+      { method: "POST", body },
+    ),
+  deleteGroup: (teamId: string, groupId: string, confirmName: string) =>
+    request<{ deleted: boolean; id: string }>(
+      `/api/workspace/teams/${encodeURIComponent(teamId)}/groups/${encodeURIComponent(groupId)}`,
+      { method: "DELETE", body: { confirmName } },
+    ),
 
   emailStatus: () => request<EmailStatus>("/api/email/status"),
   emailLogs: (limit = 50) =>
