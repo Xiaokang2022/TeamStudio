@@ -1,13 +1,21 @@
 export type AdminRole = "super" | "team_admin" | "group_admin" | null;
-export type IdentitySource = "local" | "sso" | "ip" | "guest";
+export type UserRole = "member" | "group_admin" | "team_admin" | "super";
+export type IdentitySource = "local" | "sso" | "email" | "ip" | "guest";
 
 export interface CurrentUser {
   id: string;
   name: string;
   email: string;
+  avatar: string;
+  avatarColor: string;
+  bio: string;
+  skills: string[];
   authenticated: boolean;
   source: IdentitySource;
   isDeviceAdmin: boolean;
+  isSuperAdmin: boolean;
+  userRole: UserRole | null;
+  emailVerified: boolean;
   admin: {
     role: AdminRole;
     teamIds: string[];
@@ -20,7 +28,9 @@ export interface CurrentUser {
     canEditSettings: boolean;
     canEditAny: boolean;
     canEditSelf: boolean;
-    canManageEmail: boolean;
+    canManageUsers: boolean;
+    canViewAllScope: boolean;
+    canManageWorkspace: boolean;
   };
 }
 
@@ -49,7 +59,6 @@ export interface ModuleFlags {
   matrix: boolean;
   announcements: boolean;
   settings: boolean;
-  email: boolean;
   insights: boolean;
 }
 
@@ -60,10 +69,7 @@ export interface PublicConfig {
   calendar: {
     weekStartsOn: 0 | 1;
     showWeekends: boolean;
-    defaultReminderOffsetsDays: number[];
-    defaultReminderTime: string;
     allowPastDue: boolean;
-    defaultEmailEnabled: boolean;
   };
   redblack: {
     showScores: boolean;
@@ -78,9 +84,17 @@ export interface PublicConfig {
     auditLog: boolean;
     allowGuestTodoCreate: boolean;
   };
-  email: { enabled: boolean; remindersEnabled: boolean; deliveryMode?: "builtin" | "smtp"; builtinEnabled?: boolean };
+  email: { enabled: boolean; configured: boolean; fromEmail: string; fromName: string };
   auth: {
     guestMode: boolean;
+    allowGuestRead: boolean;
+    emailLogin: {
+      enabled: boolean;
+      codeLength: number;
+      codeExpiryMinutes: number;
+      resendSeconds: number;
+    };
+    sessionDays: number;
     sso: { enabled: boolean; configured: boolean; providerName: string };
   };
 }
@@ -141,6 +155,7 @@ export interface Member {
   id: string;
   name: string;
   email: string;
+  avatar?: string;
   title: string;
   role: string;
   avatarColor: string;
@@ -296,9 +311,6 @@ export interface Todo {
   assigneeColor?: string;
   priority: TodoPriority;
   status: "todo" | "done";
-  reminderOffsetsDays: number[];
-  emailEnabled: boolean;
-  remindersSent?: number[];
   overdue?: boolean;
   createdBy: string;
   createdByName?: string;
@@ -315,12 +327,16 @@ export interface RedBlackEntry {
   title: string;
   reason: string;
   score: number;
+  groupId?: string;
+  groupName?: string;
+  teamId?: string;
+  teamName?: string;
   createdAt?: string;
 }
 
 export interface RedBlackBoard {
-  id: string;
-  groupId?: string;
+  id: string | null;
+  groupId?: string | null;
   month: string;
   theme: string;
   updatedAt: string | null;
@@ -329,9 +345,22 @@ export interface RedBlackBoard {
   exists?: boolean;
 }
 
+export interface RedBlackGroupBoard {
+  groupId: string;
+  groupName: string;
+  teamId: string;
+  teamName: string;
+  theme: string;
+  red: RedBlackEntry[];
+  black: RedBlackEntry[];
+  updatedAt?: string | null;
+}
+
 export interface RedBlackData {
   month: string;
+  scope?: ScopeMeta;
   board: RedBlackBoard | null;
+  boards?: RedBlackGroupBoard[];
   availableMonths: string[];
 }
 
@@ -435,6 +464,18 @@ export interface SettingsMeta {
   deviceAdminName: string;
 }
 
+export interface SmtpConfig {
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  fromEmail: string;
+  fromName: string;
+  useStartTls: boolean;
+  useSsl: boolean;
+  timeoutSeconds: number;
+}
+
 export interface AppSettings {
   version: number;
   site: SiteConfig;
@@ -444,44 +485,20 @@ export interface AppSettings {
   redblack: PublicConfig["redblack"];
   email: {
     enabled: boolean;
-    deliveryMode: "builtin" | "smtp";
-    builtin: {
-      enabled: boolean;
-      host: string;
-      port: number;
-      hostname: string;
-      mailboxLimit: number;
-      retentionDays: number;
-    };
-    smtp: {
-      host: string;
-      port: number;
-      username: string;
-      password: string;
-      fromEmail: string;
-      fromName: string;
-      useStartTls: boolean;
-      useSsl: boolean;
-      timeoutSeconds: number;
-    };
-    reminders: {
-      enabled: boolean;
-      offsetsDays: number[];
-      sendTime: string;
-      scanIntervalSeconds: number;
-      notifyAssignee: boolean;
-      additionalRecipients: string[];
-      includeAnnouncements: boolean;
-      includeTodoDescription: boolean;
-      includeExtra: boolean;
-      extraContent: string;
-      subjectTemplate: string;
-      bodyTemplate: string;
-    };
+    smtp: SmtpConfig;
+    subjectTemplate: string;
+    bodyTemplate: string;
   };
   auth: {
     guestMode: boolean;
     allowGuestRead: boolean;
+    emailLogin: {
+      enabled: boolean;
+      codeLength: number;
+      codeExpiryMinutes: number;
+      resendSeconds: number;
+      maxAttempts: number;
+    };
     sso: {
       enabled: boolean;
       providerName: string;
@@ -538,44 +555,197 @@ export interface WorkspaceOption {
   members: { id: string; team_id: string; group_id: string; name: string; email: string; title: string }[];
 }
 
+/* ------------------------------------------------------------------ */
+/* Accounts, personal home page, domain settings and SMTP             */
+/* ------------------------------------------------------------------ */
+
+export interface UserAccount {
+  id: string;
+  email: string;
+  name: string;
+  avatar: string;
+  avatarColor: string;
+  bio: string;
+  skills: string[];
+  role: UserRole;
+  roleLabel: string;
+  teamIds: string[];
+  groupIds: string[];
+  emailVerified: boolean;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  isDeviceAdmin?: boolean;
+  canManage?: boolean;
+  isSelf?: boolean;
+}
+
+export interface UsersData {
+  users: UserAccount[];
+  deviceAdminName: string;
+  permissions: { canManageUsers: boolean };
+}
+
+export interface ProfileMember {
+  id: string;
+  name: string;
+  email: string;
+  title: string;
+  role: string;
+  avatarColor: string;
+  avatar: string;
+  bio: string;
+  tags: string[];
+  skills: string[];
+  status: string;
+  groupId: string;
+  groupName: string;
+  teamId: string;
+  teamName: string;
+}
+
+export interface ProfileDuty {
+  id: string;
+  area: string;
+  description: string;
+  role: "owner" | "backup";
+  channel: string;
+  contact: string;
+  groupId: string;
+  groupName: string;
+  teamId: string;
+  teamName: string;
+}
+
+export interface ProfileTodo {
+  id: string;
+  title: string;
+  description: string;
+  dueDate: string;
+  dueTime: string;
+  status: "todo" | "done";
+  priority: TodoPriority;
+  groupId: string;
+  groupName: string;
+  teamId: string;
+  teamName: string;
+}
+
+export interface ProfileRedBlackEntry extends RedBlackEntry {
+  month: string;
+  groupId: string;
+  groupName: string;
+  teamId: string;
+  teamName: string;
+}
+
+export interface ProfileData {
+  user: UserAccount & { isDeviceAdmin: boolean };
+  members: ProfileMember[];
+  duties: ProfileDuty[];
+  currentTasks: MemberTask[];
+  historyTasks: MemberTask[];
+  todos: ProfileTodo[];
+  redblack: { red: ProfileRedBlackEntry[]; black: ProfileRedBlackEntry[] };
+  stats: {
+    duties: number;
+    currentTasks: number;
+    completedTasks: number;
+    openTodos: number;
+    redEntries: number;
+    blackEntries: number;
+  };
+  canEdit: boolean;
+  isSelf: boolean;
+}
+
+export interface DomainGroupSettings {
+  id: string;
+  teamId: string;
+  name: string;
+  description: string;
+  color: string;
+  icon: string;
+  canEdit: boolean;
+}
+
+export interface DomainTeamSettings {
+  id: string;
+  name: string;
+  shortName: string;
+  description: string;
+  color: string;
+  canEdit: boolean;
+  groups: DomainGroupSettings[];
+}
+
+export interface DomainSettingsData {
+  teams: DomainTeamSettings[];
+  permissions: {
+    canEditSite: boolean;
+    canEditStructure: boolean;
+    canEditTeam: boolean;
+    canEditGroup: boolean;
+    isSuperAdmin: boolean;
+    isDeviceAdmin: boolean;
+  };
+}
+
 export interface EmailStatus {
   enabled: boolean;
-  remindersEnabled: boolean;
-  deliveryMode: "builtin" | "smtp";
-  builtin: {
-    enabled: boolean;
-    running: boolean;
-    host: string;
-    port: number;
-    stored: number;
-    limit: number;
-  };
-  smtpConfigured: boolean;
+  configured: boolean;
+  host: string;
+  port: number;
+  username: string;
   fromEmail: string;
-  lastScanAt: string | null;
-  pendingReminders: number;
+  fromName: string;
+  useStartTls: boolean;
+  useSsl: boolean;
+  timeoutSeconds: number;
+  lastSentAt: string | null;
+  lastError: string;
   sentToday: number;
-  failedToday: number;
-  scheduler: {
-    running: boolean;
-    lastScanAt: string | null;
-    nextScanAt: string | null;
-    lastError: string;
-  };
-  templatePreview: { subject: string; body: string };
 }
 
 export interface EmailLog {
   id: string;
-  group_id: string;
-  todo_id: string;
   kind: string;
   recipient: string;
   subject: string;
   status: "sent" | "failed";
   error: string;
-  detail: string;
   created_at: string;
+}
+
+export interface AuthConfigData {
+  guestMode: boolean;
+  allowGuestRead: boolean;
+  emailLogin: {
+    enabled: boolean;
+    codeLength: number;
+    codeExpiryMinutes: number;
+    resendSeconds: number;
+  };
+  sessionDays: number;
+  sso: { enabled: boolean; configured: boolean; providerName: string };
+  emailService: { enabled: boolean; configured: boolean };
+}
+
+export interface EmailCodeRequestResponse {
+  sent: boolean;
+  email: string;
+  purpose: "login" | "register";
+  registered: boolean;
+  expiresInSeconds: number;
+  resendAfterSeconds: number;
+  codeLength: number;
+}
+
+export interface EmailCodeVerifyResponse {
+  loggedIn: boolean;
+  isNewUser: boolean;
+  user: UserAccount;
+  sessionDays: number;
 }
 
 export interface ApiEnvelope<T> {
@@ -600,7 +770,7 @@ export interface ActivityEntry {
 }
 
 /* ------------------------------------------------------------------ */
-/* Multi-scope browsing, task tags, insights and bundled mail          */
+/* Multi-scope browsing, task tags and insights                       */
 /* ------------------------------------------------------------------ */
 
 export type ScopeKind = "group" | "team" | "all";
@@ -740,36 +910,5 @@ export interface InsightsData {
   trend: {
     granularity: "day" | "week";
     buckets: InsightsTrendPoint[];
-  };
-}
-
-export interface MailMessage {
-  id: string;
-  direction: string;
-  fromAddr: string;
-  toAddrs: string[];
-  ccAddrs: string[];
-  subject: string;
-  bodyText: string;
-  bodyHtml: string;
-  kind: string;
-  groupId: string;
-  todoId: string;
-  status: string;
-  error: string;
-  createdAt: string;
-  readAt: string | null;
-  raw?: string;
-}
-
-export interface MailboxData {
-  messages: MailMessage[];
-  total: number;
-  builtin: {
-    enabled: boolean;
-    running: boolean;
-    host: string;
-    port: number;
-    limit: number;
   };
 }

@@ -28,6 +28,6 @@ def group_insights(
 ):
     with db() as conn:
         get_group(conn, team_id, group_id)
-        ctx = resolve_scope(conn, team_id, group_id, scope)
+        ctx = resolve_scope(conn, team_id, group_id, scope, user)
         data = build_insights(conn, ctx, range_key)
     return ok(data)

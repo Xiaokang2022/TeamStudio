@@ -12,6 +12,7 @@ import { api, ApiError } from "./api";
 import { useToast } from "./components/Toast";
 import type {
   BootstrapData,
+  CurrentUser,
   PublicConfig,
   TeamRef,
   GroupRef,
@@ -19,6 +20,7 @@ import type {
   ScopeKind,
 } from "./types";
 import { canManageGroup, hashRoute, navigate as navigateHash } from "./lib/utils";
+import { scopeOptionsFor, type ScopeOption } from "./lib/scope";
 
 type ThemeMode = "light" | "dark";
 
@@ -32,9 +34,12 @@ interface AppContextValue {
   theme: ThemeMode;
   scope: ScopeKind;
   scopeLabel: string;
+  scopeOptions: ScopeOption[];
   canManageActiveGroup: boolean;
   canEditSelf: boolean;
   isAdmin: boolean;
+  isSuperAdmin: boolean;
+  permissions: CurrentUser["permissions"] | null;
   currentTeam: TeamRef | null;
   currentGroup: GroupRef | null;
   moduleVisible: (module: keyof ModuleFlags) => boolean;
@@ -119,6 +124,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (result.active.group) {
           selectionRef.current.groupId = result.active.group.id;
           localStorage.setItem(STORAGE_GROUP, result.active.group.id);
+        }
+        // 非超级管理员不能使用「全部团队」视角：确认身份后降级为「整个团队」并持久化。
+        if (!result.me.isSuperAdmin) {
+          setScopeState((current) => {
+            if (current !== "all") return current;
+            try {
+              localStorage.setItem(STORAGE_SCOPE, "team");
+            } catch {
+              // ignore storage failures
+            }
+            return "team";
+          });
         }
       } catch (err) {
         if (id !== requestId.current) return;
@@ -220,22 +237,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const setScope = useCallback((next: ScopeKind) => {
-    setScopeState(next);
-    try {
-      localStorage.setItem(STORAGE_SCOPE, next);
-    } catch {
-      // ignore storage failures
-    }
-  }, []);
+  const setScope = useCallback(
+    (next: ScopeKind) => {
+      const resolved: ScopeKind = next === "all" && !(data?.me.isSuperAdmin || data?.me.isDeviceAdmin)
+        ? "team"
+        : next;
+      setScopeState(resolved);
+      try {
+        localStorage.setItem(STORAGE_SCOPE, resolved);
+      } catch {
+        // ignore storage failures
+      }
+    },
+    [data?.me.isDeviceAdmin, data?.me.isSuperAdmin],
+  );
 
   const navigate = useCallback((page: string, params?: Record<string, string>) => {
     navigateHash(page, params);
   }, []);
 
+  const me = data?.me ?? null;
   const currentTeam = data?.active.team ?? null;
   const currentGroup = data?.active.group ?? null;
-  const canManageActiveGroup = canManageGroup(data?.me, currentTeam?.id, currentGroup?.id);
+  const isSuperAdmin = Boolean(me?.isSuperAdmin || me?.isDeviceAdmin);
+  const permissions = me?.permissions ?? null;
+  const isAdmin = Boolean(me?.isDeviceAdmin || me?.isSuperAdmin || me?.admin.role);
+  const scopeOptions = useMemo<ScopeOption[]>(() => scopeOptionsFor(isSuperAdmin), [isSuperAdmin]);
+  const canManageActiveGroup = canManageGroup(me, currentTeam?.id, currentGroup?.id);
   const scopeLabel =
     scope === "all"
       ? "全部团队"
@@ -254,9 +282,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       theme,
       scope,
       scopeLabel,
+      scopeOptions,
       canManageActiveGroup,
       canEditSelf: Boolean(data?.me.permissions.canEditSelf),
-      isAdmin: Boolean(data?.me.isDeviceAdmin || data?.me.admin.role),
+      isAdmin,
+      isSuperAdmin,
+      permissions,
       currentTeam,
       currentGroup,
       moduleVisible: (module) => Boolean(data?.config.modules[module]),
@@ -276,7 +307,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       theme,
       scope,
       scopeLabel,
+      scopeOptions,
       canManageActiveGroup,
+      isAdmin,
+      isSuperAdmin,
+      permissions,
       currentTeam,
       currentGroup,
       fetchBootstrap,

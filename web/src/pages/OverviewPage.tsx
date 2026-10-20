@@ -252,7 +252,7 @@ export default function OverviewPage() {
   }, [selectedMember, data?.teams, teamId, groupId]);
 
   const heroStats = [
-    { label: "团队成员", value: stats?.members ?? members.length, unit: "位伙伴", icon: Users },
+    { label: "团队成员", value: stats?.members ?? members.length, unit: "位成员", icon: Users },
     { label: "在途工作", value: stats?.currentWorks ?? 0, unit: "项推进中", icon: Activity },
     { label: "待跟进待办", value: stats?.openTodos ?? 0, unit: "条待办", icon: ListTodo },
     { label: "置顶公告", value: pinned.length, unit: "条信号", icon: Megaphone },
@@ -338,7 +338,7 @@ export default function OverviewPage() {
             </span>
             <span className="ov-hero-chip is-muted">
               <Users size={13} />
-              {members.length} 位伙伴
+              {members.length} 位成员
             </span>
           </div>
           <p className="eyebrow ov-hero-eyebrow">
@@ -393,6 +393,7 @@ export default function OverviewPage() {
                 <Avatar
                   key={member.id}
                   name={member.name}
+                  src={member.avatar}
                   color={member.avatarColor}
                   size="sm"
                 />
@@ -490,7 +491,7 @@ export default function OverviewPage() {
                 成员档案
               </h2>
               <p className="ov-section-sub">
-                共 {members.length} 位伙伴，正在推进 {stats?.currentWorks ?? 0} 项工作。
+                共 {members.length} 位成员，正在推进 {stats?.currentWorks ?? 0} 项工作。
                 {isAggregated ? ` · ${scopeLabel}` : ""}
               </p>
             </div>
@@ -568,6 +569,7 @@ export default function OverviewPage() {
                     <div className="ov-member-top">
                       <Avatar
                         name={member.name}
+                        src={member.avatar}
                         color={member.avatarColor}
                         size="lg"
                       />
@@ -590,7 +592,7 @@ export default function OverviewPage() {
                     </div>
 
                     <p className="ov-member-bio">
-                      {member.bio || "这位伙伴还没有留下个人简介，点开档案了解更多。"}
+                      {member.bio || "这位成员还没有留下个人简介，点开档案了解更多。"}
                     </p>
 
                     {member.tags.length ? (
@@ -713,7 +715,7 @@ export default function OverviewPage() {
               title={isFiltered ? "没有匹配的成员" : "还没有成员档案"}
               description={
                 isFiltered
-                  ? "换一个关键词试试，也可以清除搜索查看全部伙伴。"
+                  ? "换一个关键词试试，也可以清除搜索查看全部成员。"
                   : "管理员添加第一位成员后，团队概览会自动生成成员卡片。"
               }
               action={
@@ -981,7 +983,7 @@ function AddMemberDialog({ open, teamId, groupId, onClose, onSaved }: AddMemberD
             className="textarea"
             value={form.bio}
             onChange={(event) => setField("bio", event.target.value)}
-            placeholder="一句话介绍这位伙伴擅长什么、正在关注什么。"
+            placeholder="一句话介绍这位成员擅长什么、正在关注什么。"
             maxLength={2000}
             rows={3}
           />

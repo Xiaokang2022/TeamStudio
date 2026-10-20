@@ -2,20 +2,25 @@ import type {
   Announcement,
   AnnouncementsData,
   AppSettings,
+  AuthConfigData,
   BootstrapData,
+  DomainSettingsData,
+  DomainGroupSettings,
+  DomainTeamSettings,
+  EmailCodeRequestResponse,
+  EmailCodeVerifyResponse,
   EmailLog,
   EmailStatus,
   InsightsData,
   InsightsRangeKey,
   LinkItem,
-  MailMessage,
-  MailboxData,
   ManagedGroup,
   ManagedTeam,
   MatrixArea,
   Member,
   MemberTask,
   OverviewData,
+  ProfileData,
   RedBlackBoard,
   RedBlackData,
   ScopeKind,
@@ -24,6 +29,8 @@ import type {
   TagLibraryData,
   TaskOverviewData,
   Todo,
+  UserAccount,
+  UsersData,
   ValidationDetail,
   WorkItem,
   WorkspaceManageData,
@@ -48,14 +55,20 @@ type RequestOptions = Omit<RequestInit, "body"> & { body?: unknown };
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers = new Headers(options.headers);
-  if (options.body !== undefined) headers.set("Content-Type", "application/json");
+  const isForm = typeof FormData !== "undefined" && options.body instanceof FormData;
+  if (options.body !== undefined && !isForm) headers.set("Content-Type", "application/json");
   let response: Response;
   try {
     response = await fetch(path, {
       ...options,
       credentials: "include",
       headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      body:
+        options.body === undefined
+          ? undefined
+          : isForm
+            ? (options.body as FormData)
+            : JSON.stringify(options.body),
     });
   } catch (error) {
     throw new ApiError(
@@ -107,15 +120,79 @@ const groupBase = (teamId: string, groupId: string) =>
   `/api/teams/${encodeURIComponent(teamId)}/groups/${encodeURIComponent(groupId)}`;
 
 export const api = {
+  /* ---------------------------------------------------------------- */
+  /* Bootstrap / identity                                              */
+  /* ---------------------------------------------------------------- */
   bootstrap: (teamId?: string, groupId?: string) =>
     request<BootstrapData>(`/api/bootstrap${q({ teamId, groupId })}`),
   me: () => request<BootstrapData["me"]>("/api/auth/me"),
+  authConfig: () => request<AuthConfigData>("/api/auth/config"),
+  requestEmailCode: (email: string) =>
+    request<EmailCodeRequestResponse>("/api/auth/email/request", {
+      method: "POST",
+      body: { email },
+    }),
+  verifyEmailCode: (email: string, code: string) =>
+    request<EmailCodeVerifyResponse>("/api/auth/email/verify", {
+      method: "POST",
+      body: { email, code },
+    }),
   logout: () =>
     request<{ loggedOut: boolean; endSessionUrl?: string }>("/api/auth/logout", {
       method: "POST",
     }),
-  loginHref: (next = "/") => `/api/auth/login?next=${encodeURIComponent(next)}`,
+  ssoLoginHref: (next = "/") => `/api/auth/login?next=${encodeURIComponent(next)}`,
 
+  /* ---------------------------------------------------------------- */
+  /* Account administration (super administrators)                     */
+  /* ---------------------------------------------------------------- */
+  listUsers: () => request<UsersData>("/api/users"),
+  createUser: (body: {
+    email: string;
+    name?: string;
+    role?: string;
+    teamIds?: string[];
+    groupIds?: string[];
+  }) => request<{ user: UserAccount }>("/api/users", { method: "POST", body }),
+  updateUser: (
+    userId: string,
+    body: { name?: string; role?: string; teamIds?: string[]; groupIds?: string[] },
+  ) =>
+    request<{ user: UserAccount }>(`/api/users/${encodeURIComponent(userId)}`, {
+      method: "PATCH",
+      body,
+    }),
+  deleteUser: (userId: string) =>
+    request<{ deleted: boolean; id: string }>(`/api/users/${encodeURIComponent(userId)}`, {
+      method: "DELETE",
+    }),
+
+  /* ---------------------------------------------------------------- */
+  /* Personal home page                                                */
+  /* ---------------------------------------------------------------- */
+  getProfile: () => request<ProfileData>("/api/profile"),
+  getUserProfile: (userId: string) =>
+    request<ProfileData>(`/api/users/${encodeURIComponent(userId)}/profile`),
+  updateProfile: (body: {
+    name?: string;
+    avatarColor?: string;
+    bio?: string;
+    skills?: string[];
+  }) => request<{ user: UserAccount }>("/api/profile", { method: "PATCH", body }),
+  uploadAvatar: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<{ avatar: string; user: UserAccount }>("/api/profile/avatar", {
+      method: "POST",
+      body: form,
+    });
+  },
+  deleteAvatar: () =>
+    request<{ user: UserAccount }>("/api/profile/avatar", { method: "DELETE" }),
+
+  /* ---------------------------------------------------------------- */
+  /* Feature reads / writes                                           */
+  /* ---------------------------------------------------------------- */
   overview: (teamId: string, groupId: string, scope: ScopeKind = "group") =>
     request<OverviewData>(`${groupBase(teamId, groupId)}/overview${q({ scope })}`),
 
@@ -216,8 +293,8 @@ export const api = {
       method: "DELETE",
     }),
 
-  redblack: (teamId: string, groupId: string, month?: string) =>
-    request<RedBlackData>(`${groupBase(teamId, groupId)}/redblack${q({ month })}`),
+  redblack: (teamId: string, groupId: string, month?: string, scope: ScopeKind = "group") =>
+    request<RedBlackData>(`${groupBase(teamId, groupId)}/redblack${q({ month, scope })}`),
   saveRedblack: (
     teamId: string,
     groupId: string,
@@ -294,6 +371,22 @@ export const api = {
       { method: "DELETE" },
     ),
 
+  insights: (params: {
+    teamId: string;
+    groupId: string;
+    scope?: ScopeKind;
+    range?: InsightsRangeKey;
+  }) =>
+    request<InsightsData>(
+      `${groupBase(params.teamId, params.groupId)}/insights${q({
+        scope: params.scope ?? "group",
+        range: params.range ?? "1m",
+      })}`,
+    ),
+
+  /* ---------------------------------------------------------------- */
+  /* Settings                                                          */
+  /* ---------------------------------------------------------------- */
   getSettings: () => request<SettingsResponse>("/api/settings"),
   saveSettings: (settings: AppSettings) =>
     request<SettingsResponse & { message: string }>("/api/settings", {
@@ -310,10 +403,27 @@ export const api = {
   settingsDefaults: () => request<AppSettings>("/api/settings/defaults"),
   settingsWorkspace: () => request<WorkspaceOption>("/api/settings/workspace"),
 
+  domainSettings: () => request<DomainSettingsData>("/api/settings/domain"),
+  updateDomainTeam: (
+    teamId: string,
+    body: { name?: string; shortName?: string; description?: string; color?: string },
+  ) =>
+    request<{ team: DomainTeamSettings }>(
+      `/api/settings/teams/${encodeURIComponent(teamId)}`,
+      { method: "PATCH", body },
+    ),
+  updateDomainGroup: (
+    teamId: string,
+    groupId: string,
+    body: { name?: string; description?: string; color?: string; icon?: string },
+  ) =>
+    request<{ group: DomainGroupSettings }>(
+      `/api/settings/teams/${encodeURIComponent(teamId)}/groups/${encodeURIComponent(groupId)}`,
+      { method: "PATCH", body },
+    ),
+
   /* ---------------------------------------------------------------- */
   /* Workspace administration: create / delete teams and groups.      */
-  /* The backend rejects out-of-scope writes with 403 and requires the */
-  /* exact name to confirm every destructive action.                   */
   /* ---------------------------------------------------------------- */
   manageWorkspace: () => request<WorkspaceManageData>("/api/workspace/manage"),
   createTeam: (body: {
@@ -345,45 +455,15 @@ export const api = {
       { method: "DELETE", body: { confirmName } },
     ),
 
+  /* ---------------------------------------------------------------- */
+  /* SMTP relay diagnostics (super administrators)                     */
+  /* ---------------------------------------------------------------- */
   emailStatus: () => request<EmailStatus>("/api/email/status"),
-  emailLogs: (limit = 50) =>
+  emailLogs: (limit = 30) =>
     request<{ logs: EmailLog[] }>(`/api/email/logs${q({ limit })}`),
   emailTest: (to?: string) =>
     request<{ sent: boolean; to: string }>("/api/email/test", {
       method: "POST",
       body: { to: to ?? "" },
     }),
-  emailScan: () => request<Record<string, unknown>>("/api/email/scan", { method: "POST" }),
-  emailPreview: () =>
-    request<{ subject: string; body: string }>("/api/email/preview"),
-
-  insights: (params: {
-    teamId: string;
-    groupId: string;
-    scope?: ScopeKind;
-    range?: InsightsRangeKey;
-  }) =>
-    request<InsightsData>(
-      `${groupBase(params.teamId, params.groupId)}/insights${q({
-        scope: params.scope ?? "group",
-        range: params.range ?? "1m",
-      })}`,
-    ),
-
-  emailMailbox: (limit = 50) =>
-    request<MailboxData>(`/api/email/mailbox${q({ limit })}`),
-  emailMailboxMessage: (messageId: string) =>
-    request<{ message: MailMessage }>(
-      `/api/email/mailbox/${encodeURIComponent(messageId)}`,
-    ),
-  deleteMailboxMessage: (messageId: string) =>
-    request<{ deleted: boolean }>(
-      `/api/email/mailbox/${encodeURIComponent(messageId)}`,
-      { method: "DELETE" },
-    ),
-  restartBuiltinMail: () =>
-    request<{ running: boolean; host: string; port: number }>(
-      "/api/email/builtin/restart",
-      { method: "POST" },
-    ),
 };

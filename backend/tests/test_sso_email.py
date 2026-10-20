@@ -1,15 +1,17 @@
-"""SSO protocol construction and the email reminder end-to-end pipeline."""
+"""SSO protocol construction and the external SMTP e-mail settings.
+
+Round 5 removed the bundled SMTP server, the local mailbox and every calendar
+reminder/e-mail setting. ``email`` now only describes the external relay used to
+deliver six-digit verification codes (see ROUND5_CONTRACT §5).
+"""
 
 from __future__ import annotations
 
-from datetime import date
-from unittest.mock import MagicMock, patch
+import json
 from urllib.parse import parse_qs, urlparse
 
 from backend.app.auth import unsign_payload
 from backend.app.config import DEFAULT_SETTINGS, settings_service
-from backend.app.db import db, new_id, now_iso
-from backend.app.services.email_service import run_reminder_scan
 from backend.app import sso
 
 
@@ -70,96 +72,56 @@ def test_sso_unconfigured_falls_back_to_guest(guest_client):
     assert settings_service.sso_configured() is False
 
 
-class _FakeSMTP:
-    instances: list["_FakeSMTP"] = []
-
-    def __init__(self, host, port, timeout=None):
-        self.host = host
-        self.port = port
-        self.timeout = timeout
-        self.messages: list = []
-        _FakeSMTP.instances.append(self)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-    def ehlo(self):
-        return None
-
-    def starttls(self, context=None):
-        return None
-
-    def login(self, username, password):
-        return None
-
-    def send_message(self, message):
-        self.messages.append(message)
-
-
-def test_email_reminder_pipeline_sends_and_deduplicates(client):
+def test_email_settings_use_external_smtp_schema(client):
     payload = DEFAULT_SETTINGS.model_dump(mode="json")
     payload["email"]["enabled"] = True
     payload["email"]["smtp"].update(
         {
             "host": "smtp.example.com",
             "port": 25,
-            "username": "",
-            "password": "",
+            "username": "relay-user",
+            "password": "relay-secret",
             "fromEmail": "noreply@example.com",
             "fromName": "TeamStudio 测试",
             "useStartTls": False,
             "useSsl": False,
+            "timeoutSeconds": 10,
         }
     )
-    payload["email"]["reminders"]["sendTime"] = "00:00"
-    payload["email"]["reminders"]["includeAnnouncements"] = True
+    # Round-4 leftovers are accepted on save but stripped from the stored settings.
+    payload["email"]["deliveryMode"] = "smtp"
+    payload["email"]["builtin"] = {"enabled": True}
+    payload["email"]["reminders"] = {"sendTime": "09:00", "includeAnnouncements": True}
+    payload["calendar"].update(
+        {
+            "defaultReminderOffsetsDays": [3, 1, 0],
+            "defaultReminderTime": "09:00",
+            "defaultEmailEnabled": True,
+        }
+    )
     settings_service.save(payload)
 
-    _FakeSMTP.instances.clear()
-    todo_id = new_id("todo")
-    with db() as conn:
-        conn.execute(
-            "INSERT INTO todos (id,group_id,title,description,due_date,due_time,"
-            "assignee_member_id,priority,status,reminder_offsets_days,email_enabled,"
-            "created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                todo_id,
-                "grp-frontend",
-                "邮件链路验收",
-                "验证 SMTP 发送、公告附加内容、模板变量与去重。",
-                date.today().isoformat(),
-                "23:59",
-                "m-lin",
-                "high",
-                "todo",
-                "[0]",
-                1,
-                "Admin",
-                now_iso(),
-                now_iso(),
-            ),
-        )
+    cfg = settings_service.get()
+    assert cfg.email.smtp.host == "smtp.example.com"
+    assert cfg.email.smtp.port == 25
+    assert cfg.email.smtp.useStartTls is False
+    assert cfg.email.smtp.fromEmail == "noreply@example.com"
+    for removed in ("deliveryMode", "builtin", "reminders"):
+        assert not hasattr(cfg.email, removed)
+    for removed in ("defaultReminderOffsetsDays", "defaultReminderTime", "defaultEmailEnabled"):
+        assert not hasattr(cfg.calendar, removed)
+    assert settings_service.email_configured() is True
 
-    with patch("backend.app.services.email_service.smtplib.SMTP", _FakeSMTP):
-        first = run_reminder_scan()
-        second = run_reminder_scan()
-
-    assert first["sent"] >= 1
-    assert second["sent"] == 0
-    assert len(_FakeSMTP.instances) >= 1
-    message = _FakeSMTP.instances[0].messages[0]
-    assert "邮件链路验收" in message["Subject"]
-    body = message.get_content()
-    assert "林知夏" in body
-    assert "开发组置顶公告" in body
-
-    logs = client.get("/api/email/logs").json()["data"]["logs"]
-    assert any(log.get("todo_id") == todo_id and log["status"] == "sent" for log in logs)
     status = client.get("/api/email/status").json()["data"]
-    assert status["smtpConfigured"] is True
-    assert status["sentToday"] >= 1
+    assert status["enabled"] is True
+    assert status["configured"] is True
+    assert status["host"] == "smtp.example.com"
+    assert status["port"] == 25
+    assert status["fromEmail"] == "noreply@example.com"
+    assert status["useStartTls"] is False
+    # The relay password never leaves the server.
+    serialized = json.dumps(status)
+    assert "relay-secret" not in serialized
+    assert "password" not in serialized
 
     settings_service.save(DEFAULT_SETTINGS.model_dump(mode="json"))

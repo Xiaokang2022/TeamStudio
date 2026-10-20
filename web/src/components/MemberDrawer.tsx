@@ -26,12 +26,14 @@ import { ConfirmDialog, Modal } from "./Modal";
 import { EmptyState } from "./Feedback";
 import { Select } from "./Select";
 import {
-  canEditMember,
+  canEditOrganizationalInfo,
+  canEditPersonalInfo,
   canManageGroup,
   cn,
   formatDate,
   formatDateTime,
   relativeTime,
+  STATUS_META,
 } from "../lib/utils";
 import { formatPercent, formatPoints, WORKLOAD_LEVEL_META, workloadLevel } from "../lib/taskMeta";
 import type { Member, WorkItem, WorkStatus, Workload } from "../types";
@@ -43,6 +45,9 @@ const WORK_STATUS_META: Record<WorkStatus, { label: string; badge: string }> = {
 };
 
 const WORK_STATUS_OPTIONS: WorkStatus[] = ["current", "planned", "done"];
+
+const AVATAR_COLORS = ["#7c3aed", "#2563eb", "#0ea5e9", "#16a34a", "#ea8a14", "#dc2626", "#db2777"];
+const MEMBER_STATUS_OPTIONS = ["available", "busy", "remote", "offline"];
 
 /** Exit animation budget (#5): keep the drawer mounted for a short slide/fade. */
 const CLOSE_ANIMATION_MS = 190;
@@ -81,7 +86,7 @@ export function MemberDrawer({
   onClose,
   onChanged,
 }: MemberDrawerProps) {
-  const { data, scope } = useApp();
+  const { data, scope, navigate } = useApp();
   const { toast } = useToast();
   const user = data?.me ?? null;
 
@@ -202,8 +207,16 @@ export function MemberDrawer({
   const member = shownMember;
   const workload = (open ? workloadProp : null) ?? visibleWorkload;
   const isAdmin = canManageGroup(user, teamId, groupId);
-  const canEdit = canEditMember(user, teamId, groupId, member.id);
-  const isSelf = Boolean(user?.linkedMemberId && user.linkedMemberId === member.id);
+  const canEditPersonal = canEditPersonalInfo(user, member);
+  const canEditOrg = canEditOrganizationalInfo(user, teamId, groupId);
+  // Work items are maintained by organizational admins or the linked owner.
+  const canEdit = canEditOrg || canEditPersonal;
+  const viewerEmail = (user?.email || "").trim().toLowerCase();
+  const isSelf = Boolean(
+    user &&
+      (user.linkedMemberId === member.id ||
+        (viewerEmail && member.email && member.email.trim().toLowerCase() === viewerEmail)),
+  );
   const workloadLevelMeta = workload
     ? WORKLOAD_LEVEL_META[workloadLevel(workload.currentLoadPercent)] ?? WORKLOAD_LEVEL_META.balanced
     : null;
@@ -246,6 +259,7 @@ export function MemberDrawer({
           <div className="md-hero-main">
             <Avatar
               name={member.name}
+              src={member.avatar}
               color={member.avatarColor}
               size="xl"
               className="md-hero-avatar"
@@ -408,7 +422,7 @@ export function MemberDrawer({
             <h3 className="md-section-title">
               <UserRound size={15} /> 个人简介
             </h3>
-            <p className="md-bio">{member.bio || "这位伙伴还没有填写个人简介。"}</p>
+            <p className="md-bio">{member.bio || "这位成员还没有填写个人简介。"}</p>
             {member.tags.length ? (
               <div className="tag-list md-tags" aria-label="个人标签">
                 {member.tags.map((tag) => (
@@ -547,11 +561,20 @@ export function MemberDrawer({
           <p className="md-footer-note">
             {canEdit
               ? isSelf
-                ? "你可以维护自己的资料、当前工作与历史工作。"
-                : "管理员可以维护该成员的全部档案信息。"
+                ? canEditOrg
+                  ? "你可以维护自己的个人资料、当前工作与历史工作，也可以调整组织信息。"
+                  : "你可以维护自己的个人资料、当前工作与历史工作。"
+                : canEditPersonal
+                  ? "超级管理员可以维护该成员的全部档案信息。"
+                  : "你可以维护该成员的职位、团队角色与状态。"
               : "只读视图，仅本人或管理员可以编辑。"}
           </p>
           <div className="md-footer-actions">
+            {isSelf ? (
+              <button className="btn btn-ghost" onClick={() => navigate("profile")}>
+                <UserRound size={15} /> 个人主页
+              </button>
+            ) : null}
             {canEdit ? (
               <button className="btn btn-secondary" onClick={() => setProfileOpen(true)}>
                 <Pencil size={15} /> 编辑资料
@@ -576,6 +599,8 @@ export function MemberDrawer({
         member={member}
         teamId={teamId}
         groupId={groupId}
+        personalEditable={canEditPersonal}
+        orgEditable={canEditOrg}
         onClose={() => setProfileOpen(false)}
         onSaved={handleProfileSaved}
       />
@@ -674,19 +699,34 @@ interface ProfileEditDialogProps {
   member: Member;
   teamId: string;
   groupId: string;
+  /** Personal fields (name / email / bio / tags / skills / avatar color). */
+  personalEditable: boolean;
+  /** Organizational fields (title / role / status). */
+  orgEditable: boolean;
   onClose: () => void;
   onSaved: () => Promise<void> | void;
 }
 
-function ProfileEditDialog({ open, member, teamId, groupId, onClose, onSaved }: ProfileEditDialogProps) {
+function ProfileEditDialog({
+  open,
+  member,
+  teamId,
+  groupId,
+  personalEditable,
+  orgEditable,
+  onClose,
+  onSaved,
+}: ProfileEditDialogProps) {
   const { toast } = useToast();
   const [name, setName] = useState(member.name);
   const [title, setTitle] = useState(member.title);
   const [role, setRole] = useState(member.role);
+  const [status, setStatus] = useState(member.status || "available");
   const [email, setEmail] = useState(member.email);
   const [bio, setBio] = useState(member.bio);
   const [tags, setTags] = useState(member.tags.join(", "));
   const [skills, setSkills] = useState(member.skills.join(", "));
+  const [avatarColor, setAvatarColor] = useState(member.avatarColor || AVATAR_COLORS[0]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -695,32 +735,46 @@ function ProfileEditDialog({ open, member, teamId, groupId, onClose, onSaved }: 
     setName(member.name);
     setTitle(member.title);
     setRole(member.role);
+    setStatus(member.status || "available");
     setEmail(member.email);
     setBio(member.bio);
     setTags(member.tags.join(", "));
     setSkills(member.skills.join(", "));
+    setAvatarColor(member.avatarColor || AVATAR_COLORS[0]);
     setSaving(false);
     setError("");
   }, [open, member]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!name.trim()) {
+    if (personalEditable && !name.trim()) {
       setError("姓名不能为空。");
+      return;
+    }
+    // Only send the field groups the current identity may change; the backend
+    // rejects organisational admins who touch personal information.
+    const payload: Partial<Member> = {};
+    if (personalEditable) {
+      payload.name = name.trim();
+      payload.email = email.trim();
+      payload.bio = bio.trim();
+      payload.tags = splitList(tags);
+      payload.skills = splitList(skills);
+      payload.avatarColor = avatarColor;
+    }
+    if (orgEditable) {
+      payload.title = title.trim();
+      payload.role = role.trim();
+      payload.status = status;
+    }
+    if (!Object.keys(payload).length) {
+      setError("当前身份没有可编辑的字段。");
       return;
     }
     setSaving(true);
     setError("");
     try {
-      await api.updateMember(teamId, groupId, member.id, {
-        name: name.trim(),
-        title: title.trim(),
-        role: role.trim(),
-        email: email.trim(),
-        bio: bio.trim(),
-        tags: splitList(tags),
-        skills: splitList(skills),
-      });
+      await api.updateMember(teamId, groupId, member.id, payload);
       toast("成员资料已更新", "success");
       await onSaved();
       onClose();
@@ -735,8 +789,12 @@ function ProfileEditDialog({ open, member, teamId, groupId, onClose, onSaved }: 
     <Modal
       open={open}
       onClose={onClose}
-      title="编辑成员资料"
-      description={`正在编辑 ${member.name} 的个人档案。`}
+      title={personalEditable ? "编辑成员资料" : "编辑组织信息"}
+      description={
+        personalEditable
+          ? `正在编辑 ${member.name} 的个人档案与组织信息。`
+          : `正在编辑 ${member.name} 的职位、团队角色与状态。`
+      }
       size="md"
       footer={
         <>
@@ -750,6 +808,18 @@ function ProfileEditDialog({ open, member, teamId, groupId, onClose, onSaved }: 
       }
     >
       <form id="md-profile-form" className="form-grid" onSubmit={submit}>
+        {!personalEditable || !orgEditable ? (
+          <p className="md-perm-note span-2" role="note">
+            <TriangleAlert size={13} />
+            <span>
+              {!personalEditable
+                ? "姓名、邮箱、个人简介、标签、技能与头像颜色属于个人信息，仅本人或超级管理员可以修改。"
+                : "职位、团队角色与状态由团队 / 开发组管理员维护。"}
+            </span>
+          </p>
+        ) : null}
+
+        <p className="md-form-group-title span-2">个人信息</p>
         <div className="field">
           <label htmlFor="md-profile-name">姓名 *</label>
           <input
@@ -759,29 +829,10 @@ function ProfileEditDialog({ open, member, teamId, groupId, onClose, onSaved }: 
             onChange={(event) => setName(event.target.value)}
             maxLength={60}
             required
+            disabled={!personalEditable}
           />
         </div>
         <div className="field">
-          <label htmlFor="md-profile-title">职位</label>
-          <input
-            id="md-profile-title"
-            className="input"
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            maxLength={60}
-          />
-        </div>
-        <div className="field">
-          <label htmlFor="md-profile-role">团队角色</label>
-          <input
-            id="md-profile-role"
-            className="input"
-            value={role}
-            onChange={(event) => setRole(event.target.value)}
-            maxLength={40}
-          />
-        </div>
-        <div className="field span-2">
           <label htmlFor="md-profile-email">邮箱</label>
           <input
             id="md-profile-email"
@@ -790,6 +841,7 @@ function ProfileEditDialog({ open, member, teamId, groupId, onClose, onSaved }: 
             value={email}
             onChange={(event) => setEmail(event.target.value)}
             maxLength={120}
+            disabled={!personalEditable}
           />
         </div>
         <div className="field span-2">
@@ -801,6 +853,7 @@ function ProfileEditDialog({ open, member, teamId, groupId, onClose, onSaved }: 
             onChange={(event) => setBio(event.target.value)}
             maxLength={2000}
             rows={3}
+            disabled={!personalEditable}
           />
         </div>
         <div className="field span-2">
@@ -811,6 +864,7 @@ function ProfileEditDialog({ open, member, teamId, groupId, onClose, onSaved }: 
             value={tags}
             onChange={(event) => setTags(event.target.value)}
             placeholder="用逗号分隔，例如：React, 设计系统"
+            disabled={!personalEditable}
           />
         </div>
         <div className="field span-2">
@@ -821,8 +875,65 @@ function ProfileEditDialog({ open, member, teamId, groupId, onClose, onSaved }: 
             value={skills}
             onChange={(event) => setSkills(event.target.value)}
             placeholder="用逗号分隔，例如：TypeScript, 可视化"
+            disabled={!personalEditable}
           />
         </div>
+        <div className="field span-2">
+          <span className="field-label">头像颜色</span>
+          <div className="ov-color-swatches" role="group" aria-label="选择头像颜色">
+            {AVATAR_COLORS.map((color) => (
+              <button
+                key={color}
+                type="button"
+                className={cn("ov-color-swatch", avatarColor === color && "active")}
+                style={{ background: color }}
+                onClick={() => setAvatarColor(color)}
+                aria-label={`选择颜色 ${color}`}
+                aria-pressed={avatarColor === color}
+                disabled={!personalEditable}
+              />
+            ))}
+          </div>
+        </div>
+
+        <p className="md-form-group-title span-2">组织信息</p>
+        <div className="field">
+          <label htmlFor="md-profile-title">职位</label>
+          <input
+            id="md-profile-title"
+            className="input"
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            maxLength={60}
+            disabled={!orgEditable}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="md-profile-role">团队角色</label>
+          <input
+            id="md-profile-role"
+            className="input"
+            value={role}
+            onChange={(event) => setRole(event.target.value)}
+            maxLength={40}
+            disabled={!orgEditable}
+          />
+        </div>
+        <div className="field span-2">
+          <label htmlFor="md-profile-status">状态</label>
+          <Select
+            id="md-profile-status"
+            value={status}
+            onChange={(next) => setStatus(next || "available")}
+            options={MEMBER_STATUS_OPTIONS.map((value) => ({
+              value,
+              label: STATUS_META[value]?.label ?? value,
+            }))}
+            disabled={!orgEditable}
+            ariaLabel="成员状态"
+          />
+        </div>
+
         {error ? (
           <p className="md-form-error" role="alert">
             {error}

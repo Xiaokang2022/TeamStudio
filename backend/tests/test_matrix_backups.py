@@ -311,6 +311,59 @@ def test_member_deletion_prunes_every_backup_array(client):
         assert "m-chen" not in json.loads(found["backup_member_ids"])
 
 
+# --------------------------------------------------------------------------- member profile rules
+
+
+def test_backup_candidate_avatar_payload_and_personal_permissions(client) -> None:
+    """Backup candidates are regular members: avatar payload + round-5 edit rules."""
+    created = _data(
+        client.post(
+            MEMBERS_URL,
+            json={
+                "name": "备份候选人",
+                "email": "backup.candidate@corp.example",
+                "avatar": "/uploads/avatars/candidate.png",
+            },
+        )
+    )["member"]
+    assert created["avatar"] == "/uploads/avatars/candidate.png"
+
+    area = _create_area(
+        client, area="头像备份职责", ownerMemberId=LIN["id"], backupMemberIds=[created["id"]]
+    )
+    assert area["backupMemberIds"] == [created["id"]]
+    assert area["backups"] == [{"id": created["id"], "name": "备份候选人", "color": "#5865f2"}]
+
+    # A group admin can edit organizational fields of a member but not personal ones.
+    from backend.app.auth import CurrentUser, get_current_user
+    from backend.app.main import app
+
+    group_admin = CurrentUser(
+        id="group-admin@corp.example",
+        name="组管理员",
+        email="group-admin@corp.example",
+        authenticated=True,
+        source="sso",
+        admin_role="group_admin",
+        group_ids={GROUP_ID},
+    )
+    app.dependency_overrides[get_current_user] = lambda: group_admin
+    try:
+        response = client.patch(f"{MEMBERS_URL}/{LIN['id']}", json={"bio": "越权简介"})
+        assert response.status_code == 403
+        error = response.json()["error"]
+        assert error["code"] == "personal_info_forbidden"
+        assert error["message"] == "个人信息仅超级管理员和本人可编辑"
+
+        updated = _data(
+            client.patch(f"{MEMBERS_URL}/{LIN['id']}", json={"title": "前端负责人（更新）"})
+        )["member"]
+        assert updated["title"] == "前端负责人（更新）"
+        assert updated["bio"] != "越权简介"
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+
 def test_matrix_backup_migration_backfills_legacy_rows_idempotently(tmp_path, monkeypatch):
     import backend.app.db as db_module
 

@@ -24,6 +24,7 @@ from ..permissions import (
     require_read_access,
 )
 from ..scope import resolve_scope
+from ..services import accounts
 from ..services.tasks_service import build_workload_section
 
 router = APIRouter(
@@ -33,6 +34,9 @@ router = APIRouter(
 HEX_PATTERN = re.compile(r"^#[0-9a-fA-F]{6}$")
 MEMBER_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
 WORK_STATUSES = {"current", "done", "planned"}
+# Member fields that describe the person rather than their place in the team: only a
+# super administrator or the linked account owner may edit them (round-5 contract §6).
+PERSONAL_FIELDS = ("name", "email", "bio", "avatarColor", "tags", "skills", "avatar", "avatarUrl")
 
 
 # --------------------------------------------------------------------------- helpers
@@ -97,6 +101,24 @@ def _in_clause(group_ids: list[str]) -> str:
     return ",".join("?" for _ in group_ids) if group_ids else "NULL"
 
 
+def _avatar_url(value: Any) -> str:
+    """Validate an avatar path/URL written through a member payload."""
+    if value is None:
+        return ""
+    return text(value, "头像", 500)
+
+
+def _can_edit_personal_info(user: CurrentUser, member: dict[str, Any]) -> bool:
+    """Super administrators and the linked account owner may edit personal info."""
+    if user.is_super_admin:
+        return True
+    member_id = str(member.get("id") or "")
+    if user.linked_member_id and str(user.linked_member_id) == member_id:
+        return True
+    email = str(member.get("email") or "").strip().lower()
+    return bool(email) and email == str(user.email or "").strip().lower()
+
+
 def _work_payload(
     work: dict[str, Any], group: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -138,6 +160,7 @@ def _member_payload(
         "title": member.get("title", ""),
         "role": member.get("role", ""),
         "avatarColor": member.get("avatar_color", "#5865f2"),
+        "avatar": member.get("avatar_url", ""),
         "bio": member.get("bio", ""),
         "groupId": member.get("group_id", ""),
         "groupName": group["name"],
@@ -316,7 +339,7 @@ def group_overview(
 ):
     with db() as conn:
         group = get_group(conn, team_id, group_id)
-        ctx = resolve_scope(conn, team_id, group_id, scope)
+        ctx = resolve_scope(conn, team_id, group_id, scope, user)
         group_ids = ctx["groupIds"]
         placeholders = _in_clause(group_ids)
         params = tuple(group_ids)
@@ -409,10 +432,22 @@ def update_member(
     payload: dict[str, Any] = Body(...),
     user: CurrentUser = Depends(get_current_user),
 ):
+    """Update one member of a development group.
+
+    Personal fields (``name``/``email``/``bio``/``avatarColor``/``tags``/``skills``/
+    ``avatar``) may only be changed by a super administrator or by the linked account
+    owner; in-scope team/group admins may still edit the organizational fields
+    (``title``/``role``/``status``). Accepted personal edits are mirrored onto the
+    linked ``users`` row so profile pages and member cards stay in sync.
+    """
     with db() as conn:
         get_group(conn, team_id, group_id)
-        get_member(conn, member_id, group_id)
+        member = get_member(conn, member_id, group_id)
         require_member_writer(user, team_id, group_id, member_id)
+
+        personal_fields = [field for field in PERSONAL_FIELDS if field in payload]
+        if personal_fields and not _can_edit_personal_info(user, member):
+            raise fail(403, "个人信息仅超级管理员和本人可编辑", "personal_info_forbidden")
 
         updates: dict[str, Any] = {}
         if "name" in payload:
@@ -433,6 +468,9 @@ def update_member(
             updates["tags"] = json_dumps(_string_list(payload.get("tags"), "标签"))
         if "skills" in payload:
             updates["skills"] = json_dumps(_string_list(payload.get("skills"), "技能"))
+        if "avatar" in payload or "avatarUrl" in payload:
+            raw_avatar = payload["avatar"] if "avatar" in payload else payload.get("avatarUrl")
+            updates["avatar_url"] = _avatar_url(raw_avatar)
         if updates:
             updates["updated_at"] = now_iso()
             assignments = ", ".join(f"{column}=?" for column in updates)
@@ -441,8 +479,18 @@ def update_member(
                 (*updates.values(), member_id, group_id),
             )
             audit(conn, user, "member.update", "member", member_id, {"fields": sorted(payload)})
-        member = _member_detail(conn, get_member(conn, member_id, group_id))
-    return ok({"member": member})
+        updated = get_member(conn, member_id, group_id)
+        if personal_fields:
+            # Mirror onto the account that owned this member *before* the edit. When the
+            # member e-mail itself is changed the row would otherwise resolve to another
+            # account and overwrite that stranger's profile.
+            sync_row = dict(updated)
+            if "email" in payload:
+                sync_row["email"] = member.get("email", "")
+                sync_row["external_id"] = member.get("external_id", "")
+            accounts.sync_user_from_member(conn, sync_row)
+        member_payload = _member_detail(conn, updated)
+    return ok({"member": member_payload})
 
 
 @router.post("/members")
@@ -465,6 +513,9 @@ def create_member(
 
         name = text(payload.get("name"), "姓名", 60, required=True)
         email = _email(payload.get("email"))
+        avatar_url = _avatar_url(
+            payload["avatar"] if "avatar" in payload else payload.get("avatarUrl")
+        )
         title = text(payload.get("title"), "职位", 60)
         role = text(payload.get("role"), "角色", 40)
         avatar_color = _hex_color(payload.get("avatarColor"), "头像颜色")
@@ -487,9 +538,9 @@ def create_member(
         )
         now = now_iso()
         conn.execute(
-            "INSERT INTO members (id,team_id,group_id,external_id,name,email,title,role,"
-            "avatar_color,bio,tags,skills,status,joined_at,sort_order,created_at,updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO members (id,team_id,group_id,external_id,name,email,avatar_url,"
+            "title,role,avatar_color,bio,tags,skills,status,joined_at,sort_order,created_at,"
+            "updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 member_id,
                 group["team_id"],
@@ -497,6 +548,7 @@ def create_member(
                 "",
                 name,
                 email,
+                avatar_url,
                 title,
                 role,
                 avatar_color,
@@ -573,7 +625,7 @@ def list_member_works(
 ):
     with db() as conn:
         get_group(conn, team_id, group_id)
-        ctx = resolve_scope(conn, team_id, group_id, scope)
+        ctx = resolve_scope(conn, team_id, group_id, scope, user)
         group_ids = ctx["groupIds"]
         placeholders = _in_clause(group_ids)
         member = row(

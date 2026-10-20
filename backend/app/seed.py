@@ -94,8 +94,8 @@ MEMBERS = [
      "#0e7490", "稳定的系统是团队最安静的底气。", ["FastAPI", "PostgreSQL", "系统设计"],
      ["权限平台", "服务治理"], "available", 1, 12),
     ("m-wu", "grp-platform", "wu.qi@corp.example", "吴启", "平台工程师", "核心成员",
-     "#4f46e5", "专注可观测性和邮件基础设施。", ["Python", "Redis", "消息队列"],
-     ["邮件提醒", "可观测性"], "busy", 2, 46),
+     "#4f46e5", "专注可观测性和消息基础设施。", ["Python", "Redis", "消息队列"],
+     ["可观测性", "稳定性"], "busy", 2, 46),
     ("m-xu", "grp-platform", "xu.cheng@corp.example", "徐澄", "SRE", "成员",
      "#059669", "让每一次发布都可回滚、可解释。", ["Kubernetes", "CI/CD", "监控"],
      ["发布流水线", "稳定性"], "available", 3, 18),
@@ -138,7 +138,7 @@ WORKS = {
         ("work-lin-3", "前端性能预算", "建立首屏 1.8s 的性能预算与周报。", "done", "2026 Q2", "性能", 100),
     ],
     "m-chen": [
-        ("work-chen-1", "开发组日历与邮件联动", "设计多时区日程模型，打通到期提醒与日历待办。", "current", "2026 Q4", "协作日历", 62),
+        ("work-chen-1", "开发组日历与待办联动", "设计多时区日程模型，打通到期视图与日历待办。", "current", "2026 Q4", "协作日历", 62),
         ("work-chen-2", "周视图拖拽改期", "支持跨日拖拽与批量改期，交互稿已完成。", "planned", "2026 Q4", "交互", 15),
         ("work-chen-3", "数据看板图表规范", "沉淀 12 个图表组件与可访问配色。", "done", "2026 Q3", "可视化", 100),
     ],
@@ -149,7 +149,7 @@ WORKS = {
     ],
     "m-he": [
         ("work-he-1", "公告栏实时刷新", "基于 SSE 的公告更新与未读提示。", "current", "2026 Q4", "实时协作", 55),
-        ("work-he-2", "邮件发送幂等队列", "以 (待办, 偏移, 收件人) 作为幂等键。", "current", "2026 Q4", "消息", 68),
+        ("work-he-2", "任务写入幂等队列", "以 (待办, 操作人, 时间窗口) 作为幂等键。", "current", "2026 Q4", "消息", 68),
         ("work-he-3", "开放 API 设计", "完成 3 个只读接口的契约评审。", "planned", "2026 Q4", "平台", 20),
     ],
     "m-tang": [
@@ -161,9 +161,9 @@ WORKS = {
         ("work-zhou-2", "服务健康度看板", "SLO、错误预算和告警收敛。", "done", "2026 Q3", "可观测性", 100),
     ],
     "m-wu": [
-        ("work-wu-1", "可定制邮件模板引擎", "支持变量、公告聚合和附加内容。", "current", "2026 Q4", "邮件", 66),
-        ("work-wu-2", "SMTP 连接池", "降低批量提醒的握手开销。", "planned", "2026 Q4", "邮件", 25),
-        ("work-wu-3", "提醒去重服务", "保证重试与重启后不重复发送。", "done", "2026 Q3", "消息", 100),
+        ("work-wu-1", "可定制通知模板引擎", "支持变量、模板复用与内容校验。", "current", "2026 Q4", "消息", 66),
+        ("work-wu-2", "服务连接池", "降低批量请求的握手开销。", "planned", "2026 Q4", "消息", 25),
+        ("work-wu-3", "通知去重服务", "保证重试与重启后不重复处理。", "done", "2026 Q3", "消息", 100),
     ],
     "m-xu": [
         ("work-xu-1", "单机部署一键化", "Windows/Linux 双平台启动与数据备份脚本。", "current", "2026 Q4", "交付", 58),
@@ -283,6 +283,24 @@ def seed_if_empty() -> bool:
                     now,
                 ),
             )
+        # Demo accounts: one verified e-mail account per seeded member. Real
+        # deployments create accounts via registration or super-admin pre-creation.
+        from .services import accounts as account_service
+
+        for member in MEMBERS:
+            (member_id, group_id, external_id, name, title, role, color, bio, tags,
+             duties, status, sort_order, joined_days_ago) = member
+            try:
+                account_service.create_user(
+                    conn,
+                    email=external_id,
+                    name=name,
+                    role="member",
+                    email_verified=True,
+                    created_by="seed",
+                )
+            except account_service.AccountError:
+                continue
         for member_id, items in WORKS.items():
             member_group = next(m[1] for m in MEMBERS if m[0] == member_id)
             for index, item in enumerate(items):
@@ -316,36 +334,70 @@ def seed_if_empty() -> bool:
         return True
 
 
+def seed_users_if_empty() -> int:
+    """Backfill demo e-mail accounts for deployments seeded before round 5.
+
+    Fresh databases create accounts inside :func:`seed_if_empty`; an existing
+    ``teamstudio.db`` only gains the new ``users`` table, so this idempotent helper
+    creates one verified demo account per member e-mail.
+    """
+    from .services import accounts as account_service
+
+    with db() as conn:
+        if scalar(conn, "SELECT COUNT(*) FROM users", default=0):
+            return 0
+        members = rows(
+            conn,
+            "SELECT external_id, name, email FROM members WHERE email<>'' "
+            "ORDER BY sort_order, id",
+        )
+        created = 0
+        for member in members:
+            try:
+                account_service.create_user(
+                    conn,
+                    email=member["email"],
+                    name=member["name"],
+                    role="member",
+                    email_verified=True,
+                    created_by="seed",
+                )
+                created += 1
+            except account_service.AccountError:
+                continue
+        return created
+
+
 def _seed_todos(conn, today: date, now: str) -> None:
     rows = [
-        ("grp-frontend", "完成团队工作室 2.0 首屏信息架构评审", "与设计增长组对齐首页卡片层级与密度。", "m-lin", 2, "10:30", "high", "todo", [3, 1, 0]),
-        ("grp-frontend", "日历邮件提醒联调", "验证提前 3 天 / 1 天 / 当天三档提醒与去重。", "m-chen", 3, "18:00", "urgent", "todo", [3, 1, 0]),
-        ("grp-frontend", "SSO 管理员白名单回归", "覆盖 IP、ID、团队管理员、开发组管理员四种组合。", "m-su", 5, "16:00", "high", "todo", [1, 0]),
-        ("grp-frontend", "设计系统高对比度色板验收", "检查所有语义色在 WCAG AA 下的表现。", "m-tang", 1, "15:00", "normal", "todo", [1, 0]),
-        ("grp-frontend", "公告栏三条置顶压力测试", "并发创建与置顶上限校验。", "m-he", 7, "11:00", "normal", "todo", [3, 1]),
-        ("grp-frontend", "首屏性能预算周报", "LCP 已降至 1.6s，补充移动端数据。", "m-lin", -2, "18:00", "normal", "done", []),
-        ("grp-frontend", "成员卡片空状态插画上线", "已随 1.8.0 发布。", "m-tang", -5, "12:00", "low", "done", []),
-        ("grp-platform", "邮件模板变量渲染审计", "检查所有模板变量的转义与缺失兜底。", "m-wu", 2, "14:00", "high", "todo", [3, 1, 0]),
-        ("grp-platform", "多租户权限矩阵回归", "团队管理员不能越权修改全局设置。", "m-zhou", 4, "17:30", "urgent", "todo", [3, 1, 0]),
-        ("grp-platform", "发布流水线 Windows 兼容", "确保 PowerShell 启动脚本可直接运行。", "m-xu", 6, "10:00", "normal", "todo", [1, 0]),
-        ("grp-platform", "JSON 配置 schema v1 冻结", "已发布并归档。", "m-luo", -3, "18:00", "normal", "done", []),
-        ("grp-design", "协作日历可用性访谈（第 3 场）", "重点观察跨月与拖拽操作。", "m-qin", 1, "14:00", "high", "todo", [1, 0]),
-        ("grp-design", "红黑榜视觉叙事走查", "确认红榜与黑榜的语气差异。", "m-yu", 3, "16:30", "normal", "todo", [3, 1]),
-        ("grp-design", "团队品牌月内容排期", "完成 4 期内容主题与嘉宾确认。", "m-shen", 5, "12:00", "normal", "todo", [3, 1]),
-        ("grp-data", "指标口径评审：活跃与留存", "对齐 3 条业务线的活跃定义。", "m-gu", 2, "15:00", "high", "todo", [3, 1, 0]),
-        ("grp-data", "实时链路压测报告", "目标 P99 延迟小于 30 秒。", "m-li", 4, "18:00", "urgent", "todo", [3, 1]),
-        ("grp-data", "推荐解释性评估", "补充离线评估与人工抽检。", "m-fang", 6, "11:30", "normal", "todo", [1, 0]),
-        ("grp-infra", "字段级血缘验收", "覆盖 12 张核心表。", "m-han", 3, "17:00", "high", "todo", [3, 1]),
-        ("grp-infra", "数据分级章程评审", "完成法务与安全团队会签。", "m-pei", 8, "10:00", "normal", "todo", [3, 1, 0]),
+        ("grp-frontend", "完成团队工作室 2.0 首屏信息架构评审", "与设计增长组对齐首页卡片层级与密度。", "m-lin", 2, "10:30", "high", "todo"),
+        ("grp-frontend", "协作日历视图联调", "验证月视图切换、跨月排期与到期高亮。", "m-chen", 3, "18:00", "urgent", "todo"),
+        ("grp-frontend", "SSO 管理员白名单回归", "覆盖 IP、ID、团队管理员、开发组管理员四种组合。", "m-su", 5, "16:00", "high", "todo"),
+        ("grp-frontend", "设计系统高对比度色板验收", "检查所有语义色在 WCAG AA 下的表现。", "m-tang", 1, "15:00", "normal", "todo"),
+        ("grp-frontend", "公告栏三条置顶压力测试", "并发创建与置顶上限校验。", "m-he", 7, "11:00", "normal", "todo"),
+        ("grp-frontend", "首屏性能预算周报", "LCP 已降至 1.6s，补充移动端数据。", "m-lin", -2, "18:00", "normal", "done"),
+        ("grp-frontend", "成员卡片空状态插画上线", "已随 1.8.0 发布。", "m-tang", -5, "12:00", "low", "done"),
+        ("grp-platform", "成员权限边界审计", "检查团队管理员与开发组管理员的编辑范围。", "m-wu", 2, "14:00", "high", "todo"),
+        ("grp-platform", "多租户权限矩阵回归", "团队管理员不能越权修改全局设置。", "m-zhou", 4, "17:30", "urgent", "todo"),
+        ("grp-platform", "发布流水线 Windows 兼容", "确保 PowerShell 启动脚本可直接运行。", "m-xu", 6, "10:00", "normal", "todo"),
+        ("grp-platform", "JSON 配置 schema v1 冻结", "已发布并归档。", "m-luo", -3, "18:00", "normal", "done"),
+        ("grp-design", "协作日历可用性访谈（第 3 场）", "重点观察跨月与拖拽操作。", "m-qin", 1, "14:00", "high", "todo"),
+        ("grp-design", "红黑榜视觉叙事走查", "确认红榜与黑榜的语气差异。", "m-yu", 3, "16:30", "normal", "todo"),
+        ("grp-design", "团队品牌月内容排期", "完成 4 期内容主题与嘉宾确认。", "m-shen", 5, "12:00", "normal", "todo"),
+        ("grp-data", "指标口径评审：活跃与留存", "对齐 3 条业务线的活跃定义。", "m-gu", 2, "15:00", "high", "todo"),
+        ("grp-data", "实时链路压测报告", "目标 P99 延迟小于 30 秒。", "m-li", 4, "18:00", "urgent", "todo"),
+        ("grp-data", "推荐解释性评估", "补充离线评估与人工抽检。", "m-fang", 6, "11:30", "normal", "todo"),
+        ("grp-infra", "字段级血缘验收", "覆盖 12 张核心表。", "m-han", 3, "17:00", "high", "todo"),
+        ("grp-infra", "数据分级章程评审", "完成法务与安全团队会签。", "m-pei", 8, "10:00", "normal", "todo"),
     ]
     for index, row in enumerate(rows):
-        group_id, title, description, assignee, offset, due_time, priority, status, reminders = row
+        group_id, title, description, assignee, offset, due_time, priority, status = row
         due = _future_day(today, offset)
         created = now
         conn.execute(
-            "INSERT INTO todos (id,group_id,title,description,due_date,due_time,assignee_member_id,"
-            "priority,status,reminder_offsets_days,email_enabled,created_by,created_at,updated_at,"
-            "completed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO todos (id,group_id,title,description,due_date,due_time,"
+            "assignee_member_id,priority,status,created_by,created_at,updated_at,"
+            "completed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 f"todo-seed-{index + 1:02d}",
                 group_id,
@@ -356,8 +408,6 @@ def _seed_todos(conn, today: date, now: str) -> None:
                 assignee,
                 priority,
                 status,
-                json_dumps(reminders),
-                1 if reminders else 0,
                 "Admin",
                 created,
                 created,
@@ -374,7 +424,7 @@ def _seed_redblack(conn, today: date, now: str) -> None:
             "red": [
                 ("m-su", "SSO 授权码流程提前交付", "主动补齐 PKCE 与状态校验，安全评审一次通过。", 96),
                 ("m-tang", "设计系统文档焕新", "20 个组件的使用场景插图全部补齐，新人上手时间减半。", 92),
-                ("m-he", "邮件幂等队列上线", "连续三次故障演练均未出现重复发送。", 88),
+                ("m-he", "任务幂等队列上线", "连续三次故障演练均未出现重复发送。", 88),
             ],
             "black": [
                 ("m-chen", "日历改期交互延期", "拖拽边界场景评估不足，需要补 2 天联调时间。", 62),
@@ -385,7 +435,7 @@ def _seed_redblack(conn, today: date, now: str) -> None:
             "theme": "稳定是底线，效率是追求",
             "red": [
                 ("m-xu", "发布回滚演练零失误", "将平均回滚时间从 12 分钟压缩到 4 分钟。", 95),
-                ("m-wu", "邮件模板引擎可配置化", "运营无需发版即可调整提醒文案。", 90),
+                ("m-wu", "通知模板引擎可配置化", "运营无需发版即可调整通知文案。", 90),
             ],
             "black": [
                 ("m-luo", "配置迁移文档缺失", "本地缓存机制未写入交付文档，补充后关闭。", 65),
@@ -499,14 +549,14 @@ def _seed_matrix(conn, now: str) -> None:
     areas = {
         "grp-frontend": [
             ("Web 工作台", "团队主页、导航与全局搜索", "m-lin", ["m-chen", "m-he"], "企业微信", "#frontend-workbench"),
-            ("协作日历", "日历、待办与提醒联动", "m-chen", ["m-su", "m-he"], "企业微信", "#frontend-calendar"),
+            ("协作日历", "日历、待办与到期联动", "m-chen", ["m-su", "m-he"], "企业微信", "#frontend-calendar"),
             ("身份与权限", "SSO、访客模式与管理员白名单", "m-su", ["m-he"], "飞书", "#frontend-auth"),
             ("实时通知", "公告、站内消息与 SSE", "m-he", ["m-chen", "m-lin"], "企业微信", "#frontend-realtime"),
             ("设计系统", "组件、视觉规范与无障碍", "m-tang", ["m-lin"], "飞书", "#frontend-design-system"),
         ],
         "grp-platform": [
             ("权限平台", "多租户范围与操作审计", "m-zhou", ["m-luo", "m-xu"], "企业微信", "#platform-auth"),
-            ("邮件基础设施", "SMTP、模板与发送队列", "m-wu", ["m-xu"], "企业微信", "#platform-email"),
+            ("消息基础设施", "消息通道、模板与投递队列", "m-wu", ["m-xu"], "企业微信", "#platform-email"),
             ("发布与稳定性", "CI/CD、回滚与 SLO", "m-xu", ["m-zhou", "m-luo"], "电话", "oncall@corp.example"),
             ("开放 API", "接口契约与第三方接入", "m-luo", ["m-wu"], "飞书", "#platform-api"),
         ],
@@ -555,12 +605,12 @@ def _seed_announcements(conn, now: str) -> None:
         "grp-frontend": [
             ("团队工作室 2.0 内测开启", "新的团队/开发组双层导航、协作日历和红黑榜已经上线。请在「设置 → 高级 JSON」中体验配置能力，遇到问题直接 @ 林知夏。", 1, "celebration", "林知夏", 0),
             ("本周五 16:00 体验评审", "请各模块负责人提前 10 分钟上传演示材料。评审聚焦：日历待办闭环、公告置顶、SSO 回退体验。", 1, "important", "苏晚", 1),
-            ("邮件提醒联调窗口", "本周三 10:00-12:00 为 SMTP 联调窗口，测试收件人请使用个人邮箱。生产配置将由团队管理员在设置页统一维护。", 1, "info", "何川", 2),
+            ("邮箱验证码登录切换窗口", "本周三 10:00-12:00 为邮箱验证码登录联调窗口，测试账号请使用个人邮箱。生产 SMTP 由超级管理员在系统设置中统一维护。", 1, "info", "何川", 2),
             ("设计系统周会改期", "原定周四的设计系统周会调整至周五 14:30，地点不变。", 0, "info", "唐梨", 3),
         ],
         "grp-platform": [
             ("权限模型冻结通知", "多租户权限模型 v1 已冻结，后续变更需走架构评审。", 1, "important", "周野", 1),
-            ("邮件基础设施维护", "周六 02:00-04:00 进行 SMTP 网关切换，期间提醒可能延迟。", 1, "info", "吴启", 2),
+            ("账号体系升级", "周六 02:00-04:00 进行账号体系升级，期间登录可能短暂不可用。", 1, "info", "吴启", 2),
             ("发布窗口调整", "本周发布窗口调整至周四晚，请提前合并代码。", 0, "info", "徐澄", 3),
         ],
         "grp-design": [
@@ -640,7 +690,7 @@ TASK_TEMPLATES: dict[str, list[tuple]] = {
     "m-he": [
         ("公告栏 SSE 实时刷新", "公告更新与未读提示的推送链路。",
          "in_progress", "normal", 6, 12, 11, None),
-        ("邮件发送幂等队列", "以 (待办, 偏移, 收件人) 作为幂等键。",
+        ("任务写入幂等队列", "以 (待办, 操作人, 时间窗口) 作为幂等键。",
          "pending", "normal", 8, 8, 4, None),
         ("开放 API 契约评审", "完成 3 个只读接口的契约评审。",
          "completed", "normal", -10, 10, 27, 14),
@@ -660,11 +710,11 @@ TASK_TEMPLATES: dict[str, list[tuple]] = {
          "completed", "normal", -5, 8, 22, 6),
     ],
     "m-wu": [
-        ("邮件模板变量引擎", "支持变量、公告聚合和附加内容。",
+        ("通知模板变量引擎", "支持变量、模板复用与内容校验。",
          "in_progress", "normal", 5, 14, 8, None),
-        ("SMTP 连接池压测", "降低批量提醒的握手开销。",
+        ("服务连接池压测", "降低批量请求的握手开销。",
          "pending", "delayed", 2, 6, 19, None),
-        ("提醒去重服务验收", "保证重试与重启后不重复发送。",
+        ("通知去重服务验收", "保证重试与重启后不重复处理。",
          "completed", "normal", -9, 10, 26, 12),
     ],
     "m-xu": [

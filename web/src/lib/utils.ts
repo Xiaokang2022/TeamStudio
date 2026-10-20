@@ -1,4 +1,4 @@
-import type { CurrentUser, Todo, TodoPriority } from "../types";
+import type { CurrentUser, Member, Todo, TodoPriority } from "../types";
 
 export function cn(...values: Array<string | false | null | undefined>): string {
   return values.filter(Boolean).join(" ");
@@ -134,11 +134,47 @@ export function canManageGroup(
   groupId?: string | null,
 ): boolean {
   if (!user) return false;
-  if (user.isDeviceAdmin) return true;
+  if (user.isSuperAdmin || user.isDeviceAdmin) return true;
   if (!teamId || !groupId) return false;
   return user.admin.teamIds.includes(teamId) || user.admin.groupIds.includes(groupId);
 }
 
+/**
+ * 个人信息（姓名 / 邮箱 / 简介 / 头像 / 头像颜色 / 标签 / 技能）的编辑权限。
+ * 仅超级管理员（含部署设备内置 Admin）与绑定账号本人可编辑。
+ */
+export function canEditPersonalInfo(
+  user: CurrentUser | null | undefined,
+  member: Pick<Member, "id" | "email"> | null | undefined,
+): boolean {
+  if (!user || !member) return false;
+  if (user.isSuperAdmin || user.isDeviceAdmin) return true;
+  if (!user.authenticated) return false;
+  if (user.linkedMemberId && user.linkedMemberId === member.id) return true;
+  const email = (user.email || "").trim().toLowerCase();
+  return Boolean(email) && (member.email || "").trim().toLowerCase() === email;
+}
+
+/**
+ * 组织信息（职位 / 团队角色 / 状态）的编辑权限。
+ * 仅超级管理员（含部署设备内置 Admin）与在管辖范围内的团队 / 开发组管理员可编辑。
+ */
+export function canEditOrganizationalInfo(
+  user: CurrentUser | null | undefined,
+  teamId?: string | null,
+  groupId?: string | null,
+): boolean {
+  if (!user) return false;
+  if (user.isSuperAdmin || user.isDeviceAdmin) return true;
+  const role = user.userRole ?? user.admin.role;
+  if (role === "team_admin" && teamId) return user.admin.teamIds.includes(teamId);
+  if (role === "group_admin" && groupId) return user.admin.groupIds.includes(groupId);
+  return canManageGroup(user, teamId, groupId);
+}
+
+/**
+ * 成员卡片「编辑资料」的入口权限：个人信息或组织信息至少有一项可编辑。
+ */
 export function canEditMember(
   user: CurrentUser | null | undefined,
   teamId: string,
@@ -146,7 +182,7 @@ export function canEditMember(
   memberId: string,
 ): boolean {
   if (!user) return false;
-  if (canManageGroup(user, teamId, groupId)) return true;
+  if (canEditOrganizationalInfo(user, teamId, groupId)) return true;
   return Boolean(user.permissions.canEditSelf && user.linkedMemberId === memberId);
 }
 

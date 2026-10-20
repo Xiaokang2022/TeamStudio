@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { AlertCircle, Bell, BellOff, CalendarDays, Clock, Layers3, Mail, Plus, UserRound, X } from "lucide-react";
+import { AlertCircle, CalendarDays, Clock, Layers3, UserRound } from "lucide-react";
 import { api, ApiError } from "../api";
 import { useToast } from "./Toast";
 import { Modal } from "./Modal";
@@ -7,7 +7,6 @@ import { Select } from "./Select";
 import { cn, PRIORITY_META, todayISO } from "../lib/utils";
 import type { Member, Todo, TodoPriority } from "../types";
 
-const PRESET_OFFSETS = [7, 3, 1, 0];
 const PRIORITIES: TodoPriority[] = ["low", "normal", "high", "urgent"];
 const DEFAULT_DUE_TIME = "18:00";
 
@@ -23,16 +22,8 @@ export interface TodoDialogProps {
   defaultAssigneeId: string | null;
   canAssignOthers: boolean;
   allowPastDue: boolean;
-  defaultReminderOffsetsDays: number[];
-  defaultReminderTime: string;
-  defaultEmailEnabled: boolean;
-  emailAvailable: boolean;
   onClose: () => void;
   onSaved: (todo: Todo) => void;
-}
-
-function offsetLabel(days: number): string {
-  return days === 0 ? "当天" : `提前 ${days} 天`;
 }
 
 function messageOf(error: unknown, fallback: string): string {
@@ -50,10 +41,6 @@ export function TodoDialog({
   defaultAssigneeId,
   canAssignOthers,
   allowPastDue,
-  defaultReminderOffsetsDays,
-  defaultReminderTime,
-  defaultEmailEnabled,
-  emailAvailable,
   onClose,
   onSaved,
 }: TodoDialogProps) {
@@ -64,13 +51,9 @@ export function TodoDialog({
   const [dueTime, setDueTime] = useState(DEFAULT_DUE_TIME);
   const [assigneeId, setAssigneeId] = useState<string | null>(null);
   const [priority, setPriority] = useState<TodoPriority>("normal");
-  const [offsets, setOffsets] = useState<number[]>([]);
-  const [emailEnabled, setEmailEnabled] = useState(false);
-  const [customOffset, setCustomOffset] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  const defaultOffsetsKey = defaultReminderOffsetsDays.join(",");
   const isEditing = Boolean(todo);
 
   useEffect(() => {
@@ -82,8 +65,6 @@ export function TodoDialog({
       setDueTime(todo.dueTime || DEFAULT_DUE_TIME);
       setAssigneeId(todo.assigneeMemberId);
       setPriority(todo.priority);
-      setOffsets(todo.reminderOffsetsDays ?? []);
-      setEmailEnabled(todo.emailEnabled && emailAvailable);
     } else {
       setTitle("");
       setDescription("");
@@ -91,23 +72,10 @@ export function TodoDialog({
       setDueTime(DEFAULT_DUE_TIME);
       setAssigneeId(defaultAssigneeId);
       setPriority("normal");
-      setOffsets(
-        defaultOffsetsKey
-          .split(",")
-          .map((value) => Number(value))
-          .filter((value) => Number.isInteger(value) && value >= 0 && value <= 60),
-      );
-      setEmailEnabled(defaultEmailEnabled && emailAvailable);
     }
-    setCustomOffset("");
     setSaving(false);
     setError("");
-  }, [open, todo, defaultDate, defaultAssigneeId, defaultOffsetsKey, defaultEmailEnabled, emailAvailable]);
-
-  const offsetOptions = useMemo(
-    () => Array.from(new Set([...PRESET_OFFSETS, ...offsets])).sort((a, b) => b - a),
-    [offsets],
-  );
+  }, [open, todo, defaultDate, defaultAssigneeId]);
 
   const selectableMembers = canAssignOthers
     ? members
@@ -125,27 +93,6 @@ export function TodoDialog({
     ],
     [canAssignOthers, selectableMembers],
   );
-
-  const toggleOffset = (days: number) => {
-    setOffsets((current) =>
-      current.includes(days)
-        ? current.filter((value) => value !== days)
-        : [...current, days].sort((a, b) => b - a),
-    );
-  };
-
-  const addCustomOffset = () => {
-    const value = Number(customOffset);
-    if (!Number.isInteger(value) || value < 0 || value > 60) {
-      setError("自定义提醒天数需要是 0-60 之间的整数。");
-      return;
-    }
-    if (!offsets.includes(value)) {
-      setOffsets((current) => [...current, value].sort((a, b) => b - a));
-    }
-    setCustomOffset("");
-    setError("");
-  };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -175,8 +122,6 @@ export function TodoDialog({
       dueTime,
       assigneeMemberId: assigneeId || null,
       priority,
-      reminderOffsetsDays: [...offsets].sort((a, b) => b - a),
-      emailEnabled: emailAvailable ? emailEnabled : false,
     };
     try {
       if (todo) {
@@ -203,8 +148,8 @@ export function TodoDialog({
       title={isEditing ? "编辑待办" : "新建待办"}
       description={
         isEditing
-          ? "调整截止时间、负责人或提醒节奏，保存后日历会立即同步。"
-          : "安排一件要完成的事，并决定在什么时候提醒团队。"
+          ? "调整截止时间、优先级或负责人，保存后日历会立即同步。"
+          : "安排一件要完成的事，明确截止时间、优先级与负责人。"
       }
       size="md"
       footer={
@@ -318,70 +263,8 @@ export function TodoDialog({
               </button>
             ))}
           </div>
+          <span className="field-hint">到期与逾期任务会在日历和列表中优先提示。</span>
         </div>
-
-        <div className="field">
-          <span className="field-label">
-            <Bell size={12} /> 邮件提醒节奏
-          </span>
-          <div className="td-offsets">
-            {offsetOptions.map((days) => {
-              const active = offsets.includes(days);
-              return (
-                <button
-                  key={days}
-                  type="button"
-                  className={cn("td-offset-chip", active && "active")}
-                  onClick={() => toggleOffset(days)}
-                  aria-pressed={active}
-                >
-                  {offsetLabel(days)}
-                  {active ? <X size={11} /> : <Plus size={11} />}
-                </button>
-              );
-            })}
-          </div>
-          <div className="td-custom-offset">
-            <input
-              className="input"
-              type="number"
-              min={0}
-              max={60}
-              step={1}
-              value={customOffset}
-              onChange={(event) => setCustomOffset(event.target.value)}
-              placeholder="自定义天数"
-              aria-label="自定义提醒提前天数"
-            />
-            <button type="button" className="btn btn-secondary btn-sm" onClick={addCustomOffset}>
-              添加
-            </button>
-          </div>
-          <span className="field-hint">
-            {offsets.length
-              ? `发送节点：${offsets.map(offsetLabel).join("、")} · 默认 ${defaultReminderTime || "09:00"} 发送。`
-              : "未选择提醒节点，待办到期时不会发送邮件。"}
-          </span>
-        </div>
-
-        <label className="switch td-switch">
-          <input
-            type="checkbox"
-            checked={emailEnabled}
-            onChange={(event) => setEmailEnabled(event.target.checked)}
-            disabled={!emailAvailable}
-          />
-          <span className="switch-track" />
-          <span className="td-switch-copy">
-            <strong>{emailEnabled ? "开启邮件提醒" : "关闭邮件提醒"}</strong>
-            <small>
-              {emailAvailable
-                ? "提醒会发送给负责人；系统会在发送后记录已发节点。"
-                : "邮件提醒未启用，可在「工作室设置 → 邮件提醒」中开启。"}
-            </small>
-          </span>
-          {emailAvailable ? <Mail size={15} className="td-switch-icon" /> : <BellOff size={15} className="td-switch-icon" />}
-        </label>
 
         {error ? (
           <p className="td-error" role="alert">

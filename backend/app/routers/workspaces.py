@@ -4,7 +4,8 @@ Base path: ``/api/workspace``.
 
 Permission domain (see ``CurrentUser`` helpers in ``backend/app/auth.py``):
 
-- Device Admin (``is_device_admin``) may manage every team and create teams.
+- A super administrator (device Admin or stored ``super`` role) may manage every team
+  and create/delete teams.
 - ``team_admin`` may manage only the teams listed in ``team_ids``: it can create and
   delete development groups inside those teams, but it can neither create nor delete a
   team.
@@ -56,7 +57,7 @@ def _confirm_name(payload: dict[str, Any] | None) -> str:
 
 def _require_workspace_admin(user: CurrentUser) -> None:
     """A caller without any manageable team cannot open the workspace manager."""
-    if not user.is_device_admin and not user.team_ids:
+    if not user.is_super_admin and not user.team_ids:
         raise fail(403, "你没有管理团队工作区的权限", "not_admin")
 
 
@@ -89,7 +90,7 @@ def _team_payload(
         "color": team.get("color", DEFAULT_COLOR),
         "groupCount": len(groups),
         "memberCount": int(member_count or 0),
-        "canDelete": user.is_device_admin,
+        "canDelete": user.is_super_admin,
         "canCreateGroup": user.can_manage_team(team["id"]),
         "groups": groups,
     }
@@ -97,7 +98,7 @@ def _team_payload(
 
 def _manage_payload(conn: sqlite3.Connection, user: CurrentUser) -> dict[str, Any]:
     _require_workspace_admin(user)
-    if user.is_device_admin:
+    if user.is_super_admin:
         team_rows = rows(conn, "SELECT * FROM teams ORDER BY sort_order, name")
     else:
         placeholders = ",".join("?" for _ in user.team_ids)
@@ -145,8 +146,8 @@ def _manage_payload(conn: sqlite3.Connection, user: CurrentUser) -> dict[str, An
         "teams": teams,
         "permissions": {
             "canCreateTeam": user.can_create_team(),
-            "canCreateGroup": user.is_device_admin or bool(user.team_ids),
-            "canManageAnyTeam": bool(user.is_device_admin or user.team_ids),
+            "canCreateGroup": user.is_super_admin or bool(user.team_ids),
+            "canManageAnyTeam": bool(user.is_super_admin or user.team_ids),
         },
     }
 
@@ -200,7 +201,7 @@ def create_team(
     user: CurrentUser = Depends(get_current_user),
 ):
     if not user.can_create_team():
-        raise fail(403, "仅部署设备的 Admin 可创建团队", "not_admin")
+        raise fail(403, "仅超级管理员可创建团队", "not_admin")
 
     name = text(payload.get("name"), "团队名称", 40, required=True)
     raw_short_name = payload.get("shortName")
@@ -237,8 +238,8 @@ def delete_team(
     payload: dict[str, Any] | None = Body(default=None),
     user: CurrentUser = Depends(get_current_user),
 ):
-    if not user.is_device_admin:
-        raise fail(403, "仅部署设备的 Admin 可删除团队", "not_admin")
+    if not user.is_super_admin:
+        raise fail(403, "仅超级管理员可删除团队", "not_admin")
     with db() as conn:
         team = _get_team(conn, team_id)
         expected = team["name"]

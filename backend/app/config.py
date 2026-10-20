@@ -1,4 +1,14 @@
-"""Application configuration: schema, atomic JSON storage and public projection."""
+"""Application configuration: schema, atomic JSON storage and public projection.
+
+Round 5 changes
+---------------
+* The bundled (self-hosted) SMTP server and the calendar e-mail reminders were removed.
+  ``email`` now only describes the external SMTP relay used to deliver six-digit
+  verification codes.
+* Sessions are sliding: ``auth.session.maxAgeDays`` (default 7) is both the cookie
+  lifetime and the idle window refreshed on every visit.
+* ``auth.emailLogin`` controls the password-less e-mail code login/registration flow.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +19,7 @@ import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -17,6 +27,7 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.environ.get("TEAMSTUDIO_DATA_DIR", ROOT_DIR / "data"))
 SETTINGS_PATH = Path(os.environ.get("TEAMSTUDIO_SETTINGS", DATA_DIR / "settings.json"))
 FRONTEND_DIST = ROOT_DIR / "web" / "dist"
+UPLOAD_DIR = DATA_DIR / "uploads"
 
 TIME_PATTERN = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -62,7 +73,6 @@ class ModuleFlags(StrictModel):
     matrix: bool = True
     announcements: bool = True
     settings: bool = True
-    email: bool = True
     tasks: bool = True
     insights: bool = True
 
@@ -76,24 +86,7 @@ class AnnouncementSettings(StrictModel):
 class CalendarSettings(StrictModel):
     weekStartsOn: Literal[0, 1] = 1
     showWeekends: bool = True
-    defaultReminderOffsetsDays: list[int] = Field(default_factory=lambda: [3, 1, 0])
-    defaultReminderTime: str = "09:00"
     allowPastDue: bool = True
-    defaultEmailEnabled: bool = True
-
-    @field_validator("defaultReminderOffsetsDays")
-    @classmethod
-    def valid_offsets(cls, value: list[int]) -> list[int]:
-        if any(offset < 0 or offset > 60 for offset in value):
-            raise ValueError("提醒提前天数必须在 0-60 之间")
-        return sorted(set(value), reverse=True)
-
-    @field_validator("defaultReminderTime")
-    @classmethod
-    def valid_time(cls, value: str) -> str:
-        if not TIME_PATTERN.fullmatch(value):
-            raise ValueError("时间必须是 HH:MM")
-        return value
 
 
 class RedBlackSettings(StrictModel):
@@ -104,15 +97,29 @@ class RedBlackSettings(StrictModel):
 
 
 class SmtpSettings(StrictModel):
-    host: str = ""
+    """External SMTP relay used for e-mail verification codes.
+
+    ``host`` accepts an IP address or a hostname. ``username`` / ``password`` are the
+    relay account (the proxy mailbox), while ``fromEmail`` is the visible sender.
+    """
+
+    host: str = Field(default="", max_length=190)
     port: int = Field(default=587, ge=1, le=65535)
-    username: str = ""
-    password: str = ""
-    fromEmail: str = ""
-    fromName: str = "团队工作室"
+    username: str = Field(default="", max_length=190)
+    password: str = Field(default="", max_length=500)
+    fromEmail: str = Field(default="", max_length=190)
+    fromName: str = Field(default="团队工作室", max_length=80)
     useStartTls: bool = True
     useSsl: bool = False
     timeoutSeconds: int = Field(default=15, ge=3, le=120)
+
+    @field_validator("host")
+    @classmethod
+    def valid_host(cls, value: str) -> str:
+        cleaned = value.strip()
+        if any(char.isspace() for char in cleaned):
+            raise ValueError("SMTP 服务器地址不能包含空格")
+        return cleaned
 
     @field_validator("fromEmail")
     @classmethod
@@ -121,80 +128,29 @@ class SmtpSettings(StrictModel):
             raise ValueError("发件邮箱格式不正确")
         return value
 
-
-class ReminderSettings(StrictModel):
-    enabled: bool = True
-    offsetsDays: list[int] = Field(default_factory=lambda: [3, 1, 0])
-    sendTime: str = "09:00"
-    scanIntervalSeconds: int = Field(default=60, ge=30, le=86400)
-    notifyAssignee: bool = True
-    additionalRecipients: list[str] = Field(default_factory=list)
-    includeAnnouncements: bool = True
-    includeTodoDescription: bool = True
-    includeExtra: bool = True
-    extraContent: str = "请及时同步进度；如遇阻塞，请在开发组日历中更新状态并 @ 对应负责人。"
-    subjectTemplate: str = "[{{siteName}}] {{groupName}} · {{todoTitle}} 将于 {{dueDate}} 到期"
-    bodyTemplate: str = (
-        "{{memberName}} 你好：\n\n"
-        "这是一封来自「{{siteName}}」的日程提醒。\n\n"
-        "事项：{{todoTitle}}\n"
-        "所属团队：{{teamName}} / {{groupName}}\n"
-        "截止时间：{{dueDate}} {{dueTime}}\n"
-        "优先级：{{priority}}\n"
-        "事项说明：{{todoDescription}}\n\n"
-        "{{announcements}}\n"
-        "{{extraContent}}\n\n"
-        "—— 团队工作室自动提醒"
-    )
-
-    @field_validator("offsetsDays")
-    @classmethod
-    def valid_offsets(cls, value: list[int]) -> list[int]:
-        if any(offset < 0 or offset > 60 for offset in value):
-            raise ValueError("提醒提前天数必须在 0-60 之间")
-        return sorted(set(value), reverse=True)
-
-    @field_validator("sendTime")
-    @classmethod
-    def valid_send_time(cls, value: str) -> str:
-        if not TIME_PATTERN.fullmatch(value):
-            raise ValueError("提醒发送时间必须是 HH:MM")
-        return value
-
-    @field_validator("additionalRecipients")
-    @classmethod
-    def valid_recipients(cls, value: list[str]) -> list[str]:
-        for email in value:
-            if not EMAIL_PATTERN.fullmatch(email):
-                raise ValueError(f"附加收件人邮箱格式不正确: {email}")
-        return list(dict.fromkeys(value))
-
-
-class BuiltinMailSettings(StrictModel):
-    """Settings for the bundled SMTP server (no external mail provider required)."""
-
-    enabled: bool = True
-    host: str = Field(default="127.0.0.1", max_length=120)
-    port: int = Field(default=2525, ge=1024, le=65535)
-    hostname: str = Field(default="teamstudio.local", max_length=120)
-    mailboxLimit: int = Field(default=500, ge=20, le=5000)
-    retentionDays: int = Field(default=90, ge=1, le=3650)
-
-    @field_validator("host")
-    @classmethod
-    def valid_host(cls, value: str) -> str:
-        cleaned = value.strip() or "127.0.0.1"
-        if any(char.isspace() for char in cleaned):
-            raise ValueError("内置邮件服务器监听地址不能包含空格")
-        return cleaned
+    @model_validator(mode="after")
+    def tls_exclusive(self) -> "SmtpSettings":
+        if self.useSsl and self.useStartTls:
+            raise ValueError("SSL 与 STARTTLS 只能开启一种")
+        return self
 
 
 class EmailSettings(StrictModel):
-    enabled: bool = False
-    deliveryMode: Literal["builtin", "smtp"] = "builtin"
-    builtin: BuiltinMailSettings = Field(default_factory=BuiltinMailSettings)
+    enabled: bool = True
     smtp: SmtpSettings = Field(default_factory=SmtpSettings)
-    reminders: ReminderSettings = Field(default_factory=ReminderSettings)
+    # Verification mail content (kept simple; the six-digit code is appended).
+    subjectTemplate: str = Field(default="[{{siteName}}] 邮箱验证码", max_length=160)
+    bodyTemplate: str = Field(
+        default=(
+            "你好：\n\n"
+            "你正在登录「{{siteName}}」，本次验证码为：\n\n"
+            "{{code}}\n\n"
+            "验证码 {{expiresMinutes}} 分钟内有效，请勿转发给他人。"
+            "如果不是你本人操作，请忽略本邮件。\n\n"
+            "—— {{siteName}}"
+        ),
+        max_length=4000,
+    )
 
 
 class SsoSettings(StrictModel):
@@ -214,6 +170,14 @@ class SsoSettings(StrictModel):
     claimEmail: str = "email"
     allowedEmailDomains: list[str] = Field(default_factory=list)
     autoProvision: bool = False
+
+
+class EmailLoginSettings(StrictModel):
+    enabled: bool = True
+    codeLength: int = Field(default=6, ge=4, le=8)
+    codeExpiryMinutes: int = Field(default=10, ge=2, le=30)
+    resendSeconds: int = Field(default=60, ge=30, le=600)
+    maxAttempts: int = Field(default=5, ge=3, le=10)
 
 
 class AdminIdEntry(StrictModel):
@@ -273,6 +237,7 @@ class SessionSettings(StrictModel):
 class AuthSettings(StrictModel):
     guestMode: bool = True
     allowGuestRead: bool = True
+    emailLogin: EmailLoginSettings = Field(default_factory=EmailLoginSettings)
     sso: SsoSettings = Field(default_factory=SsoSettings)
     adminWhitelist: AdminWhitelist = Field(default_factory=AdminWhitelist)
     session: SessionSettings = Field(default_factory=SessionSettings)
@@ -287,7 +252,7 @@ class FeatureSettings(StrictModel):
 
 
 class Settings(StrictModel):
-    version: int = 1
+    version: int = 2
     site: SiteSettings = Field(default_factory=SiteSettings)
     modules: ModuleFlags = Field(default_factory=ModuleFlags)
     announcements: AnnouncementSettings = Field(default_factory=AnnouncementSettings)
@@ -299,6 +264,56 @@ class Settings(StrictModel):
 
 
 DEFAULT_SETTINGS = Settings()
+
+# Keys removed in round 5; they are stripped automatically when an older
+# ``data/settings.json`` is loaded so existing deployments upgrade in place.
+_LEGACY_EMAIL_KEYS = ("deliveryMode", "builtin", "reminders")
+_LEGACY_CALENDAR_KEYS = (
+    "defaultReminderOffsetsDays",
+    "defaultReminderTime",
+    "defaultEmailEnabled",
+)
+
+
+def migrate_legacy_settings(raw: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Return ``(clean_payload, changed)`` after removing round-4 email/reminder keys."""
+    if not isinstance(raw, dict):
+        return raw, False
+    changed = False
+
+    email = raw.get("email")
+    if isinstance(email, dict):
+        for key in _LEGACY_EMAIL_KEYS:
+            if key in email:
+                email.pop(key, None)
+                changed = True
+        smtp = email.get("smtp")
+        if isinstance(smtp, dict) and "useSsl" in smtp and "useStartTls" in smtp:
+            if smtp["useSsl"] and smtp["useStartTls"]:
+                smtp["useStartTls"] = False
+                changed = True
+
+    calendar = raw.get("calendar")
+    if isinstance(calendar, dict):
+        for key in _LEGACY_CALENDAR_KEYS:
+            if key in calendar:
+                calendar.pop(key, None)
+                changed = True
+
+    modules = raw.get("modules")
+    if isinstance(modules, dict) and "email" in modules:
+        modules.pop("email", None)
+        changed = True
+
+    auth = raw.get("auth")
+    if isinstance(auth, dict) and "emailLogin" not in auth:
+        auth["emailLogin"] = EmailLoginSettings().model_dump(mode="json")
+        changed = True
+
+    if raw.get("version") != DEFAULT_SETTINGS.version:
+        raw["version"] = DEFAULT_SETTINGS.version
+        changed = True
+    return raw, changed
 
 
 def _write_atomic(path: Path, content: str) -> None:
@@ -314,6 +329,15 @@ def flatten_validation_errors(exc: ValidationError) -> list[dict[str, str]]:
         path = ".".join(str(part) for part in error.get("loc", ())) or "(root)"
         details.append({"path": path, "message": error.get("msg", "配置项不合法")})
     return details
+
+
+def mask_email(value: str) -> str:
+    if "@" not in value:
+        return value
+    name, domain = value.split("@", 1)
+    if len(name) <= 2:
+        return name[:1] + "***@" + domain
+    return name[:2] + "***@" + domain
 
 
 class SettingsService:
@@ -333,10 +357,16 @@ class SettingsService:
     def reload(self) -> Settings:
         with self._lock:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-            self._settings = Settings.model_validate(raw)
+            clean, changed = migrate_legacy_settings(raw)
+            self._settings = Settings.model_validate(clean)
             self.updated_at = datetime.fromtimestamp(
                 self.path.stat().st_mtime, tz=timezone.utc
             ).astimezone().isoformat(timespec="seconds")
+            if changed:
+                text = json.dumps(
+                    self._settings.model_dump(mode="json"), ensure_ascii=False, indent=2
+                )
+                _write_atomic(self.path, text + "\n")
             return self._settings
 
     def get(self) -> Settings:
@@ -345,7 +375,8 @@ class SettingsService:
 
     def validate(self, payload: dict) -> tuple[bool, Settings | None, list[dict[str, str]]]:
         try:
-            candidate = Settings.model_validate(payload)
+            clean, _ = migrate_legacy_settings(payload)
+            candidate = Settings.model_validate(clean)
             return True, candidate, []
         except ValidationError as exc:
             return False, None, flatten_validation_errors(exc)
@@ -361,9 +392,16 @@ class SettingsService:
             self.updated_at = now_iso()
             return candidate
 
+    def email_configured(self) -> bool:
+        cfg = self.get().email
+        return bool(
+            cfg.enabled and cfg.smtp.host.strip() and cfg.smtp.fromEmail.strip()
+        )
+
     def public(self) -> dict:
         cfg = self.get()
         sso = cfg.auth.sso
+        smtp = cfg.email.smtp
         return {
             "site": cfg.site.model_dump(mode="json"),
             "modules": cfg.modules.model_dump(mode="json"),
@@ -373,12 +411,20 @@ class SettingsService:
             "features": cfg.features.model_dump(mode="json"),
             "email": {
                 "enabled": cfg.email.enabled,
-                "remindersEnabled": cfg.email.reminders.enabled,
-                "deliveryMode": cfg.email.deliveryMode,
-                "builtinEnabled": cfg.email.builtin.enabled,
+                "configured": self.email_configured(),
+                "fromEmail": smtp.fromEmail,
+                "fromName": smtp.fromName,
             },
             "auth": {
                 "guestMode": cfg.auth.guestMode,
+                "allowGuestRead": cfg.auth.allowGuestRead,
+                "emailLogin": {
+                    "enabled": cfg.auth.emailLogin.enabled,
+                    "codeLength": cfg.auth.emailLogin.codeLength,
+                    "codeExpiryMinutes": cfg.auth.emailLogin.codeExpiryMinutes,
+                    "resendSeconds": cfg.auth.emailLogin.resendSeconds,
+                },
+                "sessionDays": cfg.auth.session.maxAgeDays,
                 "sso": {
                     "enabled": sso.enabled,
                     "configured": self.sso_configured(),

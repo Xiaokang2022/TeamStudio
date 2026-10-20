@@ -27,6 +27,8 @@ from backend.app.seed import seed_if_empty
 TEAM_ID = "team-aurora"
 GROUP_ID = "grp-frontend"
 MEMBER_ID = "m-chen"
+TEAM_GROUPS = {"grp-frontend", "grp-platform", "grp-design"}
+ALL_GROUPS = TEAM_GROUPS | {"grp-data", "grp-infra"}
 
 
 # --------------------------------------------------------------------------- app factory
@@ -330,8 +332,9 @@ def test_todo_lifecycle_for_member_self(api: TestApi) -> None:
     assert response.status_code == 200
     todo = response.json()["data"]["todo"]
     assert todo["assigneeMemberId"] == MEMBER_ID
-    assert todo["reminderOffsetsDays"] == [3, 1, 0]
-    assert todo["emailEnabled"] is True
+    # Round 5 removed every calendar e-mail reminder field from the todo payload.
+    for key in ("reminderOffsetsDays", "emailEnabled", "remindersSent"):
+        assert key not in todo
     assert todo["assigneeName"] == "陈屿"
     todo_id = todo["id"]
 
@@ -340,17 +343,20 @@ def test_todo_lifecycle_for_member_self(api: TestApi) -> None:
     data = response.json()["data"]
     assert data["month"] == tomorrow[:7]
     assert any(item["id"] == todo_id for item in data["todos"])
+    for key in ("reminderOffsetsDays", "emailEnabled", "remindersSent"):
+        assert all(key not in item for item in data["todos"])
 
     response = api.client.patch(
         url(f"/todos/{todo_id}"),
-        json={"title": "联调完成", "status": "done", "reminderOffsetsDays": [7, 1]},
+        json={"title": "联调完成", "status": "done"},
     )
     assert response.status_code == 200
     updated = response.json()["data"]["todo"]
     assert updated["title"] == "联调完成"
     assert updated["status"] == "done"
     assert updated["completedAt"]
-    assert updated["reminderOffsetsDays"] == [7, 1]
+    for key in ("reminderOffsetsDays", "emailEnabled", "remindersSent"):
+        assert key not in updated
 
     response = api.client.delete(url(f"/todos/{todo_id}"))
     assert response.status_code == 200
@@ -401,16 +407,29 @@ def test_todo_validation_errors(api: TestApi) -> None:
         {**base, "dueDate": "2026-02-30"},
         {**base, "dueTime": "25:00"},
         {**base, "priority": "critical"},
-        {**base, "reminderOffsetsDays": [61]},
-        {**base, "reminderOffsetsDays": "3,1"},
-        {**base, "reminderOffsetsDays": [-1]},
         {"dueDate": _iso(1)},
-        {**base, "emailEnabled": "yes"},
     ]
     for payload in invalid_payloads:
         response = api.client.post(url("/todos"), json=payload)
         assert response.status_code == 422, payload
         assert response.json()["ok"] is False
+
+    # Round-5 legacy reminder/email fields are ignored instead of validated.
+    response = api.client.post(
+        url("/todos"),
+        json={**base, "reminderOffsetsDays": "not-a-list", "emailEnabled": "yes"},
+    )
+    assert response.status_code == 200
+    legacy_todo = response.json()["data"]["todo"]
+    for key in ("reminderOffsetsDays", "emailEnabled", "remindersSent"):
+        assert key not in legacy_todo
+    response = api.client.patch(
+        url(f"/todos/{legacy_todo['id']}"),
+        json={"reminderOffsetsDays": [61], "emailEnabled": "yes"},
+    )
+    assert response.status_code == 200
+    for key in ("reminderOffsetsDays", "emailEnabled", "remindersSent"):
+        assert key not in response.json()["data"]["todo"]
 
     response = api.client.get(url("/todos"), params={"month": "2026-13"})
     assert response.status_code == 422
@@ -434,7 +453,7 @@ def test_redblack_put_roundtrip_and_rollover(api: TestApi) -> None:
         "theme": "三月主题",
         "red": [
             {"memberId": "m-lin", "title": "高光时刻", "reason": "表现突出", "score": 96},
-            {"memberName": "外部伙伴", "title": "协作之星", "reason": "支持到位", "score": 88},
+            {"memberName": "外部成员", "title": "协作之星", "reason": "支持到位", "score": 88},
         ],
         "black": [{"memberId": "m-chen", "title": "进度延期", "reason": "联调不足", "score": 60}],
     }
@@ -489,6 +508,81 @@ def test_redblack_put_roundtrip_and_rollover(api: TestApi) -> None:
     assert response.status_code == 200
     assert response.json()["data"]["board"] is None
     assert response.json()["data"]["month"] == "2030-01"
+
+
+def test_redblack_scope_follows_view(api: TestApi) -> None:
+    month = date.today().strftime("%Y-%m")
+    api.as_admin()
+
+    # Group scope keeps the single writable board and its monthly theme.
+    group_data = api.client.get(url("/redblack"), params={"month": month}).json()["data"]
+    assert group_data["scope"]["kind"] == "group"
+    assert group_data["board"]["groupId"] == GROUP_ID
+    assert group_data["board"]["theme"] == "把体验做深，把协作做轻"
+    assert len(group_data["board"]["red"]) == 3
+    assert len(group_data["board"]["black"]) == 2
+    assert group_data["board"]["exists"] is True
+    assert [board["groupId"] for board in group_data["boards"]] == [GROUP_ID]
+    entry = group_data["board"]["red"][0]
+    assert entry["groupId"] == GROUP_ID
+    assert entry["groupName"] == "前端体验组"
+    assert entry["teamId"] == TEAM_ID
+    assert entry["teamName"] == "星港产品团队"
+
+    # Team scope merges every board of the team for read-only display.
+    team_data = api.client.get(
+        url("/redblack"), params={"month": month, "scope": "team"}
+    ).json()["data"]
+    assert team_data["scope"]["kind"] == "team"
+    assert {board["groupId"] for board in team_data["boards"]} == TEAM_GROUPS
+    merged = team_data["board"]
+    assert merged["id"] is None
+    assert merged["exists"] is True
+    assert len(merged["red"]) == 7
+    assert len(merged["black"]) == 4
+    assert {item["groupId"] for item in merged["red"]} == TEAM_GROUPS
+    assert all(item["groupName"] and item["teamName"] for item in merged["black"])
+
+    # All-team scope merges every board of every team.
+    all_data = api.client.get(
+        url("/redblack"), params={"month": month, "scope": "all"}
+    ).json()["data"]
+    assert all_data["scope"]["kind"] == "all"
+    assert {board["groupId"] for board in all_data["boards"]} == ALL_GROUPS
+    assert len(all_data["boards"]) == len(ALL_GROUPS)
+    assert len(all_data["board"]["red"]) == 10
+    assert len(all_data["board"]["black"]) == 6
+    assert month in all_data["availableMonths"]
+
+    # Aggregated boards still honour a concrete month; unknown months are empty.
+    empty = api.client.get(
+        url("/redblack"), params={"month": "2030-01", "scope": "team"}
+    ).json()["data"]
+    assert empty["board"]["id"] is None
+    assert empty["board"]["exists"] is False
+    assert empty["board"]["red"] == [] and empty["board"]["black"] == []
+    assert empty["boards"] == []
+
+    # Non-super identities may never request the cross-team view.
+    api.as_member(MEMBER_ID)
+    response = api.client.get(url("/redblack"), params={"month": month, "scope": "all"})
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "scope_forbidden"
+    api.as_group_admin()
+    assert (
+        api.client.get(url("/redblack"), params={"month": month, "scope": "team"}).status_code
+        == 200
+    )
+    assert (
+        api.client.get(url("/redblack"), params={"month": month, "scope": "all"}).status_code
+        == 403
+    )
+    # Guests may read the wider team view when guest read access is enabled.
+    api.as_guest()
+    assert (
+        api.client.get(url("/redblack"), params={"month": month, "scope": "team"}).status_code
+        == 200
+    )
 
 
 # --------------------------------------------------------------------------- announcements

@@ -5,9 +5,9 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 
-from ..auth import CurrentUser, get_current_user
+from ..auth import CurrentUser, get_current_user, refresh_session_cookie
 from ..config import settings_service
 from ..db import db, rows, scalar
 from ..http import ok
@@ -90,11 +90,15 @@ def _resolve_active(
 
 @router.get("/bootstrap")
 def bootstrap(
+    response: Response,
     teamId: str | None = Query(default=None),
     groupId: str | None = Query(default=None),
     user: CurrentUser = Depends(get_current_user),
 ):
     cfg = settings_service.get()
+    # Sliding session: every visit re-signs the cookie so the configured idle
+    # window (default 7 days) counts from the most recent request.
+    refresh_session_cookie(response, user)
     with db() as conn:
         teams = _workspace_tree(conn)
         active_team, active_group = _resolve_active(teams, teamId, groupId)
@@ -171,5 +175,6 @@ def health():
             "version": "1.0.0",
             "ssoConfigured": settings_service.sso_configured(),
             "emailEnabled": cfg.email.enabled,
+            "emailConfigured": settings_service.email_configured(),
         }
     )

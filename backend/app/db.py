@@ -113,8 +113,6 @@ CREATE TABLE IF NOT EXISTS todos (
     assignee_member_id TEXT REFERENCES members(id) ON DELETE SET NULL,
     priority TEXT NOT NULL DEFAULT 'normal',
     status TEXT NOT NULL DEFAULT 'todo',
-    reminder_offsets_days TEXT NOT NULL DEFAULT '[]',
-    email_enabled INTEGER NOT NULL DEFAULT 1,
     created_by TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -226,21 +224,44 @@ CREATE TABLE IF NOT EXISTS task_tags (
 );
 CREATE INDEX IF NOT EXISTS idx_task_tags_group ON task_tags(group_id, name);
 
-CREATE TABLE IF NOT EXISTS email_reminders_sent (
+CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
-    group_id TEXT NOT NULL,
-    todo_id TEXT NOT NULL,
-    offset_days INTEGER NOT NULL,
-    recipient TEXT NOT NULL,
-    sent_at TEXT NOT NULL,
-    UNIQUE(todo_id, offset_days, recipient)
+    email TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL DEFAULT '',
+    avatar TEXT NOT NULL DEFAULT '',
+    avatar_color TEXT NOT NULL DEFAULT '#5865f2',
+    bio TEXT NOT NULL DEFAULT '',
+    skills TEXT NOT NULL DEFAULT '[]',
+    role TEXT NOT NULL DEFAULT 'member'
+        CHECK(role IN ('member','group_admin','team_admin','super')),
+    team_ids TEXT NOT NULL DEFAULT '[]',
+    group_ids TEXT NOT NULL DEFAULT '[]',
+    email_verified INTEGER NOT NULL DEFAULT 0,
+    created_by TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+
+CREATE TABLE IF NOT EXISTS email_codes (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    code_hash TEXT NOT NULL,
+    purpose TEXT NOT NULL DEFAULT 'login',
+    expires_at TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    consumed_at TEXT,
+    request_ip TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_email_codes_email ON email_codes(email, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS email_logs (
     id TEXT PRIMARY KEY,
     group_id TEXT NOT NULL DEFAULT '',
     todo_id TEXT NOT NULL DEFAULT '',
-    kind TEXT NOT NULL DEFAULT 'reminder',
+    kind TEXT NOT NULL DEFAULT 'verification',
     recipient TEXT NOT NULL DEFAULT '',
     subject TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'sent',
@@ -248,26 +269,7 @@ CREATE TABLE IF NOT EXISTS email_logs (
     detail TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
-
-CREATE TABLE IF NOT EXISTS mailbox_messages (
-    id TEXT PRIMARY KEY,
-    direction TEXT NOT NULL DEFAULT 'outbound',
-    from_addr TEXT NOT NULL DEFAULT '',
-    to_addrs TEXT NOT NULL DEFAULT '',
-    cc_addrs TEXT NOT NULL DEFAULT '',
-    subject TEXT NOT NULL DEFAULT '',
-    body_text TEXT NOT NULL DEFAULT '',
-    body_html TEXT NOT NULL DEFAULT '',
-    raw TEXT NOT NULL DEFAULT '',
-    kind TEXT NOT NULL DEFAULT 'test',
-    group_id TEXT NOT NULL DEFAULT '',
-    todo_id TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'stored',
-    error TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL,
-    read_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_mailbox_created ON mailbox_messages(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_email_logs_created ON email_logs(created_at DESC);
 
 CREATE TABLE IF NOT EXISTS audit_logs (
     id TEXT PRIMARY KEY,
@@ -406,12 +408,44 @@ def _migrate_matrix_backups(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_member_avatar(conn: sqlite3.Connection) -> None:
+    """Additive v5 migration: profile photo URL on group-scoped member records."""
+    columns = {
+        str(info[1]) for info in conn.execute("PRAGMA table_info(members)").fetchall()
+    }
+    if columns and "avatar_url" not in columns:
+        conn.execute("ALTER TABLE members ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''")
+
+
+def _migrate_remove_email_reminders(conn: sqlite3.Connection) -> None:
+    """Round-5 cleanup: drop calendar reminder columns and the old mail tables.
+
+    ``email`` now only powers account verification codes, so the legacy reminder
+    bookkeeping and the bundled-mailbox storage are no longer needed. Existing
+    deployments are upgraded in place; failures are best-effort (older SQLite builds
+    may not support ``DROP COLUMN``) and never block startup.
+    """
+    todo_columns = {
+        str(info[1]) for info in conn.execute("PRAGMA table_info(todos)").fetchall()
+    }
+    for column in ("reminder_offsets_days", "email_enabled"):
+        if column in todo_columns:
+            try:
+                conn.execute(f"ALTER TABLE todos DROP COLUMN {column}")
+            except sqlite3.OperationalError:  # pragma: no cover - legacy SQLite
+                pass
+    conn.execute("DROP TABLE IF EXISTS email_reminders_sent")
+    conn.execute("DROP TABLE IF EXISTS mailbox_messages")
+
+
 def init_db() -> None:
     with db() as conn:
         conn.executescript(SCHEMA)
         _migrate_member_tasks(conn)
         _migrate_task_tags(conn)
         _migrate_matrix_backups(conn)
+        _migrate_member_avatar(conn)
+        _migrate_remove_email_reminders(conn)
 
 
 def rows(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:

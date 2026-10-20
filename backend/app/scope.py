@@ -6,9 +6,10 @@ Feature GET routes accept an optional ``scope`` query parameter:
 - ``team``: every development group of the path team.
 - ``all``: every development group of every team.
 
-Writes stay group-scoped; the frontend routes a write back to the group that owns the
-entity (each payload item carries ``groupId``). The resolver below only widens reads, so
-the existing permission model is untouched.
+Only super administrators may read the cross-team ``all`` scope (round 5 rule);
+every other identity is limited to the current development group or its current
+team. Writes stay group-scoped; the frontend routes a write back to the group that
+owns the entity (each payload item carries ``groupId``).
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from typing import Any
 
 from fastapi import Query
 
+from .auth import CurrentUser
 from .db import rows
 from .http import fail
 
@@ -30,6 +32,18 @@ def normalize_scope(value: str | None) -> str:
     if cleaned not in SCOPE_KINDS:
         raise fail(422, "scope 必须是 group/team/all", "invalid_scope")
     return cleaned
+
+
+def allowed_scopes(user: CurrentUser | None) -> list[str]:
+    if user is not None and not user.is_super_admin:
+        return ["group", "team"]
+    return ["group", "team", "all"]
+
+
+def ensure_scope_allowed(kind: str, user: CurrentUser | None) -> str:
+    if user is not None and kind == "all" and not user.is_super_admin:
+        raise fail(403, "仅超级管理员可查看全部团队视角", "scope_forbidden")
+    return kind
 
 
 def scope_query(scope: str | None = Query(default=DEFAULT_SCOPE)) -> str:
@@ -60,13 +74,14 @@ def resolve_scope(
     team_id: str | None,
     group_id: str | None,
     scope: str | None = DEFAULT_SCOPE,
+    user: CurrentUser | None = None,
 ) -> dict[str, Any]:
     """Resolve the effective read scope for one request.
 
     Returns ``{kind, label, teamIds, groupIds, groups, team, group}`` where ``groups`` is
     a camelCase list that the UI can use for labels and pickers.
     """
-    kind = normalize_scope(scope)
+    kind = ensure_scope_allowed(normalize_scope(scope), user)
     team_rows = rows(conn, "SELECT id, name, short_name, color FROM teams ORDER BY sort_order, name")
     group_rows = rows(
         conn,

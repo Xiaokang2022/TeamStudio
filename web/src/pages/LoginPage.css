@@ -1,0 +1,181 @@
+/* ============================================================
+   Login page — password-less e-mail code sign-in
+   Page-specific additions only; the shared .login-* skeleton lives
+   in styles.css so the visual language stays unchanged.
+   ============================================================ */
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.login-form .btn-lg {
+  width: 100%;
+}
+
+.login-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--red) 26%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--red-soft);
+  color: var(--red);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.login-code-target {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.login-code-target > svg {
+  flex: none;
+  color: var(--accent);
+}
+
+.login-code-target strong {
+  color: var(--text);
+  font-weight: 650;
+  word-break: break-all;
+}
+
+.login-code-target .text-button {
+  margin-left: auto;
+  flex: none;
+  font-size: 11px;
+}
+
+.login-purpose {
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--text-2);
+}
+
+.login-code-input {
+  font-family: var(--font-mono);
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: 0.42em;
+  text-align: center;
+  padding: 11px 12px;
+}
+
+.login-code-input::placeholder {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.login-resend {
+  display: flex;
+  justify-content: center;
+  margin-top: -2px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.login-resend .text-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.login-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--orange) 28%, transparent);
+  border-radius: var(--radius-md);
+  background: var(--orange-soft);
+  color: var(--orange);
+}
+
+.login-notice > svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.login-notice > div {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.login-notice strong {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.login-notice span {
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--text-2);
+}
+
+.login-sso-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 18px;
+  font-size: 11.5px;
+  color: var(--text-2);
+  text-decoration: none;
+  transition: color 0.16s;
+}
+
+.login-sso-link:hover {
+  color: var(--accent);
+}
+
+.login-guest {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.login-guest-disabled {
+  margin-top: 14px;
+  text-align: center;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+.login-switch {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.login-card .login-desc {
+  margin-bottom: 0;
+}
+
+.login-card .login-form .field-hint {
+  margin-top: 1px;
+}
+
+@media (max-width: 480px) {
+  .login-card {
+    padding: 24px 20px;
+  }
+
+  .login-code-input {
+    letter-spacing: 0.3em;
+  }
+}

@@ -1,4 +1,21 @@
-"""Identity, signed-cookie sessions, IP/ID admin whitelist and permission helpers."""
+"""Identity, signed-cookie sessions, IP/ID admin whitelist and permission helpers.
+
+Round 5 introduces password-less e-mail accounts stored in the ``users`` table:
+
+* a registered account's id is the e-mail local part and is immutable;
+* the display name defaults to that local part and may only be changed by the
+  account owner or a super administrator;
+* roles are ``member`` / ``group_admin`` / ``team_admin`` / ``super``.
+
+The deployment device itself (loopback/local interface) keeps the built-in
+``Admin`` identity and therefore is always a super administrator. Other super
+administrators share every permission of the device admin except that the device
+admin itself is not a stored/manageable account.
+
+Sessions are sliding: every authenticated bootstrap/`me` request re-issues the
+signed cookie with a fresh expiry, so ``auth.session.maxAgeDays`` (default 7)
+counts from the most recent visit.
+"""
 
 from __future__ import annotations
 
@@ -18,11 +35,13 @@ from fastapi import Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
 from .config import DATA_DIR, settings_service
-from .db import db, row
+from .db import db, json_loads, row
 
 SESSION_COOKIE_FALLBACK = "teamstudio_session"
 STATE_COOKIE = "teamstudio_sso_state"
 LOCAL_HOSTNAMES = {"localhost", "127.0.0.1", "::1", "testclient"}
+
+USER_ROLES = ("member", "group_admin", "team_admin", "super")
 
 
 class SessionIdentity(BaseModel):
@@ -42,38 +61,58 @@ class CurrentUser:
     id: str
     name: str
     email: str = ""
+    avatar: str = ""
+    avatar_color: str = "#5865f2"
+    bio: str = ""
+    skills: list[str] = field(default_factory=list)
     authenticated: bool = False
-    source: str = "guest"  # local | sso | ip | guest
+    source: str = "guest"  # local | sso | email | ip | guest
     is_device_admin: bool = False
     admin_role: str | None = None
+    user_role: str = "member"
     team_ids: set[str] = field(default_factory=set)
     group_ids: set[str] = field(default_factory=set)
     linked_member_id: str | None = None
     linked_member_name: str | None = None
+    email_verified: bool = True
     sso_configured: bool = False
+    session: SessionIdentity | None = field(default=None, repr=False)
+
+    @property
+    def is_super_admin(self) -> bool:
+        return self.is_device_admin or self.admin_role == "super"
 
     @property
     def is_admin(self) -> bool:
         return self.is_device_admin or self.admin_role is not None
 
     def can_edit_settings(self) -> bool:
-        return self.is_device_admin
+        return self.is_super_admin
+
+    def can_manage_users(self) -> bool:
+        return self.is_super_admin
+
+    def can_view_all_scope(self) -> bool:
+        return self.is_super_admin
 
     def can_edit_group(self, team_id: str, group_id: str) -> bool:
-        if self.is_device_admin:
+        if self.is_super_admin:
             return True
         return group_id in self.group_ids or team_id in self.team_ids
 
     def can_edit_any_group(self) -> bool:
-        return self.is_device_admin or bool(self.team_ids or self.group_ids)
+        return self.is_super_admin or bool(self.team_ids or self.group_ids)
 
     def can_manage_team(self, team_id: str) -> bool:
-        """The device Admin manages every team; a team_admin only its own ``teamIds``."""
-        return self.is_device_admin or team_id in self.team_ids
+        """A super admin manages every team; a team_admin only its own ``teamIds``."""
+        return self.is_super_admin or team_id in self.team_ids
 
     def can_create_team(self) -> bool:
-        """Creating a whole team is reserved for the device Admin."""
-        return self.is_device_admin
+        """Creating a whole team is reserved for super administrators."""
+        return self.is_super_admin
+
+    def can_manage_group_settings(self, group_id: str) -> bool:
+        return self.is_super_admin or group_id in self.group_ids
 
     def require_team_manager(self, team_id: str) -> None:
         """Raise 403 ``not_admin`` unless the user may restructure ``team_id``."""
@@ -88,7 +127,11 @@ class CurrentUser:
             )
 
     def can_edit_self(self) -> bool:
-        return bool(self.linked_member_id) and settings_service.get().features.allowMemberSelfEdit
+        if not self.authenticated:
+            return False
+        if not settings_service.get().features.allowMemberSelfEdit:
+            return False
+        return self.source in {"email", "sso"} or bool(self.linked_member_id)
 
     def ensure_group(self, team_id: str, group_id: str) -> None:
         if not self.can_edit_group(team_id, group_id):
@@ -99,9 +142,16 @@ class CurrentUser:
             "id": self.id,
             "name": self.name,
             "email": self.email,
+            "avatar": self.avatar,
+            "avatarColor": self.avatar_color,
+            "bio": self.bio,
+            "skills": list(self.skills),
             "authenticated": self.authenticated,
             "source": self.source,
             "isDeviceAdmin": self.is_device_admin,
+            "isSuperAdmin": self.is_super_admin,
+            "userRole": self.user_role,
+            "emailVerified": self.email_verified,
             "admin": {
                 "role": self.admin_role,
                 "teamIds": sorted(self.team_ids),
@@ -114,7 +164,9 @@ class CurrentUser:
                 "canEditSettings": self.can_edit_settings(),
                 "canEditAny": self.can_edit_any_group(),
                 "canEditSelf": self.can_edit_self(),
-                "canManageEmail": self.is_device_admin,
+                "canManageUsers": self.can_manage_users(),
+                "canViewAllScope": self.can_view_all_scope(),
+                "canManageWorkspace": self.is_super_admin or bool(self.team_ids),
             },
         }
 
@@ -177,6 +229,18 @@ def unsign_payload(token: str | None) -> dict[str, Any] | None:
         return None
 
 
+def hash_verification_code(email: str, code: str) -> str:
+    """Keyed hash of a one-time e-mail code (the plain code is never stored)."""
+    message = f"{email.strip().lower()}:{code.strip()}".encode("utf-8")
+    return hmac.new(_SECRET, message, hashlib.sha256).hexdigest()
+
+
+def verification_code_matches(email: str, code: str, expected_hash: str) -> bool:
+    if not expected_hash:
+        return False
+    return hmac.compare_digest(hash_verification_code(email, code), expected_hash)
+
+
 def create_session_token(identity: SessionIdentity, max_age_days: int) -> str:
     payload = identity.model_dump(mode="json")
     payload["exp"] = int(time.time()) + max_age_days * 86400
@@ -196,16 +260,30 @@ def read_session(request: Request) -> SessionIdentity | None:
 
 def set_session_cookie(response: Any, identity: SessionIdentity) -> None:
     cfg = settings_service.get()
-    token = create_session_token(identity, cfg.auth.session.maxAgeDays)
+    days = cfg.auth.session.maxAgeDays
+    token = create_session_token(identity, days)
     response.set_cookie(
         key=cfg.auth.session.cookieName or SESSION_COOKIE_FALLBACK,
         value=token,
-        max_age=cfg.auth.session.maxAgeDays * 86400,
+        max_age=days * 86400,
         httponly=True,
         samesite="lax",
         secure=cfg.auth.session.secureCookie,
         path="/",
     )
+
+
+def refresh_session_cookie(response: Any, user: CurrentUser) -> None:
+    """Slide the signed session window forward on every visit.
+
+    Only cookie/session based identities (e-mail login and SSO) are refreshed; the
+    deployment device and IP-whitelist identities do not own a session cookie.
+    """
+    if not user.authenticated or user.session is None:
+        return
+    if user.source not in {"email", "sso"}:
+        return
+    set_session_cookie(response, user.session)
 
 
 def clear_session_cookie(response: Any) -> None:
@@ -302,6 +380,23 @@ def merge_scopes(entries: list[Any]) -> tuple[set[str], set[str]]:
     return team_ids, group_ids
 
 
+def _find_user(identity: SessionIdentity) -> dict[str, Any] | None:
+    candidates = [identity.id, identity.email, identity.sub]
+    lowered = [value.strip().lower() for value in candidates if value and value.strip()]
+    if not lowered:
+        return None
+    with db() as conn:
+        for value in lowered:
+            found = row(
+                conn,
+                "SELECT * FROM users WHERE lower(id)=? OR lower(email)=? LIMIT 1",
+                (value, value),
+            )
+            if found:
+                return found
+    return None
+
+
 def _linked_member(identity: SessionIdentity) -> dict[str, Any] | None:
     candidates = [identity.id, identity.email, identity.sub]
     lowered = [value.lower() for value in candidates if value]
@@ -320,6 +415,22 @@ def _linked_member(identity: SessionIdentity) -> dict[str, Any] | None:
     return None
 
 
+def _role_from_user(user: dict[str, Any] | None) -> str:
+    if not user:
+        return "member"
+    role = str(user.get("role") or "member")
+    return role if role in USER_ROLES else "member"
+
+
+def _scope_list(user: dict[str, Any] | None, key: str) -> set[str]:
+    if not user:
+        return set()
+    parsed = json_loads(user.get(key), [])
+    if not isinstance(parsed, list):
+        return set()
+    return {str(item) for item in parsed if str(item).strip()}
+
+
 def build_user(request: Request) -> CurrentUser:
     cfg = settings_service.get()
     sso_configured = settings_service.sso_configured()
@@ -333,6 +444,7 @@ def build_user(request: Request) -> CurrentUser:
             source="local",
             is_device_admin=True,
             admin_role="super",
+            user_role="super",
             sso_configured=sso_configured,
         )
 
@@ -349,7 +461,47 @@ def build_user(request: Request) -> CurrentUser:
     elif group_ids:
         role = "group_admin"
 
+    account = _find_user(identity) if identity else None
+    if account:
+        account_role = _role_from_user(account)
+        team_ids |= _scope_list(account, "team_ids")
+        group_ids |= _scope_list(account, "group_ids")
+        if account_role == "super":
+            role = "super"
+        elif account_role == "team_admin" or (
+            account_role == "group_admin" and role != "team_admin"
+        ):
+            role = account_role
+        elif role is None and (team_ids or group_ids):
+            role = "team_admin" if team_ids else "group_admin"
+    elif role is None and (team_ids or group_ids):
+        role = "team_admin" if team_ids else "group_admin"
+
     linked = _linked_member(identity) if identity else None
+
+    if account and identity:
+        display_name = account.get("name") or identity.name or account["id"]
+        email = account.get("email") or identity.email
+        return CurrentUser(
+            id=account["id"],
+            name=display_name,
+            email=email,
+            avatar=account.get("avatar") or "",
+            avatar_color=account.get("avatar_color") or "#5865f2",
+            bio=account.get("bio") or "",
+            skills=list(json_loads(account.get("skills"), []) or []),
+            authenticated=True,
+            source="email" if identity.provider == "email" else "sso",
+            admin_role=role,
+            user_role=_role_from_user(account),
+            team_ids=team_ids,
+            group_ids=group_ids,
+            linked_member_id=linked["id"] if linked else None,
+            linked_member_name=linked["name"] if linked else None,
+            email_verified=bool(account.get("email_verified")),
+            sso_configured=sso_configured,
+            session=identity,
+        )
 
     if identity:
         return CurrentUser(
@@ -359,11 +511,13 @@ def build_user(request: Request) -> CurrentUser:
             authenticated=True,
             source="sso",
             admin_role=role,
+            user_role=role or "member",
             team_ids=team_ids,
             group_ids=group_ids,
             linked_member_id=linked["id"] if linked else None,
             linked_member_name=linked["name"] if linked else None,
             sso_configured=sso_configured,
+            session=identity,
         )
 
     if entries:
@@ -373,6 +527,7 @@ def build_user(request: Request) -> CurrentUser:
             authenticated=True,
             source="ip",
             admin_role=role or "team_admin",
+            user_role=role or "team_admin",
             team_ids=team_ids,
             group_ids=group_ids,
             sso_configured=sso_configured,
@@ -395,6 +550,14 @@ CurrentUserDep = Depends(get_current_user)
 
 
 def require_super(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    """Require a super administrator (device Admin or a stored ``super`` role)."""
+    if not user.is_super_admin:
+        raise HTTPException(status_code=403, detail="仅超级管理员可执行此操作")
+    return user
+
+
+def require_device_admin(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    """Require the deployment device's built-in Admin identity."""
     if not user.is_device_admin:
         raise HTTPException(status_code=403, detail="仅部署设备的 Admin 可执行此操作")
     return user

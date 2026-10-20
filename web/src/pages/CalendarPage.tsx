@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type KeyboardEvent } from "react";
 import {
-  Bell,
-  BellOff,
   CalendarDays,
   Check,
   ChevronLeft,
@@ -11,7 +9,6 @@ import {
   Eye,
   ListTodo,
   Loader2,
-  Mail,
   Pencil,
   Plus,
   RefreshCw,
@@ -29,6 +26,7 @@ import { TodoDialog } from "../components/TodoDialog";
 import {
   buildCalendar,
   cn,
+  daysUntil,
   dueLabel,
   formatFullDate,
   groupBy,
@@ -55,10 +53,6 @@ function priorityBadgeClass(priority: TodoPriority): string {
   if (priority === "high") return "badge-orange";
   if (priority === "low") return "badge-gray";
   return "badge-violet";
-}
-
-function reminderLabel(days: number): string {
-  return days === 0 ? "当天" : `提前${days}天`;
 }
 
 export default function CalendarPage() {
@@ -97,10 +91,6 @@ export default function CalendarPage() {
   const weekStartsOn: 0 | 1 = config?.calendar.weekStartsOn ?? 1;
   const showWeekends = config?.calendar.showWeekends !== false;
   const allowPastDue = config?.calendar.allowPastDue !== false;
-  const defaultReminderOffsets = config?.calendar.defaultReminderOffsetsDays ?? [3, 1, 0];
-  const defaultReminderTime = config?.calendar.defaultReminderTime ?? "09:00";
-  const defaultEmailEnabled = config?.calendar.defaultEmailEnabled ?? true;
-  const emailAvailable = Boolean(config?.email.enabled && config?.email.remindersEnabled);
 
   const [month, setMonth] = useState(() => monthKey(new Date()));
   const [todos, setTodos] = useState<Todo[]>([]);
@@ -234,10 +224,11 @@ export default function CalendarPage() {
     const total = todos.length;
     const done = todos.filter((todo) => todo.status === "done").length;
     const overdue = todos.filter((todo) => todo.status !== "done" && todo.dueDate < todayISO()).length;
-    const reminder = todos.filter(
-      (todo) => todo.emailEnabled && (todo.reminderOffsetsDays?.length ?? 0) > 0,
-    ).length;
-    return { total, done, open: total - done, overdue, reminder };
+    const thisWeek = todos.filter((todo) => {
+      const days = daysUntil(todo.dueDate);
+      return todo.status !== "done" && days >= 0 && days <= 7;
+    }).length;
+    return { total, done, open: total - done, overdue, thisWeek };
   }, [todos]);
 
   const moveMonth = (amount: number) => {
@@ -325,7 +316,7 @@ export default function CalendarPage() {
     { label: "本月待办", value: summary.total, hint: `已完成 ${summary.done}`, color: "#7c3aed" },
     { label: "待完成", value: summary.open, hint: "需要跟进", color: "#2563eb" },
     { label: "已逾期", value: summary.overdue, hint: "尽早处理", color: "#dc2626" },
-    { label: "邮件提醒", value: summary.reminder, hint: emailAvailable ? "已开启" : "未启用", color: "#0ea5e9" },
+    { label: "7 天内到期", value: summary.thisWeek, hint: "按优先级推进", color: "#0ea5e9" },
   ];
 
   return (
@@ -347,7 +338,7 @@ export default function CalendarPage() {
           </span>
           <h1 className="page-title">协作日历</h1>
           <p className="page-subtitle">
-            把计划、到期和邮件提醒放进同一张时间表，让团队的节奏清晰可见。
+            把计划、到期与优先级放进同一张时间表，让团队的节奏清晰可见。
           </p>
         </div>
         <div className="page-actions">
@@ -468,10 +459,9 @@ export default function CalendarPage() {
                 <i /> {PRIORITY_META[priority].label}
               </span>
             ))}
-            <span className="cal-legend-remind">
-              <Bell size={11} /> 邮件提醒
+            <span className="cal-legend-note">
+              {showWeekends ? "按到期时间排序，逾期任务优先提示" : "已按配置隐藏周末"}
             </span>
-            {!showWeekends ? <span className="cal-legend-note">已按配置隐藏周末</span> : null}
           </footer>
         </section>
 
@@ -524,7 +514,7 @@ export default function CalendarPage() {
                 title="这天还没有安排"
                 description={
                   canCreate
-                    ? "把想推进的事情放进日历，设置提醒后团队就不会错过。"
+                    ? "把想推进的事情放进日历，明确到期时间、优先级与负责人。"
                     : "访客模式为只读视图，暂无待办安排。"
                 }
                 action={
@@ -539,9 +529,8 @@ export default function CalendarPage() {
           </div>
 
           <footer className="cal-side-foot">
-            <span className={cn("cal-side-email", emailAvailable ? "is-on" : "is-off")}>
-              {emailAvailable ? <Mail size={13} /> : <BellOff size={13} />}
-              {emailAvailable ? `邮件提醒已开启 · 默认 ${defaultReminderTime} 发送` : "邮件提醒未启用"}
+            <span className="cal-side-hint">
+              <Clock size={12} /> 按到期时间排序，同刻按优先级
             </span>
             {!canCreate ? (
               <span className="cal-side-readonly">
@@ -563,10 +552,6 @@ export default function CalendarPage() {
         defaultAssigneeId={defaultAssigneeId}
         canAssignOthers={canManageActiveGroup}
         allowPastDue={allowPastDue}
-        defaultReminderOffsetsDays={defaultReminderOffsets}
-        defaultReminderTime={defaultReminderTime}
-        defaultEmailEnabled={defaultEmailEnabled}
-        emailAvailable={emailAvailable}
         onClose={() => setDialog({ open: false, todo: null })}
         onSaved={(saved) => {
           void handleSaved(saved);
@@ -576,7 +561,7 @@ export default function CalendarPage() {
       <ConfirmDialog
         open={Boolean(deleting)}
         title="删除待办"
-        message={`确定删除「${deleting?.title ?? ""}」吗？删除后提醒记录也会一并移除。`}
+        message={`确定删除「${deleting?.title ?? ""}」吗？删除后无法恢复。`}
         confirmLabel="删除待办"
         loading={Boolean(deleting && busyId === deleting.id)}
         onClose={() => setDeleting(null)}
@@ -584,7 +569,7 @@ export default function CalendarPage() {
       />
 
       <p className="cal-page-note">
-        <Mail size={12} /> 邮件提醒按配置的发送时间扫描，同一待办的同一提醒节点只会发送一次。
+        <ListTodo size={12} /> 待办按截止日期归档展示，逾期与高优先级会优先提示。
         <button className="text-button" onClick={() => navigate("announcements")}>
           查看团队公告
         </button>
@@ -673,7 +658,6 @@ function CalendarDayCell({ cell, todos, selected, onSelect, onOpenTodo, groupOf 
                 })()
               : null}
             {todo.assigneeName ? <span className="cal-chip-assignee">{todo.assigneeName}</span> : null}
-            {todo.emailEnabled ? <Bell size={9} className="cal-chip-bell" /> : null}
           </button>
         ))}
         {todos.length > visibleTodos.length ? (
@@ -737,14 +721,6 @@ function TodoRow({ todo, canEdit, busy, member, group, onToggle, onEdit, onDelet
           <span>
             <Clock size={11} /> {todo.dueTime || "18:00"}
           </span>
-          {todo.emailEnabled && todo.reminderOffsetsDays.length ? (
-            <span
-              className="cal-todo-remind"
-              title={`邮件提醒：${todo.reminderOffsetsDays.map(reminderLabel).join("、")}`}
-            >
-              <Bell size={11} /> {todo.reminderOffsetsDays.map(reminderLabel).join(" / ")}
-            </span>
-          ) : null}
           <span className={cn("cal-todo-due", `tone-${due.tone}`)}>{due.label}</span>
         </div>
         {todo.description ? <p className="cal-todo-desc">{todo.description}</p> : null}

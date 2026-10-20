@@ -1,10 +1,11 @@
-"""Group calendar todos and reminder metadata routes.
+"""Group calendar todos routes.
 
 Base path: ``/api/teams/{team_id}/groups/{group_id}``.
 
 A signed-in member may create todos for themselves; admins may create/assign for anyone.
 Creator, assigned member and in-scope admins may edit; the creator, assigned member and
 admins may delete. Guests are read-only unless ``features.allowGuestTodoCreate`` is on.
+Calendar e-mail reminders were removed in round 5 (see ROUND5_CONTRACT §5).
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from fastapi import APIRouter, Body, Depends, Query
 
 from ..auth import CurrentUser, get_current_user
 from ..config import settings_service
-from ..db import db, json_dumps, json_loads, new_id, now_iso, row, rows
+from ..db import db, new_id, now_iso, row, rows
 from ..http import fail, get_group, get_member, ok, parse_date, parse_month, parse_time, text
 from ..permissions import (
     audit,
@@ -31,7 +32,6 @@ router = APIRouter(prefix="/api/teams/{team_id}/groups/{group_id}", tags=["calen
 
 PRIORITIES = {"low", "normal", "high", "urgent"}
 TODO_STATUSES = {"todo", "done"}
-MAX_REMINDER_OFFSET = 60
 
 
 # --------------------------------------------------------------------------- helpers
@@ -49,36 +49,6 @@ def _todo_status(value: Any) -> str:
     if value not in TODO_STATUSES:
         raise fail(422, "待办状态必须是 todo 或 done", "validation_error")
     return value
-
-
-def _flag(value: Any, field: str, default: bool) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if value in (0, 1):
-        return bool(value)
-    raise fail(422, f"{field}必须是布尔值", "validation_error")
-
-
-def _reminder_offsets(value: Any, default: list[int] | None = None) -> list[int]:
-    """Validate reminder offsets: integer days 0-60, deduplicated, newest first."""
-    if value is None:
-        return list(default or [])
-    if not isinstance(value, list):
-        raise fail(422, "提醒提前天数必须是整数数组", "validation_error")
-    offsets: set[int] = set()
-    for item in value:
-        if isinstance(item, bool):
-            raise fail(422, "提醒提前天数必须是 0-60 的整数", "validation_error")
-        try:
-            offset = int(item)
-        except (TypeError, ValueError) as exc:
-            raise fail(422, "提醒提前天数必须是 0-60 的整数", "validation_error") from exc
-        if offset < 0 or offset > MAX_REMINDER_OFFSET:
-            raise fail(422, "提醒提前天数必须在 0-60 之间", "validation_error")
-        offsets.add(offset)
-    return sorted(offsets, reverse=True)
 
 
 def _member_id(value: Any, field: str = "指派成员") -> str | None:
@@ -100,16 +70,13 @@ def _creator_name(user: CurrentUser) -> str:
     return user.name or user.id
 
 
-def _todo_payload(todo: dict[str, Any], reminders_sent: list[int] | None = None) -> dict[str, Any]:
+def _todo_payload(todo: dict[str, Any]) -> dict[str, Any]:
     due_at: datetime | None = None
     try:
         due_at = datetime.fromisoformat(f"{todo['due_date']}T{todo.get('due_time') or '18:00'}:00")
     except (TypeError, ValueError):
         due_at = None
     overdue = bool(due_at and todo.get("status") != "done" and due_at < datetime.now())
-    offsets = json_loads(todo.get("reminder_offsets_days"), [])
-    if not isinstance(offsets, list):
-        offsets = []
     return {
         "id": todo["id"],
         "groupId": todo.get("group_id", ""),
@@ -126,16 +93,6 @@ def _todo_payload(todo: dict[str, Any], reminders_sent: list[int] | None = None)
         "assigneeColor": todo.get("assignee_color") or "",
         "priority": todo.get("priority", "normal"),
         "status": todo.get("status", "todo"),
-        "reminderOffsetsDays": sorted(
-            {
-                int(value)
-                for value in offsets
-                if isinstance(value, (int, float)) and not isinstance(value, bool)
-            },
-            reverse=True,
-        ),
-        "emailEnabled": bool(todo.get("email_enabled")),
-        "remindersSent": list(reminders_sent or []),
         "createdBy": todo.get("created_by", ""),
         "createdByName": "Admin" if todo.get("created_by") == "device-admin" else (todo.get("created_by") or ""),
         "createdAt": todo.get("created_at", ""),
@@ -143,33 +100,6 @@ def _todo_payload(todo: dict[str, Any], reminders_sent: list[int] | None = None)
         "completedAt": todo.get("completed_at"),
         "overdue": overdue,
     }
-
-
-def _sent_offsets(conn, group_id: str, todo_id: str) -> list[int]:
-    items = rows(
-        conn,
-        "SELECT DISTINCT offset_days FROM email_reminders_sent WHERE group_id=? AND todo_id=?",
-        (group_id, todo_id),
-    )
-    return sorted({int(item["offset_days"]) for item in items}, reverse=True)
-
-
-def _sent_offsets_for_groups(conn, group_ids: list[str]) -> dict[str, list[int]]:
-    """Reminder offsets sent per todo for every group in the read scope."""
-    if not group_ids:
-        return {}
-    placeholders = ",".join("?" for _ in group_ids)
-    result: dict[str, list[int]] = {}
-    for item in rows(
-        conn,
-        "SELECT todo_id, offset_days FROM email_reminders_sent "
-        f"WHERE group_id IN ({placeholders}) GROUP BY todo_id, offset_days",
-        tuple(group_ids),
-    ):
-        result.setdefault(item["todo_id"], []).append(int(item["offset_days"]))
-    for offsets in result.values():
-        offsets.sort(reverse=True)
-    return result
 
 
 def _todo_row(conn, todo_id: str, group_id: str) -> dict[str, Any]:
@@ -189,7 +119,7 @@ def _todo_row(conn, todo_id: str, group_id: str) -> dict[str, Any]:
 
 
 def _todo_detail(conn, todo_id: str, group_id: str) -> dict[str, Any]:
-    return _todo_payload(_todo_row(conn, todo_id, group_id), _sent_offsets(conn, group_id, todo_id))
+    return _todo_payload(_todo_row(conn, todo_id, group_id))
 
 
 def _validate_assignee(
@@ -225,7 +155,7 @@ def list_todos(
     selected = parse_month(month)
     with db() as conn:
         get_group(conn, team_id, group_id)
-        ctx = resolve_scope(conn, team_id, group_id, scope)
+        ctx = resolve_scope(conn, team_id, group_id, scope, user)
         group_ids = ctx["groupIds"]
         placeholders = ",".join("?" for _ in group_ids) if group_ids else "NULL"
         todo_rows = rows(
@@ -239,13 +169,10 @@ def list_todos(
             "ORDER BY g.sort_order, g.name, t.due_date, t.due_time, t.created_at",
             (*group_ids, f"{selected}-%"),
         )
-        sent_map = _sent_offsets_for_groups(conn, group_ids)
     return ok(
         {
             "month": selected,
-            "todos": [
-                _todo_payload(todo, sent_map.get(todo["id"], [])) for todo in todo_rows
-            ],
+            "todos": [_todo_payload(todo) for todo in todo_rows],
             "scope": ctx,
         }
     )
@@ -282,10 +209,6 @@ def create_todo(
             raise fail(422, "当前配置不允许创建已过期的待办", "due_date_in_past")
         priority = _priority(payload.get("priority"))
         status = _todo_status(payload.get("status")) if payload.get("status") else "todo"
-        reminder_offsets = _reminder_offsets(
-            payload.get("reminderOffsetsDays"), config.calendar.defaultReminderOffsetsDays
-        )
-        email_enabled = _flag(payload.get("emailEnabled"), "邮件提醒", config.calendar.defaultEmailEnabled)
 
         assignee_id = _validate_assignee(
             conn,
@@ -307,8 +230,8 @@ def create_todo(
         now = now_iso()
         conn.execute(
             "INSERT INTO todos (id,group_id,title,description,due_date,due_time,assignee_member_id,"
-            "priority,status,reminder_offsets_days,email_enabled,created_by,created_at,updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "priority,status,created_by,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 todo_id,
                 group_id,
@@ -319,8 +242,6 @@ def create_todo(
                 assignee_id,
                 priority,
                 status,
-                json_dumps(reminder_offsets),
-                1 if email_enabled else 0,
                 user.id if user.authenticated else "guest",
                 now,
                 now,
@@ -365,12 +286,6 @@ def update_todo(
             status = _todo_status(payload.get("status"))
             updates["status"] = status
             updates["completed_at"] = now_iso() if status == "done" else None
-        if "reminderOffsetsDays" in payload:
-            updates["reminder_offsets_days"] = json_dumps(
-                _reminder_offsets(payload.get("reminderOffsetsDays"))
-            )
-        if "emailEnabled" in payload:
-            updates["email_enabled"] = 1 if _flag(payload.get("emailEnabled"), "邮件提醒", True) else 0
         if "assigneeMemberId" in payload:
             raw_assignee = payload.get("assigneeMemberId")
             if raw_assignee is None or raw_assignee == "":
@@ -405,7 +320,6 @@ def delete_todo(
         get_group(conn, team_id, group_id)
         todo = _todo_row(conn, todo_id, group_id)
         require_todo_write(user, team_id, group_id, todo)
-        conn.execute("DELETE FROM email_reminders_sent WHERE todo_id=?", (todo_id,))
         conn.execute("DELETE FROM todos WHERE id=? AND group_id=?", (todo_id, group_id))
         audit(conn, user, "todo.delete", "todo", todo_id, {"title": todo["title"]})
     return ok({"deleted": True, "id": todo_id})

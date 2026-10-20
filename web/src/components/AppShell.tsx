@@ -6,6 +6,7 @@ import {
   ChartNoAxesColumn,
   ChevronDown,
   ChevronsUpDown,
+  CircleUserRound,
   Command,
   FolderCog,
   Globe2,
@@ -16,7 +17,6 @@ import {
   ListTodo,
   LogIn,
   LogOut,
-  Mail,
   Megaphone,
   Menu,
   Moon,
@@ -40,7 +40,6 @@ import { Avatar } from "./Avatar";
 import { AboutDialog } from "./AboutDialog";
 import { WorkspaceManager } from "./WorkspaceManager";
 import { cn, formatFullDate } from "../lib/utils";
-import { SCOPE_OPTIONS } from "../lib/scope";
 import type { ModuleFlags } from "../types";
 import "./ShellScope.css";
 
@@ -77,9 +76,9 @@ const PAGE_LABELS: Record<string, string> = {
   announcements: "公告栏",
   matrix: "责任田矩阵",
   links: "常用链接",
-  settings: "工作室设置",
-  email: "邮件提醒",
-  login: "企业登录",
+  settings: "系统设置",
+  profile: "个人主页",
+  login: "登录",
 };
 
 const SIDEBAR_STORAGE = "teamstudio.sidebar.collapsed";
@@ -92,9 +91,15 @@ function readSidebarCollapsed(): boolean {
   }
 }
 
-function roleLabel(role: string | null | undefined, isDevice: boolean, isGuest = false): string {
-  if (isDevice) return "设备管理员";
-  if (isGuest) return "只读访客";
+function roleLabel(
+  role: string | null | undefined,
+  isDevice: boolean,
+  isGuest = false,
+  isSuper = false,
+): string {
+  if (isDevice) return "超级管理员（部署设备）";
+  if (isGuest) return "访客";
+  if (isSuper || role === "super") return "超级管理员";
   if (role === "team_admin") return "团队管理员";
   if (role === "group_admin") return "开发组管理员";
   return "成员";
@@ -111,11 +116,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     selectGroup,
     scope,
     scopeLabel,
+    scopeOptions,
     setScope,
     toggleTheme,
     theme,
     moduleVisible,
     isAdmin,
+    isSuperAdmin,
+    permissions,
     navigate,
   } = useApp();
   const { toast } = useToast();
@@ -203,12 +211,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (!data || !config) return null;
   const me = data.me;
-  const isGuest = me.source === "guest";
-  const canManageWorkspace = Boolean(me.isDeviceAdmin || me.admin.role === "team_admin");
+  const isGuest = !me.authenticated || me.source === "guest";
+  const canManageWorkspace = Boolean(permissions?.canManageWorkspace);
   const showGuestBanner = isGuest && config.features.showGuestBanner;
   const settingsVisible = isAdmin && moduleVisible("settings");
   const todayLabel = formatFullDate(data.serverTime || new Date().toISOString());
-  const role = roleLabel(me.admin.role, me.isDeviceAdmin, isGuest);
+  const role = roleLabel(me.admin.role, me.isDeviceAdmin, isGuest, me.isSuperAdmin);
+  const avatarColor = me.isDeviceAdmin ? "#0ea5e9" : me.avatarColor || "#7c3aed";
+  const emailLoginReady = config.auth.emailLogin.enabled && config.email.configured;
 
   const handleLogout = async () => {
     setLoggingOut(true);
@@ -218,6 +228,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         window.location.href = result.endSessionUrl;
         return;
       }
+      window.location.hash = "/login";
       window.location.reload();
     } catch {
       toast("退出登录失败，请稍后重试", "error");
@@ -304,7 +315,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <Globe2 size={13} /> 浏览视角
           </div>
           <div className="scope-switcher-options">
-            {SCOPE_OPTIONS.map((option) => (
+            {scopeOptions.map((option) => (
               <button
                 key={option.key}
                 type="button"
@@ -366,12 +377,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <button
                 className={cn("nav-item", route === "settings" && "active")}
                 onClick={() => navigate("settings")}
-                title={effectiveCollapsed ? "工作室设置" : undefined}
-                aria-label="工作室设置"
+                title={effectiveCollapsed ? "系统设置" : undefined}
+                aria-label="系统设置"
               >
                 <Settings2 size={18} />
-                <span>工作室设置</span>
-                {me.isDeviceAdmin ? <ShieldCheck size={14} className="nav-shield" /> : null}
+                <span>系统设置</span>
+                {isSuperAdmin ? <ShieldCheck size={14} className="nav-shield" /> : null}
               </button>
             </div>
           ) : null}
@@ -422,7 +433,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             ) : null}
           </div>
           <div className="identity-mini">
-            <Avatar name={me.name} color={me.isDeviceAdmin ? "#0ea5e9" : "#7c3aed"} size="sm" />
+            <Avatar name={me.name} src={me.avatar} color={avatarColor} size="sm" />
             <div>
               <strong>{me.name}</strong>
               <span>{role}</span>
@@ -488,101 +499,119 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </button>
             ) : null}
             {isGuest ? (
-              <a className="btn btn-primary btn-sm login-button" href={api.loginHref(`${window.location.pathname}${window.location.hash}`)}>
-                <LogIn size={15} /> 企业登录
-              </a>
-            ) : null}
-            <div className="user-menu-wrap" ref={userMenuRef}>
-              <button className="user-chip" onClick={() => setUserMenuOpen((value) => !value)}>
-                <Avatar name={me.name} color={me.isDeviceAdmin ? "#0ea5e9" : "#7c3aed"} size="sm" />
-                <span className="user-chip-copy">
-                  <strong>{me.name}</strong>
-                  <small>{role}</small>
-                </span>
-                <ChevronDown size={14} />
+              <button
+                className="btn btn-primary btn-sm login-button"
+                onClick={() => navigate("login")}
+              >
+                <LogIn size={15} /> 登录
               </button>
-              {userMenuOpen ? (
-                <div className="popover user-popover">
-                  <div className="user-popover-head">
-                    <Avatar name={me.name} color={me.isDeviceAdmin ? "#0ea5e9" : "#7c3aed"} size="md" />
-                    <div>
-                      <strong>{me.name}</strong>
-                      <span>{me.email || (me.isDeviceAdmin ? "本机始终拥有管理权限" : "访客只读模式")}</span>
+            ) : (
+              <div className="user-menu-wrap" ref={userMenuRef}>
+                <button className="user-chip" onClick={() => setUserMenuOpen((value) => !value)}>
+                  <Avatar name={me.name} src={me.avatar} color={avatarColor} size="sm" />
+                  <span className="user-chip-copy">
+                    <strong>{me.name}</strong>
+                    <small>{role}</small>
+                  </span>
+                  <ChevronDown size={14} />
+                </button>
+                {userMenuOpen ? (
+                  <div className="popover user-popover">
+                    <div className="user-popover-head">
+                      <Avatar name={me.name} src={me.avatar} color={avatarColor} size="md" />
+                      <div>
+                        <strong>{me.name}</strong>
+                        <span>
+                          {me.email ||
+                            (me.isDeviceAdmin
+                              ? "本机始终拥有管理权限"
+                              : me.source === "ip"
+                                ? "IP 白名单身份"
+                                : "已通过身份验证")}
+                        </span>
+                      </div>
                     </div>
+                    <div className="user-popover-meta">
+                      <span
+                        className={cn(
+                          "badge",
+                          isSuperAdmin ? "badge-green" : isGuest ? "badge-gray" : "badge-violet",
+                        )}
+                      >
+                        <ShieldCheck size={12} /> {role}
+                      </span>
+                      {me.source === "sso" ? <span className="badge badge-blue">SSO 已登录</span> : null}
+                      {me.source === "email" ? <span className="badge badge-blue">邮箱已验证</span> : null}
+                      {me.source === "ip" ? <span className="badge badge-blue">IP 白名单</span> : null}
+                    </div>
+                    <button
+                      className="menu-row"
+                      onClick={() => {
+                        setUserMenuOpen(false);
+                        navigate("profile");
+                      }}
+                    >
+                      <CircleUserRound size={16} /> 个人主页
+                    </button>
+                    {me.linkedMemberId ? (
+                      <button
+                        className="menu-row"
+                        onClick={() => {
+                          setUserMenuOpen(false);
+                          navigate("overview", { member: me.linkedMemberId! });
+                        }}
+                      >
+                        <UserRound size={16} /> 我的成员卡片
+                      </button>
+                    ) : null}
+                    {canManageWorkspace ? (
+                      <button
+                        className="menu-row"
+                        onClick={() => {
+                          setUserMenuOpen(false);
+                          setWorkspaceOpen(true);
+                        }}
+                      >
+                        <FolderCog size={16} /> 工作区管理
+                      </button>
+                    ) : null}
+                    {isAdmin ? (
+                      <button
+                        className="menu-row"
+                        onClick={() => {
+                          setUserMenuOpen(false);
+                          navigate("settings");
+                        }}
+                      >
+                        <Settings2 size={16} /> 系统设置
+                      </button>
+                    ) : null}
+                    <button
+                      className="menu-row"
+                      onClick={() => {
+                        setUserMenuOpen(false);
+                        setAboutOpen(true);
+                      }}
+                    >
+                      <Info size={16} /> 关于团队工作室
+                    </button>
+                    {me.source === "email" || me.source === "sso" ? (
+                      <button
+                        className="menu-row danger"
+                        onClick={() => void handleLogout()}
+                        disabled={loggingOut}
+                      >
+                        <LogOut size={16} /> {loggingOut ? "退出中…" : "退出登录 / 切换账号"}
+                      </button>
+                    ) : me.source === "ip" ? (
+                      <div className="menu-note">当前通过部署方 IP 白名单获得管理权限。</div>
+                    ) : (
+                      <div className="menu-note">本机请求自动获得 Admin 权限，无需登录。</div>
+                    )}
                   </div>
-                  <div className="user-popover-meta">
-                    <span className={cn("badge", me.isDeviceAdmin ? "badge-green" : isGuest ? "badge-gray" : "badge-violet")}>
-                      <ShieldCheck size={12} /> {role}
-                    </span>
-                    {me.source === "sso" ? <span className="badge badge-blue">SSO 已登录</span> : null}
-                  </div>
-                  {me.linkedMemberId ? (
-                    <button
-                      className="menu-row"
-                      onClick={() => {
-                        setUserMenuOpen(false);
-                        navigate("overview", { member: me.linkedMemberId! });
-                      }}
-                    >
-                      <UserRound size={16} /> 我的成员卡片
-                    </button>
-                  ) : null}
-                  {isAdmin ? (
-                    <button
-                      className="menu-row"
-                      onClick={() => {
-                        setUserMenuOpen(false);
-                        navigate("settings");
-                      }}
-                    >
-                      <Settings2 size={16} /> 工作室设置
-                    </button>
-                  ) : null}
-                  {canManageWorkspace ? (
-                    <button
-                      className="menu-row"
-                      onClick={() => {
-                        setUserMenuOpen(false);
-                        setWorkspaceOpen(true);
-                      }}
-                    >
-                      <FolderCog size={16} /> 工作区管理
-                    </button>
-                  ) : null}
-                  {isAdmin ? (
-                    <button
-                      className="menu-row"
-                      onClick={() => {
-                        setUserMenuOpen(false);
-                        navigate("settings", { tab: "email" });
-                      }}
-                    >
-                      <Mail size={16} /> 邮件提醒
-                    </button>
-                  ) : null}
-                  <button
-                    className="menu-row"
-                    onClick={() => {
-                      setUserMenuOpen(false);
-                      setAboutOpen(true);
-                    }}
-                  >
-                    <Info size={16} /> 关于团队工作室
-                  </button>
-                  {me.source === "sso" || me.source === "ip" ? (
-                    <button className="menu-row danger" onClick={() => void handleLogout()} disabled={loggingOut}>
-                      <LogOut size={16} /> {loggingOut ? "退出中…" : "退出登录"}
-                    </button>
-                  ) : isGuest ? (
-                    <a className="menu-row" href={api.loginHref(`${window.location.pathname}${window.location.hash}`)}>
-                      <LogIn size={16} /> 企业 SSO 登录
-                    </a>
-                  ) : (
-                    <div className="menu-note">本机请求自动获得 Admin 权限，无需登录。</div>
-                  )}
-                </div>
-              ) : null}
-            </div>
+                ) : null}
+              </div>
+            )}
           </div>
         </header>
 
@@ -594,15 +623,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <div>
               <strong>访客模式 · 只读浏览</strong>
               <span>
-                {config.auth.sso.configured
-                  ? "登录企业 SSO 后，可编辑个人资料与自己的待办。"
-                  : "尚未配置企业 SSO，系统已自动回退到访客模式；管理员可在设置中启用 SSO。"}
+                {emailLoginReady
+                  ? "使用邮箱验证码登录或注册后，可编辑个人资料、维护自己的任务与待办。"
+                  : config.auth.sso.configured
+                    ? "使用企业 SSO 登录后，可编辑个人资料与自己的待办。"
+                    : "管理员配置邮件服务或企业 SSO 后，即可使用账号登录。"}
               </span>
             </div>
-            {config.auth.sso.configured ? (
-              <a className="btn btn-secondary btn-sm" href={api.loginHref(`${window.location.pathname}${window.location.hash}`)}>
-                登录 {config.auth.sso.providerName}
-              </a>
+            {emailLoginReady || config.auth.sso.configured ? (
+              <button className="btn btn-secondary btn-sm" onClick={() => navigate("login")}>
+                登录 / 注册
+              </button>
             ) : (
               <span className="guest-config-hint">管理员配置后即可登录</span>
             )}

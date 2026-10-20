@@ -16,6 +16,7 @@ const MatrixPage = lazy(() => import("./pages/MatrixPage"));
 const AnnouncementsPage = lazy(() => import("./pages/AnnouncementsPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const LoginPage = lazy(() => import("./pages/LoginPage"));
+const ProfilePage = lazy(() => import("./pages/ProfilePage"));
 
 const PAGE_MODULES: Record<string, keyof ModuleFlags> = {
   overview: "overview",
@@ -40,6 +41,7 @@ const PAGES: Record<string, React.LazyExoticComponent<() => React.JSX.Element | 
   announcements: AnnouncementsPage,
   settings: SettingsPage,
   login: LoginPage,
+  profile: ProfilePage,
 };
 
 function ErrorScreen({ message, onRetry }: { message: string; onRetry: () => void }) {

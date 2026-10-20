@@ -8,7 +8,10 @@ import {
 } from "react";
 import {
   AlertTriangle,
+  AtSign,
+  BadgeCheck,
   Braces,
+  Building2,
   CalendarDays,
   Check,
   CheckCircle2,
@@ -22,7 +25,9 @@ import {
   FileJson,
   Fingerprint,
   Globe,
+  Inbox,
   KeyRound,
+  Layers3,
   LayoutDashboard,
   LayoutGrid,
   Link2,
@@ -32,10 +37,12 @@ import {
   Mail,
   Megaphone,
   Palette,
+  Pencil,
   Plus,
   RefreshCw,
   RotateCcw,
   Save,
+  Send,
   Server,
   Settings2,
   ShieldAlert,
@@ -44,7 +51,9 @@ import {
   Trash2,
   TrendingUp,
   Trophy,
+  UserPlus,
   Users,
+  UsersRound,
   Wand2,
   Waypoints,
   X,
@@ -55,7 +64,8 @@ import { useApp } from "../store";
 import { useToast } from "../components/Toast";
 import { ConfirmDialog } from "../components/Modal";
 import { LoadingBlock } from "../components/Feedback";
-import { EmailPanel } from "../components/EmailPanel";
+import { Avatar } from "../components/Avatar";
+import { WorkspaceManager } from "../components/WorkspaceManager";
 import { CodeEditor } from "../components/CodeEditor";
 import { Select } from "../components/Select";
 import {
@@ -71,14 +81,30 @@ import type {
   AdminIdEntry,
   AdminIpEntry,
   AppSettings,
+  DomainGroupSettings,
+  DomainSettingsData,
+  DomainTeamSettings,
+  EmailLog,
+  EmailStatus,
   ModuleFlags,
   SettingsMeta,
+  UserAccount,
+  UserRole,
+  UsersData,
   ValidationDetail,
   WorkspaceOption,
 } from "../types";
 import "./SettingsPage.css";
 
-type TabKey = "appearance" | "modules" | "access" | "sso" | "email" | "json";
+type TabKey =
+  | "workspace"
+  | "appearance"
+  | "modules"
+  | "access"
+  | "accounts"
+  | "sso"
+  | "email"
+  | "json";
 type UpdateSettings = (mutate: (next: AppSettings) => void) => void;
 type ErrorsFor = (prefix: string) => ValidationDetail[];
 type Whitelist = AppSettings["auth"]["adminWhitelist"];
@@ -92,14 +118,25 @@ interface JsonState {
 
 type ConfirmKind = "reload" | "discard" | "json-sync" | "json-reset";
 
-const TAB_KEYS: TabKey[] = ["appearance", "modules", "access", "sso", "email", "json"];
+const TAB_KEYS: TabKey[] = [
+  "workspace",
+  "appearance",
+  "modules",
+  "access",
+  "accounts",
+  "sso",
+  "email",
+  "json",
+];
 
 const TABS: { key: TabKey; label: string; hint: string; icon: LucideIcon }[] = [
+  { key: "workspace", label: "工作区设置", hint: "团队与开发组基础信息", icon: Building2 },
   { key: "appearance", label: "外观与站点", hint: "名称、品牌与主题", icon: Palette },
   { key: "modules", label: "模块与展示", hint: "模块开关与默认项", icon: LayoutGrid },
-  { key: "access", label: "团队与权限", hint: "白名单、访客与会话", icon: ShieldCheck },
+  { key: "access", label: "成员与权限", hint: "登录、白名单与超级管理员", icon: ShieldCheck },
+  { key: "accounts", label: "账号与角色", hint: "预创建账号与角色授权", icon: UsersRound },
   { key: "sso", label: "企业 SSO", hint: "OIDC 身份接入", icon: Fingerprint },
-  { key: "email", label: "邮件提醒", hint: "SMTP、模板与日志", icon: Mail },
+  { key: "email", label: "邮件服务", hint: "SMTP 中继与验证码邮件", icon: Mail },
   { key: "json", label: "高级 JSON", hint: "完整配置与校验", icon: Braces },
 ];
 
@@ -112,16 +149,13 @@ const MODULE_META: {
   { key: "overview", label: "团队概览", description: "成员卡片、成长轨迹与近期动态。", icon: LayoutDashboard },
   { key: "tasks", label: "任务总览", description: "成员任务台账、健康状态与工作量负载。", icon: ListTodo },
   { key: "insights", label: "数据洞察", description: "完成率、趋势与成员 / 团队数据对比。", icon: TrendingUp },
-  { key: "calendar", label: "协作日历", description: "待办、提醒与月度日历视图。", icon: CalendarDays },
+  { key: "calendar", label: "协作日历", description: "待办、月度日历与展示偏好。", icon: CalendarDays },
   { key: "redblack", label: "红黑榜", description: "每月红榜高光与黑榜改进记录。", icon: Trophy },
   { key: "announcements", label: "公告栏", description: "开发组公告与置顶消息。", icon: Megaphone },
   { key: "matrix", label: "责任田矩阵", description: "职责分工、负责人与联络方式。", icon: Waypoints },
   { key: "links", label: "常用链接", description: "团队常用工具与文档入口。", icon: Link2 },
-  { key: "settings", label: "工作室设置", description: "关闭后导航隐藏，设备 Admin 仍可直接访问本页。", icon: Settings2 },
-  { key: "email", label: "邮件提醒模块", description: "邮件提醒入口与相关能力开关。", icon: Mail },
+  { key: "settings", label: "工作室设置", description: "关闭后导航隐藏，超级管理员仍可直接访问本页。", icon: Settings2 },
 ];
-
-const REMINDER_OFFSET_PRESETS = [0, 1, 2, 3, 5, 7, 14, 30];
 
 const FIELD_LABELS: Record<string, string> = {
   "site.name": "站点名称",
@@ -138,10 +172,7 @@ const FIELD_LABELS: Record<string, string> = {
   "announcements.showOnDashboard": "概览展示公告",
   "calendar.weekStartsOn": "每周起始日",
   "calendar.showWeekends": "展示周末",
-  "calendar.defaultReminderOffsetsDays": "默认提醒提前天数",
-  "calendar.defaultReminderTime": "默认提醒时间",
   "calendar.allowPastDue": "允许设置过期日期",
-  "calendar.defaultEmailEnabled": "默认开启邮件提醒",
   "redblack.showScores": "展示分数",
   "redblack.monthlyThemeEnabled": "月度主题",
   "redblack.redLabel": "红榜名称",
@@ -156,20 +187,15 @@ const FIELD_LABELS: Record<string, string> = {
   "email.smtp.useStartTls": "STARTTLS",
   "email.smtp.useSsl": "SSL 直连",
   "email.smtp.timeoutSeconds": "SMTP 超时",
-  "email.reminders.enabled": "提醒扫描",
-  "email.reminders.offsetsDays": "提醒提前天数",
-  "email.reminders.sendTime": "提醒发送时间",
-  "email.reminders.scanIntervalSeconds": "扫描间隔",
-  "email.reminders.notifyAssignee": "通知负责人",
-  "email.reminders.additionalRecipients": "附加收件人",
-  "email.reminders.includeAnnouncements": "附带置顶公告",
-  "email.reminders.includeTodoDescription": "附带事项说明",
-  "email.reminders.includeExtra": "附加补充内容",
-  "email.reminders.extraContent": "补充内容",
-  "email.reminders.subjectTemplate": "邮件主题模板",
-  "email.reminders.bodyTemplate": "邮件正文模板",
+  "email.subjectTemplate": "验证码邮件主题",
+  "email.bodyTemplate": "验证码邮件正文",
   "auth.guestMode": "访客模式",
   "auth.allowGuestRead": "允许访客只读",
+  "auth.emailLogin.enabled": "邮箱验证码登录",
+  "auth.emailLogin.codeLength": "验证码位数",
+  "auth.emailLogin.codeExpiryMinutes": "验证码有效期",
+  "auth.emailLogin.resendSeconds": "重发间隔",
+  "auth.emailLogin.maxAttempts": "最大尝试次数",
   "auth.sso.enabled": "启用 SSO",
   "auth.sso.providerName": "SSO 提供方名称",
   "auth.sso.issuer": "Issuer",
@@ -187,7 +213,7 @@ const FIELD_LABELS: Record<string, string> = {
   "auth.sso.allowedEmailDomains": "允许的邮箱域名",
   "auth.sso.autoProvision": "自动创建成员",
   "auth.session.cookieName": "会话 Cookie 名",
-  "auth.session.maxAgeDays": "会话有效期",
+  "auth.session.maxAgeDays": "登录状态保持天数",
   "auth.session.secureCookie": "仅 HTTPS Cookie",
   "features.allowMemberSelfEdit": "成员自助编辑",
   "features.showGuestBanner": "访客提示条",
@@ -220,9 +246,9 @@ function asValidationDetails(details: unknown): ValidationDetail[] {
   });
 }
 
-function readTabFromHash(): TabKey {
+function readTabFromHash(allowed: TabKey[] = TAB_KEYS, fallback: TabKey = "appearance"): TabKey {
   const raw = hashRoute().params.get("tab") ?? "";
-  return TAB_KEYS.includes(raw as TabKey) ? (raw as TabKey) : "appearance";
+  return allowed.includes(raw as TabKey) ? (raw as TabKey) : fallback;
 }
 
 function pathLabel(path: string): string {
@@ -233,12 +259,8 @@ function pathLabel(path: string): string {
     const field = FIELD_LABELS[`adminWhitelist.${entry[3]}`] ?? entry[3];
     return `${kind} 白名单第 ${Number(entry[2]) + 1} 项 · ${field}`;
   }
-  const recipient = path.match(/^email\.reminders\.additionalRecipients\.(\d+)$/);
-  if (recipient) return `附加收件人第 ${Number(recipient[1]) + 1} 项`;
   const domain = path.match(/^auth\.sso\.allowedEmailDomains\.(\d+)$/);
   if (domain) return `允许的邮箱域名第 ${Number(domain[1]) + 1} 项`;
-  const offset = path.match(/^email\.reminders\.offsetsDays\.(\d+)$/);
-  if (offset) return `提醒提前天数第 ${Number(offset[1]) + 1} 项`;
   return path;
 }
 
@@ -255,6 +277,7 @@ function tabForPath(path: string): TabKey | null {
   }
   if (path.startsWith("auth.adminWhitelist") || path.startsWith("auth.session")) return "access";
   if (path.startsWith("auth.guestMode") || path.startsWith("auth.allowGuestRead")) return "access";
+  if (path.startsWith("auth.emailLogin")) return "access";
   if (path.startsWith("auth.sso")) return "sso";
   if (path.startsWith("email")) return "email";
   if (path.startsWith("version")) return "json";
@@ -462,73 +485,39 @@ function StringListEditor({
   );
 }
 
-function OffsetsEditor({
-  values,
+function TeamPicker({
+  workspace,
+  selected,
   onChange,
+  emptyText = "工作区中暂无团队。",
 }: {
-  values: number[];
-  onChange: (values: number[]) => void;
+  workspace: WorkspaceOption;
+  selected: string[];
+  onChange: (ids: string[]) => void;
+  emptyText?: string;
 }) {
-  const [custom, setCustom] = useState("");
-  const toggle = (offset: number) => {
-    const next = values.includes(offset)
-      ? values.filter((item) => item !== offset)
-      : [...values, offset];
-    onChange([...new Set(next)].sort((a, b) => b - a));
-  };
-  const addCustom = () => {
-    const parsed = Number.parseInt(custom, 10);
-    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 60) return;
-    onChange([...new Set([...values, parsed])].sort((a, b) => b - a));
-    setCustom("");
-  };
+  if (!workspace.teams.length) {
+    return <p className="field-hint">{emptyText}</p>;
+  }
   return (
-    <div className="settings-offsets">
-      <div className="tag-list">
-        {REMINDER_OFFSET_PRESETS.map((offset) => {
-          const active = values.includes(offset);
-          return (
-            <button
-              key={offset}
-              type="button"
-              className={cn("chip", "chip-clickable", "settings-offset-chip", active && "is-active")}
-              onClick={() => toggle(offset)}
-            >
-              {active ? <Check size={11} /> : null}
-              {offset === 0 ? "当天" : `提前 ${offset} 天`}
-            </button>
-          );
-        })}
-        {values
-          .filter((offset) => !REMINDER_OFFSET_PRESETS.includes(offset))
-          .map((offset) => (
-            <button
-              key={offset}
-              type="button"
-              className="chip chip-clickable settings-offset-chip is-active"
-              onClick={() => toggle(offset)}
-            >
-              <Check size={11} /> 提前 {offset} 天
-            </button>
-          ))}
-      </div>
-      <div className="settings-list-add">
-        <input
-          className="input"
-          type="number"
-          min={0}
-          max={60}
-          placeholder="自定义天数 (0-60)"
-          value={custom}
-          onChange={(event) => setCustom(event.target.value)}
-        />
-        <button type="button" className="btn btn-secondary btn-sm" onClick={addCustom}>
-          <Plus size={14} /> 添加天数
-        </button>
-      </div>
-      <p className="field-hint">
-        当前：{values.length ? values.map((offset) => (offset === 0 ? "当天" : `提前 ${offset} 天`)).join(" · ") : "未设置"}
-      </p>
+    <div className="tag-list settings-team-picker">
+      {workspace.teams.map((team) => {
+        const active = selected.includes(team.id);
+        return (
+          <button
+            key={team.id}
+            type="button"
+            className={cn("chip", "chip-clickable", active && "settings-group-chip-active")}
+            onClick={() =>
+              onChange(active ? selected.filter((id) => id !== team.id) : [...selected, team.id])
+            }
+          >
+            {active ? <Check size={11} /> : null}
+            <i className="settings-team-dot" style={{ background: team.color }} />
+            {team.name}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -598,13 +587,14 @@ function SettingsAccessDenied({ onBack }: { onBack: () => void }) {
         <span className="state-icon amber">
           <ShieldAlert size={26} />
         </span>
-        <h1>仅部署设备的 Admin 可编辑设置</h1>
+        <h1>仅超级管理员可编辑站点设置</h1>
         <p>
-          工作室设置接口只对部署设备内置的 <strong>Admin</strong> 开放。该身份由服务端根据请求来源自动识别，
-          永远存在、不会写入 <code>settings.json</code>，也无法加入 IP / ID 白名单。
+          站点级设置只对<strong>超级管理员</strong>开放：部署设备内置的 <code>Admin</code>
+          以及账号角色为 <code>super</code> 的成员。设备 Admin 由服务端按请求来源自动识别，永远存在、
+          不写入 <code>settings.json</code>。
         </p>
         <p className="small muted">
-          团队管理员与开发组管理员可以管理各自范围内的成员与内容，但无法查看或修改本页配置。
+          团队管理员与开发组管理员可以管理自己范围内的团队 / 开发组信息与成员内容，但无法查看或修改站点配置。
         </p>
         <div className="state-actions">
           <button className="btn btn-primary" onClick={onBack}>
@@ -970,8 +960,8 @@ function ModulesSection({
         </SettingsCard>
 
         <SettingsCard
-          title="日历默认项"
-          description="新建待办时的默认提醒策略，可被单个待办覆盖。"
+          title="日历展示"
+          description="设置协作日历的展示偏好与逾期策略。"
           icon={<CalendarDays size={18} />}
         >
           <div className="form-grid">
@@ -1001,33 +991,6 @@ function ModulesSection({
                 </button>
               </div>
             </Field>
-            <Field label="默认提醒时间" error={errorText(errorsFor("calendar.defaultReminderTime"))}>
-              <input
-                className="input"
-                type="time"
-                value={draft.calendar.defaultReminderTime}
-                onChange={(event) =>
-                  update((next) => {
-                    next.calendar.defaultReminderTime = event.target.value;
-                  })
-                }
-              />
-            </Field>
-            <Field
-              label="默认提醒提前天数"
-              className="span-2"
-              error={errorText(errorsFor("calendar.defaultReminderOffsetsDays"))}
-              hint="0 表示到期当天提醒；系统会自动去重并倒序。"
-            >
-              <OffsetsEditor
-                values={draft.calendar.defaultReminderOffsetsDays}
-                onChange={(values) =>
-                  update((next) => {
-                    next.calendar.defaultReminderOffsetsDays = values;
-                  })
-                }
-              />
-            </Field>
             <div className="span-2 settings-toggle-stack">
               <ToggleRow
                 label="展示周末"
@@ -1046,16 +1009,6 @@ function ModulesSection({
                 onChange={(checked) =>
                   update((next) => {
                     next.calendar.allowPastDue = checked;
-                  })
-                }
-              />
-              <ToggleRow
-                label="默认开启邮件提醒"
-                description="新建待办时默认勾选邮件提醒。"
-                checked={draft.calendar.defaultEmailEnabled}
-                onChange={(checked) =>
-                  update((next) => {
-                    next.calendar.defaultEmailEnabled = checked;
                   })
                 }
               />
@@ -1390,8 +1343,8 @@ function AccessSection({
   return (
     <div className="settings-sections">
       <SettingsCard
-        title="内置设备 Admin"
-        description="部署设备始终拥有一个隐藏的超级管理员身份，不占用也不写入配置。"
+        title="超级管理员与设备 Admin"
+        description="站点级设置仅超级管理员可编辑；部署设备内置的 Admin 始终拥有最高权限。"
         icon={<ShieldCheck size={18} />}
         extra={<span className="badge badge-green">始终可用</span>}
       >
@@ -1400,7 +1353,7 @@ function AccessSection({
             <span className="settings-device-avatar">{deviceAdminName.slice(0, 2).toUpperCase()}</span>
             <div>
               <strong>{deviceAdminName}</strong>
-              <span>内置超级管理员 · 设备身份</span>
+              <span>部署设备内置管理员 · 超级管理员</span>
             </div>
           </div>
           <ul className="settings-device-points">
@@ -1410,15 +1363,16 @@ function AccessSection({
             </li>
             <li>
               <CheckCircle2 size={14} />
-              该身份不保存在 <code>data/settings.json</code> 中，也无法删除或加入 IP / ID 白名单。
+              该身份不保存在 <code>data/settings.json</code> 中，也不会出现在账号列表里被管理。
             </li>
             <li>
               <CheckCircle2 size={14} />
-              只有该身份可以打开并保存本页设置；白名单中的管理员仅能管理被授权的团队 / 开发组。
+              账号角色为 <code>super</code> 的超级管理员与设备 Admin 拥有相同的站点级权限：可编辑本页设置、
+              管理账号与角色、查看全部团队。
             </li>
             <li>
               <ShieldAlert size={14} />
-              不要尝试把部署机 IP 写进白名单来"授予"设置权限，它本来就是最高权限。
+              团队管理员与开发组管理员只能管理被授权的团队 / 开发组，无法查看或修改本页站点配置。
             </li>
           </ul>
         </div>
@@ -1426,7 +1380,7 @@ function AccessSection({
 
       <SettingsCard
         title="访客与登录策略"
-        description="SSO 不可用或身份未匹配时的降级行为。"
+        description="邮箱验证码登录、企业 SSO 与访客降级行为。"
         icon={<Users size={18} />}
       >
         <div className="settings-toggle-stack">
@@ -1451,6 +1405,101 @@ function AccessSection({
             }
           />
         </div>
+
+        <div className="divider" />
+
+        <div className="settings-toggle-stack">
+          <ToggleRow
+            label="邮箱验证码登录"
+            description="使用邮箱 + 六位验证码登录；预创建账号在首次验证码登录时自动激活。"
+            checked={draft.auth.emailLogin.enabled}
+            onChange={(checked) =>
+              update((next) => {
+                next.auth.emailLogin.enabled = checked;
+              })
+            }
+          />
+        </div>
+        <div className="form-grid">
+          <Field
+            label="验证码位数"
+            error={errorText(errorsFor("auth.emailLogin.codeLength"))}
+            hint="4 - 8 位，默认 6 位"
+          >
+            <input
+              className="input"
+              type="number"
+              min={4}
+              max={8}
+              value={draft.auth.emailLogin.codeLength}
+              onChange={(event) =>
+                update((next) => {
+                  next.auth.emailLogin.codeLength = toInt(event.target.value, 6);
+                })
+              }
+            />
+          </Field>
+          <Field
+            label="验证码有效期（分钟）"
+            error={errorText(errorsFor("auth.emailLogin.codeExpiryMinutes"))}
+            hint="2 - 30 分钟，默认 10 分钟"
+          >
+            <input
+              className="input"
+              type="number"
+              min={2}
+              max={30}
+              value={draft.auth.emailLogin.codeExpiryMinutes}
+              onChange={(event) =>
+                update((next) => {
+                  next.auth.emailLogin.codeExpiryMinutes = toInt(event.target.value, 10);
+                })
+              }
+            />
+          </Field>
+          <Field
+            label="重发间隔（秒）"
+            error={errorText(errorsFor("auth.emailLogin.resendSeconds"))}
+            hint="30 - 600 秒，默认 60 秒"
+          >
+            <input
+              className="input"
+              type="number"
+              min={30}
+              max={600}
+              value={draft.auth.emailLogin.resendSeconds}
+              onChange={(event) =>
+                update((next) => {
+                  next.auth.emailLogin.resendSeconds = toInt(event.target.value, 60);
+                })
+              }
+            />
+          </Field>
+          <Field
+            label="最大尝试次数"
+            error={errorText(errorsFor("auth.emailLogin.maxAttempts"))}
+            hint="3 - 10 次，超过后本次验证码失效"
+          >
+            <input
+              className="input"
+              type="number"
+              min={3}
+              max={10}
+              value={draft.auth.emailLogin.maxAttempts}
+              onChange={(event) =>
+                update((next) => {
+                  next.auth.emailLogin.maxAttempts = toInt(event.target.value, 5);
+                })
+              }
+            />
+          </Field>
+        </div>
+        <p className="settings-note">
+          <Mail size={13} />
+          验证码仅以 HMAC 哈希保存在 <code>email_codes</code> 表中，明文不会写入数据库或日志；
+          邮件内容与 SMTP 中继在「邮件服务」中配置。
+        </p>
+
         <div className="divider" />
         <div className="form-grid">
           <Field
@@ -1470,9 +1519,9 @@ function AccessSection({
             />
           </Field>
           <Field
-            label="会话有效期（天）"
+            label="登录状态保持天数"
             error={errorText(errorsFor("auth.session.maxAgeDays"))}
-            hint="1 - 90 天"
+            hint="登录状态保持天数，默认 7 天，每次访问自动续期"
           >
             <input
               className="input"
@@ -1931,6 +1980,1010 @@ function SsoSection({
   );
 }
 
+/* ------------------------------------------------------------------ */
+/* Accounts & roles (super administrators only)                        */
+/* ------------------------------------------------------------------ */
+
+const ROLE_OPTIONS: { value: UserRole; label: string }[] = [
+  { value: "member", label: "成员" },
+  { value: "group_admin", label: "开发组管理员" },
+  { value: "team_admin", label: "团队管理员" },
+  { value: "super", label: "超级管理员" },
+];
+
+const ROLE_BADGE: Record<UserRole, string> = {
+  member: "badge-gray",
+  group_admin: "badge-blue",
+  team_admin: "badge-orange",
+  super: "badge-violet",
+};
+
+const ACCOUNT_EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+function roleLabel(role: UserRole): string {
+  return ROLE_OPTIONS.find((item) => item.value === role)?.label ?? role;
+}
+
+interface AccountDraft {
+  name: string;
+  role: UserRole;
+  teamIds: string[];
+  groupIds: string[];
+}
+
+function emptyAccountDraft(): AccountDraft {
+  return { name: "", role: "member", teamIds: [], groupIds: [] };
+}
+
+function accountScopeIssue(role: UserRole, teamIds: string[], groupIds: string[]): string | null {
+  if (role === "team_admin" && teamIds.length === 0) return "团队管理员至少需要指定一个团队";
+  if (role === "group_admin" && groupIds.length === 0) return "开发组管理员至少需要指定一个开发组";
+  return null;
+}
+
+function AccountScopeEditor({
+  workspace,
+  draft,
+  onChange,
+}: {
+  workspace: WorkspaceOption;
+  draft: AccountDraft;
+  onChange: (next: AccountDraft) => void;
+}) {
+  if (draft.role === "team_admin") {
+    return (
+      <Field
+        label="授权团队"
+        className="span-2"
+        hint="团队管理员可管理所选团队及其下全部开发组；站点级设置仍仅超级管理员可编辑。"
+      >
+        <TeamPicker
+          workspace={workspace}
+          selected={draft.teamIds}
+          onChange={(teamIds) => onChange({ ...draft, teamIds, groupIds: [] })}
+        />
+      </Field>
+    );
+  }
+  if (draft.role === "group_admin") {
+    return (
+      <Field
+        label="授权开发组"
+        className="span-2"
+        hint="开发组管理员只能管理所选开发组的成员与内容。"
+      >
+        <GroupPicker
+          workspace={workspace}
+          selected={draft.groupIds}
+          onChange={(groupIds) => onChange({ ...draft, groupIds })}
+        />
+      </Field>
+    );
+  }
+  return (
+    <p className="settings-note span-2">
+      <ShieldCheck size={13} />
+      {draft.role === "super"
+        ? "超级管理员拥有与部署设备 Admin 相同的站点级权限，请谨慎授予。"
+        : "成员角色无需额外授权范围，登录后可浏览被允许的团队内容。"}
+    </p>
+  );
+}
+
+function AccountAvatar({ account }: { account: UserAccount }) {
+  if (account.avatar) {
+    return <img className="settings-account-avatar" src={account.avatar} alt={`${account.name} 的头像`} />;
+  }
+  return <Avatar name={account.name || account.email || "?"} color={account.avatarColor} size="md" />;
+}
+
+function AccountsSection({
+  workspace,
+  deviceAdminName,
+}: {
+  workspace: WorkspaceOption;
+  deviceAdminName: string;
+}) {
+  const { reload } = useApp();
+  const { toast } = useToast();
+  const [data, setData] = useState<UsersData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+  const [createForm, setCreateForm] = useState<AccountDraft & { email: string }>({
+    email: "",
+    ...emptyAccountDraft(),
+  });
+  const [createTouched, setCreateTouched] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<AccountDraft>(emptyAccountDraft());
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<UserAccount | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const load = useCallback(
+    async (silent = false) => {
+      if (silent) setRefreshing(true);
+      else setLoading(true);
+      try {
+        const result = await api.listUsers();
+        setData(result);
+        setError("");
+      } catch (err) {
+        const message = err instanceof ApiError ? err.message : "加载账号列表失败";
+        if (silent) toast(message, "error");
+        else setError(message);
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [toast],
+  );
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const teamName = useCallback(
+    (id: string) => workspace.teams.find((team) => team.id === id)?.name ?? id,
+    [workspace.teams],
+  );
+  const groupName = useCallback(
+    (id: string) => workspace.groups.find((group) => group.id === id)?.name ?? id,
+    [workspace.groups],
+  );
+
+  const createEmail = createForm.email.trim().toLowerCase();
+  const createIssue = !ACCOUNT_EMAIL_PATTERN.test(createEmail)
+    ? createEmail
+      ? "请填写有效的邮箱地址"
+      : "请填写登录邮箱"
+    : accountScopeIssue(createForm.role, createForm.teamIds, createForm.groupIds);
+
+  const submitCreate = async () => {
+    if (creating || createIssue) return;
+    setCreateTouched(true);
+    setCreating(true);
+    try {
+      const result = await api.createUser({
+        email: createEmail,
+        name: createForm.name.trim() || undefined,
+        role: createForm.role,
+        teamIds: createForm.role === "team_admin" ? createForm.teamIds : [],
+        groupIds: createForm.role === "group_admin" ? createForm.groupIds : [],
+      });
+      toast(
+        `账号「${result.user.name || result.user.email}」已预创建，首次邮箱验证码登录后自动激活`,
+        "success",
+      );
+      setCreateForm({ email: "", ...emptyAccountDraft() });
+      setCreateTouched(false);
+      await load(true);
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "预创建账号失败", "error");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const startEdit = (account: UserAccount) => {
+    setEditingId(account.id);
+    setEditForm({
+      name: account.name,
+      role: account.role,
+      teamIds: [...account.teamIds],
+      groupIds: [...account.groupIds],
+    });
+  };
+
+  const saveEdit = async (account: UserAccount) => {
+    if (savingId) return;
+    const issue = !editForm.name.trim()
+      ? "显示名称不能为空"
+      : accountScopeIssue(editForm.role, editForm.teamIds, editForm.groupIds);
+    if (issue) {
+      toast(issue, "error");
+      return;
+    }
+    setSavingId(account.id);
+    try {
+      await api.updateUser(account.id, {
+        name: editForm.name.trim(),
+        role: editForm.role,
+        teamIds: editForm.role === "team_admin" ? editForm.teamIds : [],
+        groupIds: editForm.role === "group_admin" ? editForm.groupIds : [],
+      });
+      toast("账号信息已更新");
+      setEditingId(null);
+      await load(true);
+      if (account.isSelf) await reload(true);
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "保存账号失败", "error");
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    try {
+      await api.deleteUser(deleteTarget.id);
+      toast(`账号「${deleteTarget.name || deleteTarget.email}」已删除`, "success");
+      setDeleteTarget(null);
+      await load(true);
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "删除账号失败", "error");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const users = data?.users ?? [];
+  const deviceRow = users.find((account) => account.isDeviceAdmin);
+  const normalUsers = users.filter((account) => !account.isDeviceAdmin);
+  const editIssue = !editForm.name.trim()
+    ? "显示名称不能为空"
+    : accountScopeIssue(editForm.role, editForm.teamIds, editForm.groupIds);
+
+  return (
+    <div className="settings-sections">
+      <SettingsCard
+        title="预创建账号"
+        description="按邮箱预创建成员或管理员账号；创建后不会立即发送邮件，对方首次用邮箱验证码登录时自动激活。"
+        icon={<UserPlus size={18} />}
+      >
+        <div className="form-grid">
+          <Field label="登录邮箱" hint="账号 ID 取邮箱前缀且不可修改">
+            <input
+              className="input"
+              type="email"
+              value={createForm.email}
+              placeholder="member@company.com"
+              spellCheck={false}
+              autoComplete="off"
+              onChange={(event) =>
+                setCreateForm((current) => ({ ...current, email: event.target.value }))
+              }
+            />
+          </Field>
+          <Field label="显示名称" hint="可选，默认使用邮箱前缀">
+            <input
+              className="input"
+              value={createForm.name}
+              maxLength={40}
+              placeholder="例如：张明"
+              onChange={(event) =>
+                setCreateForm((current) => ({ ...current, name: event.target.value }))
+              }
+            />
+          </Field>
+          <Field label="账号角色">
+            <Select
+              value={createForm.role}
+              onChange={(value) =>
+                setCreateForm((current) => ({ ...current, role: value as UserRole }))
+              }
+              options={ROLE_OPTIONS}
+              ariaLabel="新账号角色"
+            />
+          </Field>
+          <AccountScopeEditor
+            workspace={workspace}
+            draft={createForm}
+            onChange={(next) => setCreateForm((current) => ({ ...current, ...next }))}
+          />
+        </div>
+        {createIssue && (createTouched || createForm.email.trim()) ? (
+          <p className="settings-entry-problem">
+            <AlertTriangle size={13} /> {createIssue}
+          </p>
+        ) : null}
+        <div className="settings-account-form-actions">
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={() => void submitCreate()}
+            disabled={creating || Boolean(createIssue)}
+          >
+            {creating ? <Loader2 size={14} className="spin" /> : <UserPlus size={14} />}
+            {creating ? "创建中…" : "预创建账号"}
+          </button>
+          <span className="field-hint">账号创建后由对方通过邮箱验证码首次登录完成激活。</span>
+        </div>
+        <p className="settings-note">
+          <Mail size={13} />
+          预创建账号（含团队 / 开发组管理员与超级管理员）在激活前无法登录；激活时邮箱验证通过即自动生效。
+          权限变更在对方下次请求时立即生效。
+        </p>
+      </SettingsCard>
+
+      <SettingsCard
+        title="账号列表"
+        description={`共 ${normalUsers.length} 个可管理账号${deviceRow ? "，另有 1 个部署设备内置管理员" : ""}。`}
+        icon={<UsersRound size={18} />}
+        extra={
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => void load(true)}
+            disabled={loading || refreshing}
+          >
+            <RefreshCw size={14} className={refreshing ? "spin" : undefined} /> 刷新
+          </button>
+        }
+      >
+        {loading ? (
+          <LoadingBlock label="正在读取账号列表…" rows={4} />
+        ) : error ? (
+          <div className="settings-inline-empty">
+            <AlertTriangle size={18} />
+            <div>
+              <strong>无法加载账号列表</strong>
+              <p>{error}</p>
+            </div>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => void load()}>
+              重新加载
+            </button>
+          </div>
+        ) : (
+          <div className="settings-account-list">
+            {deviceRow ? (
+              <article className="settings-account-row is-device">
+                <div className="settings-account-main">
+                  <span className="settings-device-avatar settings-account-device-avatar">
+                    {(deviceAdminName || "Admin").slice(0, 2).toUpperCase()}
+                  </span>
+                  <div className="settings-account-copy">
+                    <div className="settings-account-name">
+                      <strong>{deviceAdminName || deviceRow.name}</strong>
+                      <span className={cn("badge", ROLE_BADGE[deviceRow.role])}>
+                        {deviceRow.roleLabel || roleLabel(deviceRow.role)}
+                      </span>
+                      <span className="badge badge-gray">只读</span>
+                    </div>
+                    <div className="settings-account-meta">
+                      <span>部署设备内置管理员，不可管理</span>
+                    </div>
+                  </div>
+                </div>
+              </article>
+            ) : null}
+
+            {normalUsers.length ? (
+              normalUsers.map((account) => (
+                <article className="settings-account-row" key={account.id}>
+                  <div className="settings-account-main">
+                    <AccountAvatar account={account} />
+                    <div className="settings-account-copy">
+                      <div className="settings-account-name">
+                        <strong>{account.name || account.email}</strong>
+                        <span className={cn("badge", ROLE_BADGE[account.role])}>
+                          {account.roleLabel || roleLabel(account.role)}
+                        </span>
+                        {account.emailVerified ? (
+                          <span className="badge badge-green">
+                            <BadgeCheck size={11} /> 已验证
+                          </span>
+                        ) : (
+                          <span className="badge badge-orange">待首次登录激活</span>
+                        )}
+                        {account.isSelf ? <span className="badge badge-blue">当前账号</span> : null}
+                      </div>
+                      <div className="settings-account-meta">
+                        <span>
+                          <AtSign size={11} /> {account.id}
+                        </span>
+                        <span>{account.email}</span>
+                        {account.teamIds.length ? (
+                          <span>团队：{account.teamIds.map(teamName).join("、")}</span>
+                        ) : null}
+                        {account.groupIds.length ? (
+                          <span>开发组：{account.groupIds.map(groupName).join("、")}</span>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="settings-account-actions">
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => startEdit(account)}
+                        disabled={editingId === account.id}
+                      >
+                        <Pencil size={14} /> 编辑
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm settings-icon-danger"
+                        onClick={() => setDeleteTarget(account)}
+                        disabled={Boolean(account.isSelf)}
+                        title={account.isSelf ? "不能删除当前登录的账号" : "删除账号"}
+                      >
+                        <Trash2 size={14} /> 删除
+                      </button>
+                    </div>
+                  </div>
+
+                  {editingId === account.id ? (
+                    <form
+                      className="settings-account-edit"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void saveEdit(account);
+                      }}
+                    >
+                      <div className="form-grid">
+                        <Field label="显示名称" hint="留空时使用邮箱前缀">
+                          <input
+                            className="input"
+                            value={editForm.name}
+                            maxLength={40}
+                            onChange={(event) =>
+                              setEditForm((current) => ({ ...current, name: event.target.value }))
+                            }
+                          />
+                        </Field>
+                        <Field label="账号角色">
+                          <Select
+                            value={editForm.role}
+                            onChange={(value) =>
+                              setEditForm((current) => ({ ...current, role: value as UserRole }))
+                            }
+                            options={ROLE_OPTIONS}
+                            ariaLabel={`${account.name} 的账号角色`}
+                          />
+                        </Field>
+                        <AccountScopeEditor
+                          workspace={workspace}
+                          draft={editForm}
+                          onChange={setEditForm}
+                        />
+                      </div>
+                      {editIssue ? (
+                        <p className="settings-entry-problem">
+                          <AlertTriangle size={13} /> {editIssue}
+                        </p>
+                      ) : (
+                        <p className="settings-entry-ok">
+                          <CheckCircle2 size={13} /> 角色与授权范围有效
+                        </p>
+                      )}
+                      <div className="settings-account-edit-actions">
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => setEditingId(null)}
+                          disabled={savingId === account.id}
+                        >
+                          取消
+                        </button>
+                        <button
+                          type="submit"
+                          className="btn btn-primary btn-sm"
+                          disabled={Boolean(editIssue) || savingId === account.id}
+                        >
+                          {savingId === account.id ? (
+                            <Loader2 size={14} className="spin" />
+                          ) : (
+                            <Save size={14} />
+                          )}
+                          {savingId === account.id ? "保存中…" : "保存修改"}
+                        </button>
+                      </div>
+                    </form>
+                  ) : null}
+                </article>
+              ))
+            ) : (
+              <div className="settings-inline-empty">
+                <UsersRound size={18} />
+                <div>
+                  <strong>暂无其他账号</strong>
+                  <p>使用上方的「预创建账号」表单添加成员或管理员账号。</p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </SettingsCard>
+
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        title="删除账号？"
+        message={
+          deleteTarget
+            ? `即将删除账号「${deleteTarget.name || deleteTarget.email}」。删除后该账号将立即失去登录权限，历史内容会保留，操作不可撤销。`
+            : ""
+        }
+        confirmLabel="删除账号"
+        loading={deleting}
+        onClose={() => {
+          if (!deleting) setDeleteTarget(null);
+        }}
+        onConfirm={() => void confirmDelete()}
+      />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* SMTP relay (super administrators only)                              */
+/* ------------------------------------------------------------------ */
+
+const EMAIL_TOKENS = ["{{siteName}}", "{{code}}", "{{expiresMinutes}}"];
+
+function emailKindLabel(kind: string): string {
+  if (kind === "verification") return "验证码邮件";
+  if (kind === "test") return "测试邮件";
+  return "历史记录";
+}
+
+function EmailSection({
+  draft,
+  update,
+  errorsFor,
+}: {
+  draft: AppSettings;
+  update: UpdateSettings;
+  errorsFor: ErrorsFor;
+}) {
+  const { toast } = useToast();
+  const smtp = draft.email.smtp;
+  const [status, setStatus] = useState<EmailStatus | null>(null);
+  const [logs, setLogs] = useState<EmailLog[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState("");
+  const [testTo, setTestTo] = useState("");
+  const [testing, setTesting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+
+  const load = useCallback(
+    async (silent = false) => {
+      if (silent) setRefreshing(true);
+      else setLoading(true);
+      try {
+        const [nextStatus, nextLogs] = await Promise.all([api.emailStatus(), api.emailLogs(30)]);
+        setStatus(nextStatus);
+        setLogs(nextLogs.logs);
+        setError("");
+      } catch (err) {
+        const message = err instanceof ApiError ? err.message : "加载邮件服务状态失败";
+        if (silent) toast(message, "error");
+        else setError(message);
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [toast],
+  );
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const sendTest = async () => {
+    if (testing) return;
+    const target = testTo.trim() || smtp.fromEmail.trim();
+    if (!target) {
+      toast("请先填写测试收件邮箱或发件邮箱", "error");
+      return;
+    }
+    setTesting(true);
+    try {
+      const result = await api.emailTest(target);
+      toast(`测试邮件已发送至 ${result.to}`, "success");
+      await load(true);
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "测试发送失败，请检查 SMTP 配置", "error");
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const insertToken = (token: string) => {
+    update((next) => {
+      const separator =
+        next.email.bodyTemplate && !next.email.bodyTemplate.endsWith("\n") ? "\n" : "";
+      next.email.bodyTemplate = `${next.email.bodyTemplate}${separator}${token}`;
+    });
+  };
+
+  const previewBody = draft.email.bodyTemplate
+    .replaceAll("{{siteName}}", draft.site.name || "团队工作室")
+    .replaceAll("{{code}}", "123456")
+    .replaceAll("{{expiresMinutes}}", String(draft.auth.emailLogin.codeExpiryMinutes || 10));
+
+  const statusBadge = status
+    ? status.configured
+      ? { tone: "badge-green", label: "已就绪" }
+      : status.enabled
+        ? { tone: "badge-orange", label: "配置不完整" }
+        : { tone: "badge-gray", label: "未启用" }
+    : { tone: "badge-gray", label: "未知" };
+
+  return (
+    <div className="settings-sections">
+      <SettingsCard
+        title="SMTP 中继状态"
+        description="用于发送邮箱验证码的外部 SMTP 服务器；本版本不再内置邮件服务器与本地信箱。"
+        icon={<Server size={18} />}
+        extra={
+          <>
+            <span className={cn("badge", statusBadge.tone)}>{statusBadge.label}</span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => void load(true)}
+              disabled={loading || refreshing}
+            >
+              <RefreshCw size={14} className={refreshing ? "spin" : undefined} /> 刷新
+            </button>
+          </>
+        }
+      >
+        {loading ? (
+          <LoadingBlock label="正在读取邮件服务状态…" rows={3} />
+        ) : error ? (
+          <div className="settings-inline-empty">
+            <AlertTriangle size={18} />
+            <div>
+              <strong>无法读取邮件服务状态</strong>
+              <p>{error}</p>
+            </div>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => void load()}>
+              重新加载
+            </button>
+          </div>
+        ) : status ? (
+          <>
+            <div className="settings-sso-status settings-email-status">
+              <div className="settings-sso-item">
+                <span className="settings-sso-label">中继服务器</span>
+                <strong className="mono">
+                  {status.host ? `${status.host}:${status.port}` : "未配置"}
+                </strong>
+              </div>
+              <div className="settings-sso-item">
+                <span className="settings-sso-label">发件人</span>
+                <strong>
+                  {status.fromName || "—"}
+                  {status.fromEmail ? ` <${status.fromEmail}>` : ""}
+                </strong>
+              </div>
+              <div className="settings-sso-item">
+                <span className="settings-sso-label">加密方式</span>
+                <strong>{status.useSsl ? "SSL 直连" : status.useStartTls ? "STARTTLS" : "明文"}</strong>
+              </div>
+              <div className="settings-sso-item">
+                <span className="settings-sso-label">今日发送</span>
+                <strong>{status.sentToday} 封</strong>
+              </div>
+              <div className="settings-sso-item">
+                <span className="settings-sso-label">最近成功</span>
+                <strong>{status.lastSentAt ? formatDateTime(status.lastSentAt) : "—"}</strong>
+              </div>
+              <div className="settings-sso-item">
+                <span className="settings-sso-label">最近错误</span>
+                <strong className={status.lastError ? "settings-email-error-text" : undefined}>
+                  {status.lastError || "无"}
+                </strong>
+              </div>
+            </div>
+            {status.configured ? (
+              <p className="settings-sso-ready">
+                <CheckCircle2 size={13} /> SMTP 中继已可用，邮箱验证码登录可以正常发送。
+              </p>
+            ) : (
+              <p className="settings-sso-missing">
+                <AlertTriangle size={13} />
+                邮件服务尚未就绪：请填写 SMTP 服务器与发件邮箱，并保持「启用邮件服务」开启。
+              </p>
+            )}
+            <div className="settings-email-test">
+              <input
+                className="input"
+                type="email"
+                value={testTo}
+                placeholder="测试收件邮箱（留空则发送到发件邮箱）"
+                spellCheck={false}
+                onChange={(event) => setTestTo(event.target.value)}
+              />
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => void sendTest()}
+                disabled={testing}
+              >
+                {testing ? <Loader2 size={14} className="spin" /> : <Send size={14} />}
+                {testing ? "发送中…" : "发送测试邮件"}
+              </button>
+            </div>
+          </>
+        ) : null}
+      </SettingsCard>
+
+      <SettingsCard
+        title="SMTP 中继配置"
+        description="填写外部 SMTP 服务器的地址与账号；保存站点设置后生效。"
+        icon={<Mail size={18} />}
+      >
+        <div className="settings-toggle-stack">
+          <ToggleRow
+            label="启用邮件服务"
+            description="关闭后邮箱验证码登录将不可用，仅能通过 SSO 或访客模式访问。"
+            checked={draft.email.enabled}
+            onChange={(checked) =>
+              update((next) => {
+                next.email.enabled = checked;
+              })
+            }
+          />
+        </div>
+        <div className="divider" />
+        <div className="form-grid">
+          <Field
+            label="SMTP 服务器 IP / 域名"
+            error={errorText(errorsFor("email.smtp.host"))}
+            hint="支持域名或 IP，例如 smtp.company.com、10.0.0.5"
+          >
+            <input
+              className="input"
+              value={smtp.host}
+              placeholder="smtp.company.com"
+              spellCheck={false}
+              onChange={(event) =>
+                update((next) => {
+                  next.email.smtp.host = event.target.value;
+                })
+              }
+            />
+          </Field>
+          <Field label="SMTP 端口" error={errorText(errorsFor("email.smtp.port"))} hint="1 - 65535，常用 587 / 465">
+            <input
+              className="input"
+              type="number"
+              min={1}
+              max={65535}
+              value={smtp.port}
+              onChange={(event) =>
+                update((next) => {
+                  next.email.smtp.port = toInt(event.target.value, 587);
+                })
+              }
+            />
+          </Field>
+          <Field
+            label="SMTP 用户名"
+            error={errorText(errorsFor("email.smtp.username"))}
+            hint="中继账号（代理邮箱），留空表示匿名中继"
+          >
+            <input
+              className="input"
+              value={smtp.username}
+              spellCheck={false}
+              autoComplete="off"
+              onChange={(event) =>
+                update((next) => {
+                  next.email.smtp.username = event.target.value;
+                })
+              }
+            />
+          </Field>
+          <Field
+            label="SMTP 密码"
+            error={errorText(errorsFor("email.smtp.password"))}
+            hint="仅保存在服务端 settings.json，不会回传到页面"
+          >
+            <div className="settings-secret-control">
+              <input
+                className="input"
+                type={showPassword ? "text" : "password"}
+                value={smtp.password}
+                spellCheck={false}
+                autoComplete="new-password"
+                onChange={(event) =>
+                  update((next) => {
+                    next.email.smtp.password = event.target.value;
+                  })
+                }
+              />
+              <button
+                type="button"
+                className="icon-button"
+                aria-label={showPassword ? "隐藏密码" : "显示密码"}
+                onClick={() => setShowPassword((value) => !value)}
+              >
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+          </Field>
+          <Field
+            label="发件邮箱"
+            error={errorText(errorsFor("email.smtp.fromEmail"))}
+            hint="收件人看到的发件地址，需与中继账号匹配"
+          >
+            <input
+              className="input"
+              type="email"
+              value={smtp.fromEmail}
+              placeholder="noreply@company.com"
+              spellCheck={false}
+              onChange={(event) =>
+                update((next) => {
+                  next.email.smtp.fromEmail = event.target.value;
+                })
+              }
+            />
+          </Field>
+          <Field label="发件人名称" error={errorText(errorsFor("email.smtp.fromName"))} hint="例如：星港团队工作室">
+            <input
+              className="input"
+              value={smtp.fromName}
+              maxLength={80}
+              onChange={(event) =>
+                update((next) => {
+                  next.email.smtp.fromName = event.target.value;
+                })
+              }
+            />
+          </Field>
+          <Field
+            label="连接超时（秒）"
+            error={errorText(errorsFor("email.smtp.timeoutSeconds"))}
+            hint="3 - 120 秒，默认 15 秒"
+          >
+            <input
+              className="input"
+              type="number"
+              min={3}
+              max={120}
+              value={smtp.timeoutSeconds}
+              onChange={(event) =>
+                update((next) => {
+                  next.email.smtp.timeoutSeconds = toInt(event.target.value, 15);
+                })
+              }
+            />
+          </Field>
+          <div className="span-2 settings-toggle-stack">
+            <ToggleRow
+              label="STARTTLS"
+              description="先建立明文连接再升级为 TLS，常用端口 587。"
+              checked={smtp.useStartTls}
+              onChange={(checked) =>
+                update((next) => {
+                  next.email.smtp.useStartTls = checked;
+                  if (checked) next.email.smtp.useSsl = false;
+                })
+              }
+            />
+            <ToggleRow
+              label="SSL 直连"
+              description="全程 TLS 加密，常用端口 465。与 STARTTLS 只能开启一种。"
+              checked={smtp.useSsl}
+              onChange={(checked) =>
+                update((next) => {
+                  next.email.smtp.useSsl = checked;
+                  if (checked) next.email.smtp.useStartTls = false;
+                })
+              }
+            />
+          </div>
+        </div>
+      </SettingsCard>
+
+      <SettingsCard
+        title="验证码邮件内容"
+        description="邮箱验证码邮件的主题与正文模板，留空时使用服务端默认文案。"
+        icon={<Inbox size={18} />}
+      >
+        <Field
+          label="邮件主题"
+          error={errorText(errorsFor("email.subjectTemplate"))}
+          hint="支持变量：{{siteName}}、{{code}}、{{expiresMinutes}}"
+        >
+          <input
+            className="input"
+            value={draft.email.subjectTemplate}
+            maxLength={160}
+            placeholder="[{{siteName}}] 邮箱验证码"
+            onChange={(event) =>
+              update((next) => {
+                next.email.subjectTemplate = event.target.value;
+              })
+            }
+          />
+        </Field>
+        <Field
+          label="邮件正文"
+          error={errorText(errorsFor("email.bodyTemplate"))}
+          hint="验证码会按上方模板渲染；请保留 {{code}} 变量以发送验证码。"
+        >
+          <textarea
+            className="textarea"
+            value={draft.email.bodyTemplate}
+            rows={8}
+            maxLength={4000}
+            spellCheck={false}
+            onChange={(event) =>
+              update((next) => {
+                next.email.bodyTemplate = event.target.value;
+              })
+            }
+          />
+        </Field>
+        <div className="settings-email-tokens">
+          <span className="field-hint">插入变量：</span>
+          {EMAIL_TOKENS.map((token) => (
+            <button
+              key={token}
+              type="button"
+              className="chip chip-clickable"
+              onClick={() => insertToken(token)}
+            >
+              {token}
+            </button>
+          ))}
+        </div>
+        <div className="settings-email-preview">
+          <span className="settings-email-preview-label">渲染预览</span>
+          <pre>{previewBody || "（正文为空，将使用服务端默认模板）"}</pre>
+        </div>
+      </SettingsCard>
+
+      <SettingsCard
+        title="最近发送记录"
+        description="仅展示脱敏后的收件地址与发送结果，便于排查中继问题。"
+        icon={<Clock size={18} />}
+        extra={
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => void load(true)}
+            disabled={loading || refreshing}
+          >
+            <RefreshCw size={14} className={refreshing ? "spin" : undefined} /> 刷新
+          </button>
+        }
+      >
+        {logs.length ? (
+          <ul className="settings-email-logs">
+            {logs.map((log) => (
+              <li
+                className={cn("settings-email-log", log.status === "failed" && "is-failed")}
+                key={log.id}
+              >
+                <span className={cn("badge", log.status === "sent" ? "badge-green" : "badge-red")}>
+                  {log.status === "sent" ? "已发送" : "失败"}
+                </span>
+                <div className="settings-email-log-copy">
+                  <strong>{log.subject || "（无主题）"}</strong>
+                  <small>
+                    {log.recipient} · {emailKindLabel(log.kind)} · {formatDateTime(log.created_at)}
+                  </small>
+                  {log.error ? <em>{log.error}</em> : null}
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="settings-inline-empty">
+            <Inbox size={18} />
+            <div>
+              <strong>暂无发送记录</strong>
+              <p>发送测试邮件或成员使用邮箱验证码登录后，这里会显示最近的中继结果。</p>
+            </div>
+          </div>
+        )}
+      </SettingsCard>
+    </div>
+  );
+}
+
 interface JsonWorkspaceProps {
   draft: AppSettings;
   saved: AppSettings | null;
@@ -2103,10 +3156,622 @@ function JsonWorkspace({
 }
 
 /* ------------------------------------------------------------------ */
+/* Domain settings: teams & development groups                         */
+/* ------------------------------------------------------------------ */
+
+interface DomainTeamDraft {
+  name: string;
+  shortName: string;
+  description: string;
+  color: string;
+}
+
+interface DomainGroupDraft {
+  name: string;
+  description: string;
+  color: string;
+  icon: string;
+}
+
+const DOMAIN_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
+
+function DomainColorField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const swatch = DOMAIN_COLOR_PATTERN.test(value) ? value : "#5865f2";
+  return (
+    <Field label={label} hint="使用 #RRGGBB 格式，或直接点击色块取色">
+      <div className="settings-color-control">
+        <input
+          type="color"
+          value={swatch}
+          aria-label={`${label}取色器`}
+          onChange={(event) => onChange(event.target.value)}
+        />
+        <input
+          className="input"
+          value={value}
+          maxLength={7}
+          spellCheck={false}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      </div>
+    </Field>
+  );
+}
+
+function DomainReadonlyRow({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="settings-domain-readonly-row">
+      <span>{label}</span>
+      <strong>{value || "—"}</strong>
+    </div>
+  );
+}
+
+function TeamDomainCard({
+  team,
+  onSaved,
+}: {
+  team: DomainTeamSettings;
+  onSaved: () => Promise<void>;
+}) {
+  const { toast } = useToast();
+  const [draft, setDraft] = useState<DomainTeamDraft>(() => ({
+    name: team.name,
+    shortName: team.shortName,
+    description: team.description,
+    color: team.color,
+  }));
+  const [saving, setSaving] = useState(false);
+  const editable = team.canEdit;
+
+  useEffect(() => {
+    setDraft({
+      name: team.name,
+      shortName: team.shortName,
+      description: team.description,
+      color: team.color,
+    });
+  }, [team.id, team.name, team.shortName, team.description, team.color]);
+
+  const dirty =
+    editable &&
+    (draft.name !== team.name ||
+      draft.shortName !== team.shortName ||
+      draft.description !== team.description ||
+      draft.color !== team.color);
+  const colorValid = DOMAIN_COLOR_PATTERN.test(draft.color);
+  const nameValid = draft.name.trim().length > 0;
+
+  const save = async () => {
+    if (saving || !editable) return;
+    if (!nameValid) {
+      toast("团队名称不能为空", "error");
+      return;
+    }
+    if (!colorValid) {
+      toast("团队标识色必须是 #RRGGBB 格式", "error");
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.updateDomainTeam(team.id, {
+        name: draft.name.trim(),
+        shortName: draft.shortName.trim(),
+        description: draft.description.trim(),
+        color: draft.color.toLowerCase(),
+      });
+      toast(`团队「${draft.name.trim()}」已更新`);
+      await onSaved();
+    } catch (error) {
+      toast(error instanceof ApiError ? error.message : "保存团队设置失败", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const reset = () => {
+    setDraft({
+      name: team.name,
+      shortName: team.shortName,
+      description: team.description,
+      color: team.color,
+    });
+  };
+
+  return (
+    <article className="settings-domain-team">
+      <header className="settings-domain-team-head">
+        <span className="settings-domain-team-mark" style={{ color: team.color }}>
+          <Building2 size={19} />
+        </span>
+        <div className="settings-domain-team-copy">
+          <div className="settings-domain-team-title">
+            <strong>{team.name}</strong>
+            <span className="badge badge-gray">{team.shortName || "暂无简称"}</span>
+            <span className={cn("badge", editable ? "badge-blue" : "badge-gray")}>
+              {editable ? "可编辑" : "只读"}
+            </span>
+          </div>
+          <small>
+            {team.groups.length} 个开发组 · 标识色 <code className="mono">{team.color}</code>
+          </small>
+        </div>
+        {editable ? (
+          <div className="settings-domain-actions">
+            {dirty ? (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={reset}
+                disabled={saving}
+              >
+                <RotateCcw size={14} /> 撤销
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => void save()}
+              disabled={!dirty || saving}
+            >
+              {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
+              {saving ? "保存中…" : "保存团队"}
+            </button>
+          </div>
+        ) : null}
+      </header>
+
+      {editable ? (
+        <div className="form-grid settings-domain-form">
+          <Field label="团队名称" hint="2 - 40 个字符">
+            <input
+              className="input"
+              value={draft.name}
+              maxLength={40}
+              onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+            />
+          </Field>
+          <Field label="团队简称" hint="留空时自动取名称前 4 个字符">
+            <input
+              className="input"
+              value={draft.shortName}
+              maxLength={12}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, shortName: event.target.value }))
+              }
+            />
+          </Field>
+          <DomainColorField
+            label="团队标识色"
+            value={draft.color}
+            onChange={(color) => setDraft((current) => ({ ...current, color }))}
+          />
+          <Field label="团队简介" className="span-2" hint="最多 120 个字符">
+            <textarea
+              className="textarea"
+              value={draft.description}
+              rows={2}
+              maxLength={120}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, description: event.target.value }))
+              }
+            />
+          </Field>
+        </div>
+      ) : (
+        <div className="settings-domain-readonly">
+          <DomainReadonlyRow label="团队名称" value={team.name} />
+          <DomainReadonlyRow label="团队简称" value={team.shortName} />
+          <DomainReadonlyRow label="团队简介" value={team.description} />
+          <DomainReadonlyRow label="标识色" value={<code className="mono">{team.color}</code>} />
+        </div>
+      )}
+
+      <div className="settings-domain-groups">
+        <span className="settings-domain-groups-label">
+          <Layers3 size={13} /> 开发组
+        </span>
+        {team.groups.length ? (
+          team.groups.map((group) => (
+            <GroupDomainCard key={group.id} teamId={team.id} group={group} onSaved={onSaved} />
+          ))
+        ) : (
+          <p className="field-hint">该团队下暂无开发组，可使用「管理工作区结构」创建。</p>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function GroupDomainCard({
+  teamId,
+  group,
+  onSaved,
+}: {
+  teamId: string;
+  group: DomainGroupSettings;
+  onSaved: () => Promise<void>;
+}) {
+  const { toast } = useToast();
+  const [draft, setDraft] = useState<DomainGroupDraft>(() => ({
+    name: group.name,
+    description: group.description,
+    color: group.color,
+    icon: group.icon,
+  }));
+  const [saving, setSaving] = useState(false);
+  const editable = group.canEdit;
+
+  useEffect(() => {
+    setDraft({
+      name: group.name,
+      description: group.description,
+      color: group.color,
+      icon: group.icon,
+    });
+  }, [group.id, group.name, group.description, group.color, group.icon]);
+
+  const dirty =
+    editable &&
+    (draft.name !== group.name ||
+      draft.description !== group.description ||
+      draft.color !== group.color ||
+      draft.icon !== group.icon);
+  const colorValid = DOMAIN_COLOR_PATTERN.test(draft.color);
+  const nameValid = draft.name.trim().length > 0;
+
+  const save = async () => {
+    if (saving || !editable) return;
+    if (!nameValid) {
+      toast("开发组名称不能为空", "error");
+      return;
+    }
+    if (!colorValid) {
+      toast("开发组标识色必须是 #RRGGBB 格式", "error");
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.updateDomainGroup(teamId, group.id, {
+        name: draft.name.trim(),
+        description: draft.description.trim(),
+        color: draft.color.toLowerCase(),
+        icon: draft.icon.trim() || "layers",
+      });
+      toast(`开发组「${draft.name.trim()}」已更新`);
+      await onSaved();
+    } catch (error) {
+      toast(error instanceof ApiError ? error.message : "保存开发组设置失败", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const reset = () => {
+    setDraft({
+      name: group.name,
+      description: group.description,
+      color: group.color,
+      icon: group.icon,
+    });
+  };
+
+  return (
+    <div className="settings-domain-group">
+      <header className="settings-domain-group-head">
+        <span className="settings-domain-group-dot" style={{ background: group.color }} />
+        <div className="settings-domain-group-copy">
+          <strong>{group.name}</strong>
+          <small>
+            {group.description || "暂无简介"} · 图标 <code className="mono">{group.icon || "layers"}</code>
+          </small>
+        </div>
+        <span className={cn("badge", editable ? "badge-blue" : "badge-gray")}>
+          {editable ? "可编辑" : "只读"}
+        </span>
+        {editable ? (
+          <div className="settings-domain-actions">
+            {dirty ? (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={reset}
+                disabled={saving}
+              >
+                <RotateCcw size={13} /> 撤销
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => void save()}
+              disabled={!dirty || saving}
+            >
+              {saving ? <Loader2 size={13} className="spin" /> : <Save size={13} />}
+              {saving ? "保存中…" : "保存开发组"}
+            </button>
+          </div>
+        ) : null}
+      </header>
+
+      {editable ? (
+        <div className="form-grid settings-domain-form settings-domain-group-form">
+          <Field label="开发组名称" hint="2 - 40 个字符">
+            <input
+              className="input"
+              value={draft.name}
+              maxLength={40}
+              onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+            />
+          </Field>
+          <Field label="图标名称" hint="例如 layers / rocket / shield">
+            <input
+              className="input"
+              value={draft.icon}
+              maxLength={40}
+              spellCheck={false}
+              onChange={(event) => setDraft((current) => ({ ...current, icon: event.target.value }))}
+            />
+          </Field>
+          <DomainColorField
+            label="开发组标识色"
+            value={draft.color}
+            onChange={(color) => setDraft((current) => ({ ...current, color }))}
+          />
+          <Field label="开发组简介" className="span-2" hint="最多 120 个字符">
+            <textarea
+              className="textarea"
+              value={draft.description}
+              rows={2}
+              maxLength={120}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, description: event.target.value }))
+              }
+            />
+          </Field>
+        </div>
+      ) : (
+        <div className="settings-domain-readonly settings-domain-readonly-compact">
+          <DomainReadonlyRow label="开发组名称" value={group.name} />
+          <DomainReadonlyRow label="开发组简介" value={group.description} />
+          <DomainReadonlyRow label="标识色" value={<code className="mono">{group.color}</code>} />
+          <DomainReadonlyRow label="图标" value={group.icon || "layers"} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WorkspaceSettingsSection() {
+  const { reload } = useApp();
+  const { toast } = useToast();
+  const [data, setData] = useState<DomainSettingsData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState("");
+  const [managerOpen, setManagerOpen] = useState(false);
+
+  const load = useCallback(
+    async (silent = false) => {
+      if (silent) setRefreshing(true);
+      else setLoading(true);
+      try {
+        const result = await api.domainSettings();
+        setData(result);
+        setError("");
+      } catch (err) {
+        const message = err instanceof ApiError ? err.message : "加载工作区设置失败";
+        if (silent) toast(message, "error");
+        else setError(message);
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [toast],
+  );
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const handleSaved = useCallback(async () => {
+    await load(true);
+    await reload(true);
+  }, [load, reload]);
+
+  const teams = data?.teams ?? [];
+  const permissions = data?.permissions;
+  const groupTotal = teams.reduce((total, team) => total + team.groups.length, 0);
+
+  const scopeHint = permissions?.isSuperAdmin
+    ? "你是超级管理员：可编辑全部团队与开发组的基础信息。"
+    : permissions?.canEditStructure
+      ? "你是团队管理员：可编辑所属团队及其下开发组；如需新建或删除结构，请使用「管理工作区结构」。"
+      : "你是开发组管理员：可编辑被授权开发组的信息，团队信息为只读。";
+
+  return (
+    <div className="settings-sections">
+      <SettingsCard
+        title="工作区结构与基础信息"
+        description="团队与开发组名称、简介和标识色；每项修改保存后立即生效，并同步到导航与筛选器。"
+        icon={<Building2 size={18} />}
+        extra={
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => void load(true)}
+              disabled={loading || refreshing}
+            >
+              <RefreshCw size={14} className={refreshing ? "spin" : undefined} /> 刷新
+            </button>
+            {permissions?.canEditStructure ? (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setManagerOpen(true)}
+              >
+                <Settings2 size={14} /> 管理工作区结构
+              </button>
+            ) : null}
+          </>
+        }
+      >
+        {loading ? (
+          <LoadingBlock label="正在读取团队与开发组…" rows={4} />
+        ) : error ? (
+          <div className="settings-inline-empty">
+            <AlertTriangle size={18} />
+            <div>
+              <strong>无法加载工作区设置</strong>
+              <p>{error}</p>
+            </div>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => void load()}>
+              重新加载
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="settings-domain-summary">
+              <span className="settings-domain-summary-item">
+                <Building2 size={14} />
+                <strong>{teams.length}</strong> 个团队
+              </span>
+              <span className="settings-domain-summary-item">
+                <Layers3 size={14} />
+                <strong>{groupTotal}</strong> 个开发组
+              </span>
+              <span className="settings-domain-summary-item">
+                <ShieldCheck size={14} />
+                {permissions?.isSuperAdmin ? "全部工作区" : "按角色授权范围"}
+              </span>
+            </div>
+            <p className="settings-note">
+              <ShieldCheck size={13} />
+              {scopeHint}
+            </p>
+            {teams.length ? (
+              <div className="settings-domain-list">
+                {teams.map((team) => (
+                  <TeamDomainCard key={team.id} team={team} onSaved={handleSaved} />
+                ))}
+              </div>
+            ) : (
+              <div className="settings-inline-empty">
+                <Building2 size={18} />
+                <div>
+                  <strong>当前范围没有可管理的团队</strong>
+                  <p>请联系超级管理员创建团队与开发组，或检查你的账号授权范围。</p>
+                </div>
+              </div>
+            )}
+            {!permissions?.canEditStructure && permissions ? (
+              <p className="settings-note">
+                <Layers3 size={13} />
+                新建 / 删除团队与开发组需要团队管理员或超级管理员操作。
+              </p>
+            ) : null}
+          </>
+        )}
+      </SettingsCard>
+
+      <WorkspaceManager
+        open={managerOpen}
+        onClose={() => {
+          setManagerOpen(false);
+          void load(true);
+        }}
+      />
+    </div>
+  );
+}
+
+function DomainSettingsPage() {
+  const { data, navigate } = useApp();
+  const me = data?.me;
+  const isAdmin = Boolean(me && (me.isDeviceAdmin || me.admin.role));
+  if (!isAdmin) {
+    return <SettingsAccessDenied onBack={() => navigate("overview")} />;
+  }
+  const identityLabel = me?.isDeviceAdmin
+    ? "部署设备管理员"
+    : me?.userRole === "super"
+      ? "超级管理员"
+      : me?.admin.role === "team_admin"
+        ? "团队管理员"
+        : me?.admin.role === "group_admin"
+          ? "开发组管理员"
+          : "管理员";
+  const scopeLabel = me?.isSuperAdmin
+    ? "全部团队"
+    : me?.admin.teamIds.length
+      ? `${me.admin.teamIds.length} 个团队`
+      : `${me?.admin.groupIds.length ?? 0} 个开发组`;
+
+  return (
+    <div className="settings-page fade-up">
+      <header className="page-header settings-header">
+        <div className="page-heading">
+          <span className="eyebrow">
+            <Building2 size={13} /> WORKSPACE SETTINGS
+          </span>
+          <h1 className="page-title">工作区设置</h1>
+          <p className="page-subtitle">
+            管理你被授权的团队与开发组信息，保存后立即生效。站点级设置仅超级管理员可访问。
+          </p>
+        </div>
+        <div className="page-actions settings-header-actions">
+          <span className="settings-dirty-pill is-clean">
+            <i />
+            已按角色授权
+          </span>
+        </div>
+      </header>
+
+      <div className="settings-meta-strip">
+        <span className="settings-meta-chip">
+          <ShieldCheck size={13} />
+          当前身份 <strong>{me?.name}</strong>
+          <span className="settings-meta-divider">·</span>
+          {identityLabel}
+        </span>
+        <span className="settings-meta-chip">
+          <Building2 size={13} />
+          可管理范围 <strong>{scopeLabel}</strong>
+        </span>
+      </div>
+
+      <WorkspaceSettingsSection />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Page                                                                */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Settings are role-scoped: super administrators get the full site control
+ * centre; team / group administrators only ever see the domain (workspace)
+ * settings. Non-super identities must never request `/api/settings` — that
+ * endpoint answers 403 for them.
+ */
 export default function SettingsPage() {
+  const { data } = useApp();
+  const isSuper = Boolean(data?.me.isSuperAdmin);
+  return isSuper ? <SiteSettingsPage /> : <DomainSettingsPage />;
+}
+
+function SiteSettingsPage() {
   const { data, reload, navigate } = useApp();
   const { toast } = useToast();
 
@@ -2118,7 +3783,7 @@ export default function SettingsPage() {
   const [meta, setMeta] = useState<SettingsMeta | null>(null);
   const [workspace, setWorkspace] = useState<WorkspaceOption>({ teams: [], groups: [], members: [] });
   const [workspaceError, setWorkspaceError] = useState("");
-  const [activeTab, setActiveTab] = useState<TabKey>(() => readTabFromHash());
+  const [activeTab, setActiveTab] = useState<TabKey>(() => readTabFromHash(TAB_KEYS, "appearance"));
   const [saving, setSaving] = useState(false);
   const [serverErrors, setServerErrors] = useState<ValidationDetail[]>([]);
   const [jsonText, setJsonText] = useState("");
@@ -2174,7 +3839,7 @@ export default function SettingsPage() {
   /* ---------- tab navigation (hash query: #/settings?tab=email) ---------- */
 
   useEffect(() => {
-    const sync = () => setActiveTab(readTabFromHash());
+    const sync = () => setActiveTab(readTabFromHash(TAB_KEYS, "appearance"));
     sync();
     window.addEventListener("hashchange", sync);
     return () => window.removeEventListener("hashchange", sync);
@@ -2244,16 +3909,6 @@ export default function SettingsPage() {
         errors.push({ path, message: `${label}必须是 #RRGGBB 格式` });
       }
     };
-    const checkTime = (value: string, path: string, label: string) => {
-      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) {
-        errors.push({ path, message: `${label}必须是 HH:MM 格式` });
-      }
-    };
-    const checkOffsets = (values: number[], path: string, label: string) => {
-      if (values.some((offset) => !Number.isFinite(offset) || offset < 0 || offset > 60)) {
-        errors.push({ path, message: `${label}必须在 0-60 天之间` });
-      }
-    };
     const checkEmail = (value: string, path: string, label: string) => {
       if (value && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value)) {
         errors.push({ path, message: `${label}格式不正确` });
@@ -2271,13 +3926,13 @@ export default function SettingsPage() {
     if (draft.announcements.dashboardLimit < 1 || draft.announcements.dashboardLimit > 10) {
       errors.push({ path: "announcements.dashboardLimit", message: "概览公告数量需在 1-10 之间" });
     }
-    checkTime(draft.calendar.defaultReminderTime, "calendar.defaultReminderTime", "默认提醒时间");
-    checkOffsets(
-      draft.calendar.defaultReminderOffsetsDays,
-      "calendar.defaultReminderOffsetsDays",
-      "默认提醒提前天数",
-    );
 
+    if (draft.email.smtp.host.trim() !== draft.email.smtp.host) {
+      errors.push({ path: "email.smtp.host", message: "SMTP 服务器地址不能包含首尾空格" });
+    }
+    if (/\s/.test(draft.email.smtp.host.trim())) {
+      errors.push({ path: "email.smtp.host", message: "SMTP 服务器地址不能包含空格" });
+    }
     checkEmail(draft.email.smtp.fromEmail, "email.smtp.fromEmail", "发件邮箱");
     if (draft.email.smtp.port < 1 || draft.email.smtp.port > 65535) {
       errors.push({ path: "email.smtp.port", message: "SMTP 端口需在 1-65535 之间" });
@@ -2285,25 +3940,28 @@ export default function SettingsPage() {
     if (draft.email.smtp.timeoutSeconds < 3 || draft.email.smtp.timeoutSeconds > 120) {
       errors.push({ path: "email.smtp.timeoutSeconds", message: "SMTP 超时需在 3-120 秒之间" });
     }
-    checkTime(draft.email.reminders.sendTime, "email.reminders.sendTime", "提醒发送时间");
-    checkOffsets(draft.email.reminders.offsetsDays, "email.reminders.offsetsDays", "提醒提前天数");
+    if (draft.email.smtp.useStartTls && draft.email.smtp.useSsl) {
+      errors.push({ path: "email.smtp.useSsl", message: "STARTTLS 与 SSL 直连只能开启一种" });
+    }
+
+    if (draft.auth.emailLogin.codeLength < 4 || draft.auth.emailLogin.codeLength > 8) {
+      errors.push({ path: "auth.emailLogin.codeLength", message: "验证码位数需在 4-8 之间" });
+    }
     if (
-      draft.email.reminders.scanIntervalSeconds < 30 ||
-      draft.email.reminders.scanIntervalSeconds > 86400
+      draft.auth.emailLogin.codeExpiryMinutes < 2 ||
+      draft.auth.emailLogin.codeExpiryMinutes > 30
     ) {
       errors.push({
-        path: "email.reminders.scanIntervalSeconds",
-        message: "扫描间隔需在 30-86400 秒之间",
+        path: "auth.emailLogin.codeExpiryMinutes",
+        message: "验证码有效期需在 2-30 分钟之间",
       });
     }
-    draft.email.reminders.additionalRecipients.forEach((recipient, index) => {
-      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(recipient)) {
-        errors.push({
-          path: `email.reminders.additionalRecipients.${index}`,
-          message: `附加收件人邮箱格式不正确：${recipient}`,
-        });
-      }
-    });
+    if (draft.auth.emailLogin.resendSeconds < 30 || draft.auth.emailLogin.resendSeconds > 600) {
+      errors.push({ path: "auth.emailLogin.resendSeconds", message: "重发间隔需在 30-600 秒之间" });
+    }
+    if (draft.auth.emailLogin.maxAttempts < 3 || draft.auth.emailLogin.maxAttempts > 10) {
+      errors.push({ path: "auth.emailLogin.maxAttempts", message: "最大尝试次数需在 3-10 次之间" });
+    }
 
     draft.auth.adminWhitelist.ips.forEach((entry, index) => {
       if (!entry.ip.trim()) {
@@ -2328,7 +3986,7 @@ export default function SettingsPage() {
       }
     });
     if (draft.auth.session.maxAgeDays < 1 || draft.auth.session.maxAgeDays > 90) {
-      errors.push({ path: "auth.session.maxAgeDays", message: "会话有效期需在 1-90 天之间" });
+      errors.push({ path: "auth.session.maxAgeDays", message: "登录状态保持天数需在 1-90 天之间" });
     }
     if (draft.auth.session.cookieName.trim().length < 3) {
       errors.push({ path: "auth.session.cookieName", message: "会话 Cookie 名至少 3 个字符" });
@@ -2678,6 +4336,8 @@ export default function SettingsPage() {
 
   const canSave = hasUnsaved && !saving;
   const adminName = data?.me.name ?? "Admin";
+  const identityLabel = data?.me.isDeviceAdmin ? "部署设备管理员" : "超级管理员";
+  const isSiteTab = activeTab !== "workspace" && activeTab !== "accounts";
   const saveLabel = activeTab === "json" ? "校验并保存" : "保存设置";
 
   return (
@@ -2689,7 +4349,8 @@ export default function SettingsPage() {
           </span>
           <h1 className="page-title">工作室设置</h1>
           <p className="page-subtitle">
-            统一管理站点外观、模块展示、权限白名单、企业 SSO 与邮件提醒。所有改动保存后即时生效。
+            统一管理站点外观、模块展示、登录权限、账号角色、企业 SSO 与邮件服务。站点级设置保存后即时生效，
+            工作区结构的修改会立即写入。
           </p>
         </div>
         <div className="page-actions settings-header-actions">
@@ -2715,18 +4376,22 @@ export default function SettingsPage() {
               <RotateCcw size={15} /> 撤销修改
             </button>
           ) : null}
-          <a className="btn btn-secondary btn-sm" href="/api/settings/schema" target="_blank" rel="noreferrer">
-            <FileJson size={15} /> JSON Schema
-          </a>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={handleSave}
-            disabled={saving || !canSave}
-          >
-            {saving ? <Loader2 size={16} className="spin" /> : <Save size={16} />}
-            {saving ? "保存中…" : saveLabel}
-          </button>
+          {isSiteTab ? (
+            <a className="btn btn-secondary btn-sm" href="/api/settings/schema" target="_blank" rel="noreferrer">
+              <FileJson size={15} /> JSON Schema
+            </a>
+          ) : null}
+          {isSiteTab ? (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleSave}
+              disabled={saving || !canSave}
+            >
+              {saving ? <Loader2 size={16} className="spin" /> : <Save size={16} />}
+              {saving ? "保存中…" : saveLabel}
+            </button>
+          ) : null}
         </div>
       </header>
 
@@ -2735,7 +4400,7 @@ export default function SettingsPage() {
           <ShieldCheck size={13} />
           当前身份 <strong>{adminName}</strong>
           <span className="settings-meta-divider">·</span>
-          设备管理员
+          {identityLabel}
         </span>
         <span className="settings-meta-chip">
           <FileJson size={13} />
@@ -2760,7 +4425,9 @@ export default function SettingsPage() {
       {workspaceError ? (
         <div className="settings-workspace-warning">
           <AlertTriangle size={14} />
-          <span>工作区数据加载失败：{workspaceError}。白名单的团队 / 开发组选择器可能不可用。</span>
+          <span>
+            工作区数据加载失败：{workspaceError}。「成员与权限」「账号与角色」中的团队 / 开发组选择器可能不可用。
+          </span>
           <button type="button" className="text-button" onClick={() => void loadWorkspace()}>
             重试
           </button>
@@ -2794,12 +4461,12 @@ export default function SettingsPage() {
             );
           })}
           <p className="settings-tabs-note">
-            <ShieldCheck size={13} /> 本页仅对部署设备内置 Admin 开放，保存后立即写入配置。
+            <ShieldCheck size={13} /> 站点级设置仅超级管理员可修改；团队 / 开发组管理员只能在「工作区设置」中管理自己的范围。
           </p>
         </nav>
 
         <div className="settings-main">
-          {allErrors.length ? (
+          {isSiteTab && allErrors.length ? (
             <div className="settings-error-panel" role="alert">
               <header className="settings-error-head">
                 <span className="settings-error-icon">
@@ -2840,6 +4507,7 @@ export default function SettingsPage() {
             </div>
           ) : null}
 
+          {activeTab === "workspace" ? <WorkspaceSettingsSection /> : null}
           {activeTab === "appearance" ? (
             <AppearanceSection draft={draft} update={update} errorsFor={errorsFor} />
           ) : null}
@@ -2855,11 +4523,17 @@ export default function SettingsPage() {
               meta={meta}
             />
           ) : null}
+          {activeTab === "accounts" ? (
+            <AccountsSection
+              workspace={workspace}
+              deviceAdminName={meta?.deviceAdminName ?? "Admin"}
+            />
+          ) : null}
           {activeTab === "sso" ? (
             <SsoSection draft={draft} update={update} errorsFor={errorsFor} />
           ) : null}
           {activeTab === "email" ? (
-            <EmailPanel settings={draft} update={update} errorsFor={errorsFor} />
+            <EmailSection draft={draft} update={update} errorsFor={errorsFor} />
           ) : null}
           {activeTab === "json" ? (
             <JsonWorkspace

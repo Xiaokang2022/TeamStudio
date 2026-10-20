@@ -13,14 +13,15 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import FRONTEND_DIST, settings_service
+from .config import FRONTEND_DIST, UPLOAD_DIR, settings_service
 from .db import init_db
-from .seed import seed_if_empty, seed_member_tasks_if_empty
-from .services import scheduler
+from .seed import seed_if_empty, seed_member_tasks_if_empty, seed_users_if_empty
 from .routers import auth as auth_router
 from .routers import bootstrap as bootstrap_router
 from .routers import email as email_router
+from .routers import profile as profile_router
 from .routers import settings as settings_router
+from .routers import users as users_router
 from .routers import workspaces as workspaces_router
 
 try:  # Feature routers are developed in parallel; keep API bootable during scaffolding.
@@ -36,11 +37,6 @@ try:  # Insights dashboard router (optional while it is being implemented).
 except ImportError:  # pragma: no cover - defensive during parallel development
     insights = None  # type: ignore[assignment]
 
-try:  # Bundled SMTP server (optional while it is being implemented).
-    from .services import mail_server
-except ImportError:  # pragma: no cover - defensive during parallel development
-    mail_server = None  # type: ignore[assignment]
-
 logger = logging.getLogger("teamstudio")
 
 
@@ -49,27 +45,20 @@ async def lifespan(app: FastAPI):
     init_db()
     seeded = seed_if_empty()
     seeded_tasks = seed_member_tasks_if_empty()
+    seeded_accounts = seed_users_if_empty()
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     logger.info(
-        "TeamStudio started (seeded=%s, memberTasksSeeded=%s)", seeded, seeded_tasks
+        "TeamStudio started (seeded=%s, memberTasksSeeded=%s, accountsSeeded=%s)",
+        seeded,
+        seeded_tasks,
+        seeded_accounts,
     )
-    scheduler.start_scheduler()
-    if mail_server is not None:
-        try:
-            await mail_server.start_mail_server()
-        except Exception:  # pragma: no cover - port conflicts must not break the API
-            logger.exception("内置邮件服务器启动失败，邮件中心暂不可用")
     yield
-    if mail_server is not None:
-        try:
-            await mail_server.stop_mail_server()
-        except Exception:  # pragma: no cover - best effort shutdown
-            logger.exception("内置邮件服务器停止失败")
-    await scheduler.stop_scheduler()
 
 
 app = FastAPI(
     title="TeamStudio API",
-    description="现代化团队工作室：团队 / 开发组协作、日历、红黑榜与邮件提醒",
+    description="现代化团队协作平台：邮箱验证码登录、个人主页、任务台账、责任田与数据洞察",
     version="1.0.0",
     lifespan=lifespan,
     docs_url="/api/docs",
@@ -143,6 +132,8 @@ app.include_router(auth_router.router)
 app.include_router(bootstrap_router.router)
 app.include_router(settings_router.router)
 app.include_router(email_router.router)
+app.include_router(users_router.router)
+app.include_router(profile_router.router)
 app.include_router(workspaces_router.router)
 if workspace and calendar and boards and tasks:
     app.include_router(workspace.router)
@@ -154,6 +145,9 @@ elif _FEATURE_IMPORT_ERROR:
 
 if insights is not None:
     app.include_router(insights.router)
+
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 if (FRONTEND_DIST / "assets").exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")

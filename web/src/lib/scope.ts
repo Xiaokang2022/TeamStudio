@@ -27,6 +27,16 @@ export const SCOPE_OPTIONS: {
   },
 ];
 
+export type ScopeOption = (typeof SCOPE_OPTIONS)[number];
+
+/**
+ * 浏览视角选项：`全部团队` 仅对超级管理员开放。
+ */
+export function scopeOptionsFor(isSuperAdmin: boolean): ScopeOption[] {
+  if (isSuperAdmin) return SCOPE_OPTIONS;
+  return SCOPE_OPTIONS.filter((option) => option.key !== "all");
+}
+
 export function isAggregateScope(scope: ScopeKind): boolean {
   return scope !== "group";
 }

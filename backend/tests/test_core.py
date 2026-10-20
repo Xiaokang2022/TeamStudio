@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from backend.app.auth import SessionIdentity, create_session_token
 from backend.app.config import DEFAULT_SETTINGS, settings_service
 from backend.app.main import app
-from backend.app.services.email_service import render_template, run_reminder_scan
+from backend.app.services.email_service import render_template
 
 
 def _base_settings() -> dict:
@@ -190,52 +190,54 @@ def test_id_whitelist_group_admin_from_signed_session():
         assert me["admin"]["groupIds"] == ["grp-frontend"]
         assert me["linkedMemberId"] == "m-su"
         assert me["permissions"]["canEditSelf"] is True
+        # Personal information: the linked owner may edit their own profile.
         updated = remote.patch(
             "/api/teams/team-aurora/groups/grp-frontend/members/m-su",
             json={"bio": "由本人更新"},
         )
         assert updated.status_code == 200
+        # Personal information of another member is reserved for super admins.
         denied = remote.patch(
             "/api/teams/team-aurora/groups/grp-frontend/members/m-lin",
-            json={"bio": "组管理员可编辑组内成员"},
+            json={"bio": "组管理员不能编辑他人个人信息"},
         )
-        assert denied.status_code == 200
+        assert denied.status_code == 403
+        assert denied.json()["error"]["code"] == "personal_info_forbidden"
+        # Organizational fields remain editable inside the admin domain.
+        organizational = remote.patch(
+            "/api/teams/team-aurora/groups/grp-frontend/members/m-lin",
+            json={"title": "前端体验组负责人"},
+        )
+        assert organizational.status_code == 200
         out_of_scope = remote.patch(
             "/api/teams/team-aurora/groups/grp-platform/members/m-zhou",
-            json={"bio": "越权修改"},
+            json={"title": "越权修改"},
         )
         assert out_of_scope.status_code == 403
 
 
-def test_email_defaults_are_safe_and_scan_short_circuits(client):
+def test_email_status_is_smtp_only_and_safe(client):
     status = client.get("/api/email/status")
     assert status.status_code == 200
     data = status.json()["data"]
-    assert data["enabled"] is False
-    assert data["pendingReminders"] == 0
-    scan = client.post("/api/email/scan")
-    assert scan.status_code == 200
-    assert scan.json()["data"]["reason"] == "邮件功能未启用"
-    preview = client.get("/api/email/preview")
-    assert preview.status_code == 200
-    assert "日历邮件提醒联调" in preview.json()["data"]["subject"]
+    assert data["configured"] is False
+    assert data["host"] == ""
+    assert "password" not in json.dumps(data)
+    # The bundled mailbox/scan/preview endpoints are gone in round 5.
+    assert client.post("/api/email/scan").status_code in (404, 405)
+    assert client.get("/api/email/preview").status_code == 404
+    assert client.get("/api/email/mailbox").status_code == 404
     bad_test = client.post("/api/email/test", json={"to": "not-an-email"})
     assert bad_test.status_code == 422
 
 
-def test_reminder_template_rendering():
+def test_verification_template_rendering():
     subject = render_template(
-        "[{{siteName}}] {{groupName}} · {{todoTitle}}", {"siteName": "星港", "groupName": "前端组", "todoTitle": "评审"}
+        "[{{siteName}}] 验证码", {"siteName": "星港", "code": "123456"}
     )
-    assert subject == "[星港] 前端组 · 评审"
+    assert subject == "[星港] 验证码"
     body = render_template("{{a}}/{{missing}}", {"a": "x"})
     assert body == "x/"
-
-
-def test_reminder_scan_returns_disabled_reason_without_smtp(client):
-    result = run_reminder_scan()
-    assert result["sent"] == 0
-    assert result["reason"] == "邮件功能未启用"
 
 
 def test_announcement_pin_hard_limit(client):

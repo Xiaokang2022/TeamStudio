@@ -127,7 +127,8 @@ export function AboutDialog({ open, onClose }: { open: boolean; onClose: () => v
             <div className="about-feature-list">
               <span><UsersRound size={14} /> 团队 / 开发组双层协作</span>
               <span><ListTodo size={14} /> 成员任务台账、健康状态与工作量负载</span>
-              <span><CalendarDays size={14} /> 日历待办与邮件提醒</span>
+              <span><CalendarDays size={14} /> 协作日历与到期管理</span>
+              <span><UsersRound size={14} /> 邮箱验证码登录与个人主页</span>
               <span><Layers3 size={14} /> 红黑榜、公告、链接与责任田矩阵</span>
               <span><Braces size={14} /> JSON + GUI 双模式设置</span>
               <span><Boxes size={14} /> SSO、IP/ID 白名单与模块开关</span>
@@ -146,7 +147,7 @@ export function AboutDialog({ open, onClose }: { open: boolean; onClose: () => v
         <section className="about-notes">
           <div>
             <span>项目定位</span>
-            <p>可本地部署的团队协作工作台，内置演示数据；生产部署前请配置企业 SSO、SMTP 与备份策略。</p>
+            <p>可本地部署的团队协作平台，内置演示数据；生产部署前请配置 SMTP 邮件服务、超级管理员与备份策略。</p>
           </div>
           <div>
             <span>数据与隐私</span>

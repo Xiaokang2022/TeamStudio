@@ -29,7 +29,8 @@ Examples: a normal/easy task = 2 points; a high/medium task = 4 points; an urgen
 
 Base: `/api/teams/{team_id}/groups/{group_id}`
 
-`GET /tasks?scope=group|team|all` (default `group`; see `CONTRACT.md` for the `scope` object):
+`GET /tasks?scope=group|team|all` (default `group`; see `CONTRACT.md` for the `scope` object).
+`all` is restricted to super administrators — every other identity receives `403 scope_forbidden`:
 
 ```json
 {
@@ -130,6 +131,9 @@ user:
 ## Browsing scope, time range and sorting (v3)
 
 - All reads accept `?scope=group|team|all`; single-group responses stay field-compatible with v2.
+- Only super administrators may use `all` (`permissions.canViewAllScope`); other identities are
+  limited to `group` / `team` and get `403 scope_forbidden` for `all`. The frontend hides the
+  `全部团队` option for them.
 - `GET /insights?scope=&range=1w|2w|1m|2m|3m|all` powers the analytics board; see `CONTRACT.md`.
 - Task ledger UI time range: `1w / 2w / 1m / 2m / 3m` (default `1m`). A task is "active" in the
   window when `createdAt`, `updatedAt` or `completedAt` falls inside it, or it is still open.

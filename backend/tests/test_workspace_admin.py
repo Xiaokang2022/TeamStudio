@@ -8,6 +8,7 @@ override again. Child-row cascade assertions read the SQLite database directly.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import Any, Iterator
 
@@ -21,9 +22,12 @@ OTHER_TEAM_ID = "team-voyage"
 GROUP_ID = "grp-frontend"
 OTHER_GROUP_ID = "grp-data"
 MEMBER_ID = "m-chen"
+MEMBERS_BASE = f"/api/teams/{TEAM_ID}/groups/{GROUP_ID}/members"
+MEMBER_URL = f"{MEMBERS_BASE}/{MEMBER_ID}"
 
 CONFIRM_TEAM_MESSAGE = "请输入完整的团队名称以确认删除"
 CONFIRM_GROUP_MESSAGE = "请输入完整的开发组名称以确认删除"
+PERSONAL_INFO_MESSAGE = "个人信息仅超级管理员和本人可编辑"
 
 
 # --------------------------------------------------------------------------- identities
@@ -547,6 +551,162 @@ def test_unknown_team_and_group_return_404(client, as_user) -> None:
     response = client.post("/api/workspace/teams/team-missing/groups", json={"name": "x"})
     assert response.status_code == 404
     assert _error(response)["code"] == "team_not_found"
+
+
+# --------------------------------------------------------------------------- member personal info
+
+
+def test_member_payload_exposes_avatar(client, as_user) -> None:
+    as_user(device_admin())
+    overview = client.get(
+        f"/api/teams/{TEAM_ID}/groups/{GROUP_ID}/overview"
+    ).json()["data"]
+    assert overview["members"]
+    assert all("avatar" in member for member in overview["members"])
+    seeded = next(member for member in overview["members"] if member["id"] == MEMBER_ID)
+    assert seeded["avatar"] == ""
+
+    created = client.post(
+        MEMBERS_BASE,
+        json={
+            "name": "头像成员",
+            "email": "avatar.member@corp.example",
+            "avatar": "/uploads/avatars/member.png",
+        },
+    ).json()["data"]["member"]
+    assert created["avatar"] == "/uploads/avatars/member.png"
+    assert (
+        _scalar("SELECT avatar_url FROM members WHERE id=?", (created["id"],))
+        == "/uploads/avatars/member.png"
+    )
+    # Reading the overview again shows the stored avatar.
+    members = client.get(
+        f"/api/teams/{TEAM_ID}/groups/{GROUP_ID}/overview"
+    ).json()["data"]["members"]
+    listed = next(member for member in members if member["id"] == created["id"])
+    assert listed["avatar"] == "/uploads/avatars/member.png"
+
+
+def test_organizational_admin_cannot_edit_member_personal_fields(client, as_user) -> None:
+    personal_payloads = [
+        {"name": "越权改名"},
+        {"email": "hijack@corp.example"},
+        {"bio": "越权简介"},
+        {"avatarColor": "#123456"},
+        {"tags": ["越权标签"]},
+        {"skills": ["越权技能"]},
+        {"avatar": "/uploads/avatars/hijack.png"},
+        {"avatarUrl": "/uploads/avatars/hijack.png"},
+    ]
+    for user in (team_admin(TEAM_ID), group_admin()):
+        as_user(user)
+        for payload in personal_payloads:
+            response = client.patch(MEMBER_URL, json=payload)
+            assert response.status_code == 403, (user.name, payload)
+            error = _error(response)
+            assert error["code"] == "personal_info_forbidden", (user.name, payload)
+            assert error["message"] == PERSONAL_INFO_MESSAGE
+    # Rejected requests changed nothing.
+    assert _scalar("SELECT name FROM members WHERE id=?", (MEMBER_ID,)) == "陈屿"
+    assert _scalar("SELECT avatar_url FROM members WHERE id=?", (MEMBER_ID,)) == ""
+    assert _scalar("SELECT email FROM members WHERE id=?", (MEMBER_ID,)) == "chen.yu@corp.example"
+
+    # Organizational fields stay editable for an in-scope admin.
+    for user in (team_admin(TEAM_ID), group_admin()):
+        as_user(user)
+        response = client.patch(
+            MEMBER_URL,
+            json={"title": "资深前端工程师", "role": "核心成员", "status": "busy"},
+        )
+        assert response.status_code == 200, user.name
+        member = response.json()["data"]["member"]
+        assert (member["title"], member["role"], member["status"]) == (
+            "资深前端工程师",
+            "核心成员",
+            "busy",
+        )
+
+
+def test_self_and_super_edit_member_personal_fields_and_sync_account(client, as_user) -> None:
+    as_user(linked_member())
+    response = client.patch(
+        MEMBER_URL,
+        json={
+            "name": "陈屿（本人）",
+            "bio": "本人更新的简介",
+            "avatarColor": "#111111",
+            "tags": ["TypeScript", "日历"],
+            "skills": ["性能优化"],
+            "avatar": "/uploads/avatars/self.png",
+        },
+    )
+    assert response.status_code == 200
+    member = response.json()["data"]["member"]
+    assert member["name"] == "陈屿（本人）"
+    assert member["bio"] == "本人更新的简介"
+    assert member["avatar"] == "/uploads/avatars/self.png"
+    assert member["avatarColor"] == "#111111"
+    assert member["skills"] == ["性能优化"]
+
+    # Personal edits mirror onto the linked users row (matched by e-mail).
+    account = _query("SELECT name, avatar, bio, skills FROM users WHERE id='chen.yu'")[0]
+    assert account[0] == "陈屿（本人）"
+    assert account[1] == "/uploads/avatars/self.png"
+    assert account[2] == "本人更新的简介"
+    assert json.loads(account[3]) == ["性能优化"]
+
+    # An in-scope admin whose account e-mail matches the member counts as the owner.
+    matching_admin = CurrentUser(
+        id="chen.yu",
+        name="陈屿",
+        email="chen.yu@corp.example",
+        authenticated=True,
+        source="sso",
+        admin_role="group_admin",
+        group_ids={GROUP_ID},
+    )
+    as_user(matching_admin)
+    assert client.patch(MEMBER_URL, json={"bio": "邮箱匹配本人"}).status_code == 200
+
+    # A super administrator may also edit another member's personal fields.
+    as_user(device_admin())
+    response = client.patch(
+        MEMBER_URL,
+        json={"bio": "超级管理员更新的简介", "avatarUrl": "/uploads/avatars/super.png"},
+    )
+    assert response.status_code == 200
+    member = response.json()["data"]["member"]
+    assert member["bio"] == "超级管理员更新的简介"
+    assert member["avatar"] == "/uploads/avatars/super.png"
+
+    # Changing the member e-mail mirrors onto the previously linked account, never onto
+    # the account that the new address would point at.
+    su_account_before = _query("SELECT bio, avatar FROM users WHERE id='su.wan'")[0]
+    as_user(linked_member())
+    response = client.patch(
+        MEMBER_URL, json={"email": "su.wan@corp.example", "bio": "重链接后的简介"}
+    )
+    assert response.status_code == 200
+    assert response.json()["data"]["member"]["email"] == "su.wan@corp.example"
+    assert _scalar("SELECT bio FROM users WHERE id='chen.yu'") == "重链接后的简介"
+    assert _query("SELECT bio, avatar FROM users WHERE id='su.wan'")[0] == su_account_before
+
+
+def test_workspace_scope_all_is_super_only(client, as_user) -> None:
+    overview_url = f"/api/teams/{TEAM_ID}/groups/{GROUP_ID}/overview"
+    works_url = f"{MEMBERS_BASE}/{MEMBER_ID}/works"
+    for user in (team_admin(TEAM_ID), group_admin(), linked_member()):
+        as_user(user)
+        for path in (overview_url, works_url):
+            response = client.get(path, params={"scope": "all"})
+            assert response.status_code == 403, (user.name, path)
+            assert _error(response)["code"] == "scope_forbidden"
+
+    as_user(team_admin(TEAM_ID))
+    assert client.get(overview_url, params={"scope": "team"}).status_code == 200
+    as_user(device_admin())
+    assert client.get(overview_url, params={"scope": "all"}).status_code == 200
+    assert client.get(works_url, params={"scope": "all"}).status_code == 200
 
 
 # --------------------------------------------------------------------------- audit

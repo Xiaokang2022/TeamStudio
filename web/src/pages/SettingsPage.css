@@ -1186,19 +1186,6 @@
   color: var(--red);
 }
 
-.settings-offsets {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.settings-offset-chip.is-active {
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
-  font-weight: 650;
-}
-
 .settings-group-picker {
   display: flex;
   flex-direction: column;
@@ -1594,14 +1581,6 @@
   .settings-preview-chip {
     display: none;
   }
-
-  .settings-offsets .settings-list-add {
-    flex-wrap: wrap;
-  }
-
-  .settings-offsets .settings-list-add .input {
-    flex: 1 1 100%;
-  }
 }
 
 @media (max-width: 520px) {
@@ -1624,5 +1603,497 @@
 
   .settings-card-body {
     padding: 14px;
+  }
+}
+
+/* ============================================================
+   Round 5 · workspace (domain) settings
+   ============================================================ */
+
+.settings-team-picker {
+  gap: 6px;
+}
+
+.settings-team-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+.settings-domain-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-domain-summary-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 11px;
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-size: 10.5px;
+}
+
+.settings-domain-summary-item strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.settings-domain-summary-item svg {
+  color: var(--accent);
+  opacity: 0.85;
+}
+
+.settings-domain-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-domain-team {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  padding: 15px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface-2);
+}
+
+.settings-domain-team-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  flex-wrap: wrap;
+}
+
+.settings-domain-team-mark {
+  width: 38px;
+  height: 38px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.settings-domain-team-copy {
+  flex: 1;
+  min-width: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.settings-domain-team-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.settings-domain-team-title strong {
+  font-size: 13.5px;
+  letter-spacing: -0.01em;
+}
+
+.settings-domain-team-copy small {
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+.settings-domain-team-copy code,
+.settings-domain-group-copy code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.settings-domain-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.settings-domain-form {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.settings-domain-readonly {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.settings-domain-readonly-compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.settings-domain-readonly-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-domain-readonly-row > span {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.settings-domain-readonly-row > strong {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  word-break: break-word;
+}
+
+.settings-domain-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 2px;
+  border-top: 1px dashed var(--border);
+}
+
+.settings-domain-groups-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.settings-domain-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.settings-domain-group-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+
+.settings-domain-group-dot {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border-radius: 50%;
+  margin-top: 5px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+.settings-domain-group-copy {
+  flex: 1;
+  min-width: 140px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-domain-group-copy strong {
+  font-size: 12px;
+}
+
+.settings-domain-group-copy small {
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.settings-domain-group-form {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+/* ============================================================
+   Round 5 · accounts & roles
+   ============================================================ */
+
+.settings-account-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.settings-account-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-account-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--surface-2);
+}
+
+.settings-account-row.is-device {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--accent) 26%, var(--border));
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface-2));
+}
+
+.settings-account-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+}
+
+.settings-account-avatar {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--border-strong);
+}
+
+.settings-account-device-avatar {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border-radius: 12px;
+  font-size: 12px;
+  display: grid;
+  place-items: center;
+}
+
+.settings-account-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-account-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.settings-account-name strong {
+  font-size: 12.5px;
+}
+
+.settings-account-name .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.settings-account-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+.settings-account-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.settings-account-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.settings-account-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.settings-account-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ============================================================
+   Round 5 · SMTP relay / verification mail
+   ============================================================ */
+
+.settings-email-status {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.settings-email-error-text {
+  color: var(--red) !important;
+  font-size: 10.5px !important;
+}
+
+.settings-email-test {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-email-test .input {
+  flex: 1;
+  min-width: 200px;
+}
+
+.settings-email-tokens {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.settings-email-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.settings-email-preview-label {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.settings-email-preview pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--text-2);
+}
+
+.settings-email-logs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-email-log {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface-2);
+}
+
+.settings-email-log.is-failed {
+  border-color: color-mix(in srgb, var(--red) 26%, var(--border));
+  background: linear-gradient(180deg, var(--red-soft), var(--surface-2));
+}
+
+.settings-email-log-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-email-log-copy strong {
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.settings-email-log-copy small {
+  font-size: 10.5px;
+  color: var(--text-3);
+  word-break: break-word;
+}
+
+.settings-email-log-copy em {
+  font-style: normal;
+  font-size: 10.5px;
+  color: var(--red);
+  word-break: break-word;
+}
+
+@media (max-width: 1080px) {
+  .settings-email-status {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .settings-account-main {
+    flex-wrap: wrap;
+  }
+
+  .settings-account-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .settings-domain-readonly,
+  .settings-domain-readonly-compact {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-domain-actions {
+    margin-left: 0;
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .settings-email-status {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-email-test .input {
+    flex: 1 1 100%;
   }
 }

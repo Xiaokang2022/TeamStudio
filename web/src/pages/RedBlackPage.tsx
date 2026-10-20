@@ -3,6 +3,7 @@ import {
   CalendarRange,
   ChevronLeft,
   ChevronRight,
+  Info,
   Pencil,
   Plus,
   Quote,
@@ -72,6 +73,7 @@ function BoardColumn({
   entries,
   showScores,
   colorOf,
+  showGroup,
 }: {
   side: Side;
   label: string;
@@ -79,6 +81,8 @@ function BoardColumn({
   entries: RedBlackEntry[];
   showScores: boolean;
   colorOf: (memberId: string | null) => string | undefined;
+  /** Aggregate scopes merge several groups: tag every entry with its group. */
+  showGroup: boolean;
 }) {
   return (
     <section className={cn("card rb-column", `rb-column-${side}`)}>
@@ -101,7 +105,7 @@ function BoardColumn({
       ) : (
         <ol className="rb-entry-list">
           {entries.map((entry, index) => (
-            <li className="rb-entry" key={entry.id}>
+            <li className="rb-entry" key={`${entry.groupId ?? ""}-${entry.id}`}>
               <span className="rb-rank">{String(index + 1).padStart(2, "0")}</span>
               <Avatar name={entry.memberName || "匿名"} color={colorOf(entry.memberId)} size="sm" />
               <div className="rb-entry-body">
@@ -114,7 +118,17 @@ function BoardColumn({
                     </span>
                   ) : null}
                 </div>
-                <span className="rb-entry-name">{entry.memberName || "未署名"}</span>
+                <span className="rb-entry-name">
+                  {entry.memberName || "未署名"}
+                  {showGroup && entry.groupName ? (
+                    <span
+                      className="rb-group-badge"
+                      title={entry.teamName ? `所属团队：${entry.teamName}` : undefined}
+                    >
+                      {entry.groupName}
+                    </span>
+                  ) : null}
+                </span>
                 {entry.reason ? <p className="rb-entry-reason">{entry.reason}</p> : null}
                 {entry.createdAt ? (
                   <time className="rb-entry-date" dateTime={entry.createdAt}>
@@ -256,7 +270,7 @@ function DraftColumn({
 }
 
 export default function RedBlackPage() {
-  const { currentTeam, currentGroup, canManageActiveGroup, config } = useApp();
+  const { currentTeam, currentGroup, canManageActiveGroup, config, scope, scopeLabel } = useApp();
   const { toast } = useToast();
 
   const teamId = currentTeam?.id ?? "";
@@ -264,6 +278,9 @@ export default function RedBlackPage() {
   const showScores = config?.redblack.showScores ?? true;
   const redLabel = config?.redblack.redLabel || "红榜 · 高光时刻";
   const blackLabel = config?.redblack.blackLabel || "黑榜 · 待改进";
+  const aggregate = scope !== "group";
+  // Aggregate scopes merge boards read-only; writes always target the group scope.
+  const canEditBoard = canManageActiveGroup && !aggregate;
 
   const [data, setData] = useState<RedBlackData | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
@@ -277,13 +294,20 @@ export default function RedBlackPage() {
   const [draft, setDraft] = useState<BoardDraft>({ theme: "", red: [newEntry()], black: [newEntry()] });
 
   const lastGroupRef = useRef("");
+  const lastScopeRef = useRef(scope);
   const requestRef = useRef(0);
 
   useEffect(() => {
     if (!teamId || !groupId) return;
-    if (lastGroupRef.current !== groupId) {
+    const groupChanged = lastGroupRef.current !== groupId;
+    const scopeChanged = lastScopeRef.current !== scope;
+    if (groupChanged || scopeChanged) {
       lastGroupRef.current = groupId;
+      lastScopeRef.current = scope;
       setEditorOpen(false);
+      setDraft({ theme: "", red: [newEntry()], black: [newEntry()] });
+    }
+    if (groupChanged) {
       setData(null);
       setMembers([]);
       if (monthSelector) {
@@ -292,14 +316,18 @@ export default function RedBlackPage() {
         setMonthSelector("");
         return;
       }
+    } else if (scopeChanged) {
+      // Drop the previous scope's merged board rather than flashing stale entries.
+      setData(null);
+      setMembers([]);
     }
     let cancelled = false;
     const seq = ++requestRef.current;
     setLoading(true);
     setError("");
     void Promise.all([
-      api.redblack(teamId, groupId, monthSelector || undefined),
-      api.overview(teamId, groupId).catch(() => null),
+      api.redblack(teamId, groupId, monthSelector || undefined, scope),
+      api.overview(teamId, groupId, scope).catch(() => null),
     ])
       .then(([boardData, overview]) => {
         if (cancelled || seq !== requestRef.current) return;
@@ -318,7 +346,7 @@ export default function RedBlackPage() {
     return () => {
       cancelled = true;
     };
-  }, [teamId, groupId, monthSelector, refreshTick, toast]);
+  }, [teamId, groupId, scope, monthSelector, refreshTick, toast]);
 
   const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
   const colorOf = (memberId: string | null) => (memberId ? memberById.get(memberId)?.avatarColor : undefined);
@@ -327,6 +355,10 @@ export default function RedBlackPage() {
   const month = data?.month ?? monthSelector ?? "";
   const totalEntries = board ? board.red.length + board.black.length : 0;
   const isEmptyBoard = !board || (!board.theme && totalEntries === 0);
+  const mergedGroupCount = useMemo(() => {
+    if (!board) return 0;
+    return new Set([...board.red, ...board.black].map((entry) => entry.groupId).filter(Boolean)).size;
+  }, [board]);
   const monthOptions = useMemo(() => {
     const months = data?.availableMonths ?? [];
     return Array.from(new Set(month ? [month, ...months] : months)).sort().reverse();
@@ -374,7 +406,7 @@ export default function RedBlackPage() {
   };
 
   const handleSave = async () => {
-    if (!teamId || !groupId) return;
+    if (!teamId || !groupId || aggregate) return;
     const normalize = (list: DraftEntry[]) =>
       list
         .filter((entry) => entry.memberName.trim() || entry.title.trim() || entry.reason.trim())
@@ -445,7 +477,7 @@ export default function RedBlackPage() {
   };
 
   const handleRollover = async () => {
-    if (!teamId || !groupId) return;
+    if (!teamId || !groupId || aggregate) return;
     setRolling(true);
     try {
       const source = data?.month ?? monthKey();
@@ -490,7 +522,9 @@ export default function RedBlackPage() {
           </span>
           <h1 className="page-title">红黑榜</h1>
           <p className="page-subtitle">
-            每月一次公开复盘：把值得被看见的高光与需要改进的教训写进团队叙事，让成长有迹可循。
+            {aggregate
+              ? `汇总展示${scopeLabel}下各开发组的红黑榜记录，按月份回看团队共同的高光与复盘。`
+              : "每月一次公开复盘：把值得被看见的高光与需要改进的教训写进团队叙事，让成长有迹可循。"}
           </p>
         </div>
         <div className="page-actions">
@@ -527,7 +561,7 @@ export default function RedBlackPage() {
               <ChevronRight size={16} />
             </button>
           </div>
-          {canManageActiveGroup ? (
+          {canEditBoard ? (
             <>
               <button
                 type="button"
@@ -545,6 +579,13 @@ export default function RedBlackPage() {
           ) : null}
         </div>
       </header>
+
+      {aggregate ? (
+        <p className="rb-scope-hint" role="status">
+          <Info size={14} />
+          团队 / 全部团队视角为只读汇总，切换到开发组视角可编辑
+        </p>
+      ) : null}
 
       {error ? (
         <div className="inline-error">
@@ -582,12 +623,16 @@ export default function RedBlackPage() {
               </span>
               <div className="rb-hero-theme">
                 <Quote size={22} className="rb-quote" />
-                <h2>{board?.theme?.trim() || "本月主题征集中"}</h2>
+                <h2>{aggregate ? `汇总视角 · ${scopeLabel}` : board?.theme?.trim() || "本月主题征集中"}</h2>
               </div>
               <p className="rb-hero-note">
-                {isEmptyBoard
-                  ? "这个月还没有记录。被忽略的贡献值得补记，踩过的坑也值得复盘的勇气。"
-                  : `本期共记录 ${totalEntries} 条上榜与复盘条目，每一次坦诚都是团队的一次升级。`}
+                {aggregate
+                  ? isEmptyBoard
+                    ? `这个月${scopeLabel}还没有可汇总的红黑榜记录，切换到开发组视角可以创建本月榜单。`
+                    : `本期汇总 ${scopeLabel} 共 ${totalEntries} 条记录，来自 ${mergedGroupCount ? `${mergedGroupCount} 个` : "多个"}开发组；团队 / 全部团队视角为只读汇总。`
+                  : isEmptyBoard
+                    ? "这个月还没有记录。被忽略的贡献值得补记，踩过的坑也值得复盘的勇气。"
+                    : `本期共记录 ${totalEntries} 条上榜与复盘条目，每一次坦诚都是团队的一次升级。`}
               </p>
             </div>
             <div className="rb-hero-stats">
@@ -607,39 +652,49 @@ export default function RedBlackPage() {
           </section>
 
           {isEmptyBoard ? (
-            <EmptyState
-              title="这个月还没有红黑榜"
-              description={
-                canManageActiveGroup
-                  ? "创建本月榜单，写下值得被看见的名字与值得复盘的教训。"
-                  : "管理员还没有发布本月榜单，稍后再来看看吧。"
-              }
-              icon={<Trophy size={24} />}
-              action={
-                canManageActiveGroup ? (
-                  <button type="button" className="btn btn-primary" onClick={openEditor}>
-                    <Plus size={15} /> 创建本月榜单
-                  </button>
-                ) : undefined
-              }
-            />
+            aggregate ? (
+              <EmptyState
+                title="这个月还没有红黑榜汇总"
+                description={`${scopeLabel}下的开发组还没有发布本月红黑榜，切换到开发组视角可以创建或编辑。`}
+                icon={<Trophy size={24} />}
+              />
+            ) : (
+              <EmptyState
+                title="这个月还没有红黑榜"
+                description={
+                  canEditBoard
+                    ? "创建本月榜单，写下值得被看见的名字与值得复盘的教训。"
+                    : "管理员还没有发布本月榜单，稍后再来看看吧。"
+                }
+                icon={<Trophy size={24} />}
+                action={
+                  canEditBoard ? (
+                    <button type="button" className="btn btn-primary" onClick={openEditor}>
+                      <Plus size={15} /> 创建本月榜单
+                    </button>
+                  ) : undefined
+                }
+              />
+            )
           ) : (
-            <div className="rb-columns" key={month}>
+            <div className="rb-columns" key={`${scope}-${month}`}>
               <BoardColumn
                 side="red"
                 label={redLabel}
-                hint="值得被看见的高光时刻"
+                hint={aggregate ? "汇总的高光时刻" : "值得被看见的高光时刻"}
                 entries={board?.red ?? []}
                 showScores={showScores}
                 colorOf={colorOf}
+                showGroup={aggregate}
               />
               <BoardColumn
                 side="black"
                 label={blackLabel}
-                hint="值得被记住的教训复盘"
+                hint={aggregate ? "汇总的教训复盘" : "值得被记住的教训复盘"}
                 entries={board?.black ?? []}
                 showScores={showScores}
                 colorOf={colorOf}
+                showGroup={aggregate}
               />
             </div>
           )}
@@ -647,7 +702,7 @@ export default function RedBlackPage() {
       )}
 
       <Modal
-        open={editorOpen}
+        open={editorOpen && canEditBoard}
         onClose={() => {
           if (!saving) setEditorOpen(false);
         }}

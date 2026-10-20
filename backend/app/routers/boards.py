@@ -78,7 +78,22 @@ def _member_ref(conn, group_id: str, value: Any, field: str) -> str | None:
 # --------------------------------------------------------------------------- red / black board
 
 
+_BOARD_SELECT = (
+    "SELECT b.*, g.name AS group_name, g.team_id AS group_team_id, tm.name AS team_name "
+    "FROM redblack_boards b JOIN groups g ON g.id=b.group_id "
+    "JOIN teams tm ON tm.id=g.team_id "
+)
+
+_ENTRY_SELECT = (
+    "SELECT e.*, b.group_id, g.name AS group_name, g.team_id AS group_team_id, "
+    "tm.name AS team_name FROM redblack_entries e "
+    "JOIN redblack_boards b ON b.id=e.board_id "
+    "JOIN groups g ON g.id=b.group_id JOIN teams tm ON tm.id=g.team_id "
+)
+
+
 def _entry_payload(entry: dict[str, Any]) -> dict[str, Any]:
+    """Red/black entry plus the owning group/team, so aggregate views are self-describing."""
     return {
         "id": entry["id"],
         "side": entry["side"],
@@ -87,44 +102,80 @@ def _entry_payload(entry: dict[str, Any]) -> dict[str, Any]:
         "title": entry["title"],
         "reason": entry.get("reason", ""),
         "score": float(entry.get("score") or 0),
+        "groupId": entry.get("group_id", ""),
+        "groupName": entry.get("group_name", ""),
+        "teamId": entry.get("group_team_id", ""),
+        "teamName": entry.get("team_name", ""),
         "createdAt": entry.get("created_at", ""),
     }
 
 
-def _board_payload(conn, board: dict[str, Any]) -> dict[str, Any]:
-    entries = rows(
+def _board_entries(conn, board_id: str) -> list[dict[str, Any]]:
+    """Entries of one board joined with their group/team metadata."""
+    return rows(
         conn,
-        "SELECT * FROM redblack_entries WHERE board_id=? ORDER BY side, sort_order, created_at",
-        (board["id"],),
+        _ENTRY_SELECT + "WHERE e.board_id=? ORDER BY e.side, e.sort_order, e.created_at",
+        (board_id,),
     )
+
+
+def _board_payload(conn, board: dict[str, Any]) -> dict[str, Any]:
+    entries = _board_entries(conn, board["id"])
     return {
         "id": board["id"],
         "groupId": board.get("group_id", ""),
+        "groupName": board.get("group_name", ""),
+        "teamId": board.get("group_team_id", ""),
+        "teamName": board.get("team_name", ""),
         "month": board["month"],
         "theme": board.get("theme", ""),
         "updatedAt": board.get("updated_at", ""),
         "red": [_entry_payload(entry) for entry in entries if entry["side"] == "red"],
         "black": [_entry_payload(entry) for entry in entries if entry["side"] == "black"],
+        "exists": True,
     }
 
 
-def _empty_board(month: str) -> dict[str, Any]:
+def _boards_for_scope(conn, group_ids: list[str], selected: str) -> list[dict[str, Any]]:
+    """Boards of ``selected`` month for every group in the read scope, in group order."""
+    return rows(
+        conn,
+        _BOARD_SELECT
+        + f"WHERE b.group_id IN ({_in_clause(group_ids)}) AND b.month=? "
+        "ORDER BY g.sort_order, g.name",
+        (*group_ids, selected),
+    )
+
+
+def _merged_board(selected: str, boards: list[dict[str, Any]]) -> dict[str, Any]:
+    """Read-only merge of every scoped group's board for aggregate (team/all) scopes."""
+    red: list[dict[str, Any]] = []
+    black: list[dict[str, Any]] = []
+    for board in boards:
+        red.extend(board["red"])
+        black.extend(board["black"])
     return {
         "id": None,
-        "month": month,
+        "groupId": None,
+        "month": selected,
         "theme": "",
         "updatedAt": None,
-        "red": [],
-        "black": [],
-        "exists": False,
+        "red": red,
+        "black": black,
+        "exists": bool(boards),
     }
 
 
-def _available_months(conn, group_id: str, selected: str) -> list[str]:
+def _available_months(conn, group_ids: list[str], selected: str) -> list[str]:
+    if not group_ids:
+        return [selected]
     months = {
         item["month"]
         for item in rows(
-            conn, "SELECT DISTINCT month FROM redblack_boards WHERE group_id=?", (group_id,)
+            conn,
+            "SELECT DISTINCT month FROM redblack_boards "
+            f"WHERE group_id IN ({_in_clause(group_ids)})",
+            tuple(group_ids),
         )
     }
     months.add(selected)
@@ -190,20 +241,34 @@ def get_redblack(
     team_id: str,
     group_id: str,
     month: str | None = Query(default=None),
+    scope: str = Query(default="group"),
     user: CurrentUser = Depends(require_read_access),
 ):
     selected = parse_month(month)
     with db() as conn:
         get_group(conn, team_id, group_id)
-        board = row(
-            conn,
-            "SELECT * FROM redblack_boards WHERE group_id=? AND month=?",
-            (group_id, selected),
-        )
-        available = _available_months(conn, group_id, selected)
-        # ``null`` board lets the frontend show its dedicated empty state.
-        payload = _board_payload(conn, board) if board else None
-    return ok({"month": selected, "board": payload, "availableMonths": available})
+        ctx = resolve_scope(conn, team_id, group_id, scope, user)
+        boards = [
+            _board_payload(conn, board)
+            for board in _boards_for_scope(conn, ctx["groupIds"], selected)
+        ]
+        if ctx["kind"] == "group":
+            # Group scope keeps the single-board semantics (theme + writable board).
+            # ``null`` lets the frontend show its dedicated empty state.
+            board = boards[0] if boards else None
+        else:
+            # Aggregate scopes merge every scoped group's entries for read-only display.
+            board = _merged_board(selected, boards)
+        available = _available_months(conn, ctx["groupIds"], selected)
+    return ok(
+        {
+            "month": selected,
+            "scope": ctx,
+            "board": board,
+            "boards": boards,
+            "availableMonths": available,
+        }
+    )
 
 
 @router.put("/redblack")
@@ -270,9 +335,9 @@ def upsert_redblack(
             {"month": selected, "red": len(red_entries), "black": len(black_entries)},
         )
         board = _board_payload(
-            conn, row(conn, "SELECT * FROM redblack_boards WHERE id=?", (board_id,))
+            conn, row(conn, _BOARD_SELECT + "WHERE b.id=?", (board_id,))
         )
-        available = _available_months(conn, group_id, selected)
+        available = _available_months(conn, [group_id], selected)
     return ok({"month": selected, "board": board, "availableMonths": available})
 
 
@@ -296,7 +361,7 @@ def rollover_redblack(
         )
         target = row(
             conn,
-            "SELECT * FROM redblack_boards WHERE group_id=? AND month=?",
+            _BOARD_SELECT + "WHERE b.group_id=? AND b.month=?",
             (group_id, target_month),
         )
         created = False
@@ -324,10 +389,12 @@ def rollover_redblack(
                 board_id,
                 {"from": source_month, "to": target_month},
             )
-            target = row(conn, "SELECT * FROM redblack_boards WHERE id=?", (board_id,))
+            target = row(
+                conn, _BOARD_SELECT + "WHERE b.id=?", (board_id,)
+            )
             created = True
         board = _board_payload(conn, target)
-        available = _available_months(conn, group_id, target_month)
+        available = _available_months(conn, [group_id], target_month)
     return ok(
         {
             "month": target_month,
@@ -403,7 +470,7 @@ def list_links(
 ):
     with db() as conn:
         get_group(conn, team_id, group_id)
-        ctx = resolve_scope(conn, team_id, group_id, scope)
+        ctx = resolve_scope(conn, team_id, group_id, scope, user)
         group_ids = ctx["groupIds"]
         placeholders = _in_clause(group_ids)
         items = rows(
@@ -653,7 +720,7 @@ def list_matrix(
 ):
     with db() as conn:
         get_group(conn, team_id, group_id)
-        ctx = resolve_scope(conn, team_id, group_id, scope)
+        ctx = resolve_scope(conn, team_id, group_id, scope, user)
         group_ids = ctx["groupIds"]
         items = rows(
             conn,
@@ -857,7 +924,7 @@ def list_announcements(
 ):
     with db() as conn:
         get_group(conn, team_id, group_id)
-        ctx = resolve_scope(conn, team_id, group_id, scope)
+        ctx = resolve_scope(conn, team_id, group_id, scope, user)
         group_ids = ctx["groupIds"]
         items = rows(
             conn,

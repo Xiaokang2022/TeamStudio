@@ -19,7 +19,7 @@
     "e2e:select": "node e2e/t3-select-calendar.mjs",
     "e2e:tags": "node e2e/t4-tasks.mjs",
     "e2e:insights": "node e2e/t4-insights-real.mjs",
-    "e2e:mail": "node e2e/t6-mail.mjs"
+    "e2e:round5": "node e2e/round5-acceptance.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.59.0",

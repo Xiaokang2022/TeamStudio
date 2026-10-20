@@ -98,7 +98,15 @@ def test_all_scope_aggregates_every_team(client):
 
 
 def test_invalid_scope_is_rejected(client):
-    for path in ("overview", "tasks", "todos", "links", "matrix", "announcements"):
+    for path in (
+        "overview",
+        "tasks",
+        "todos",
+        "links",
+        "matrix",
+        "announcements",
+        "redblack",
+    ):
         response = client.get(f"{BASE}/{path}?scope=bogus")
         assert response.status_code == 422, path
         assert response.json()["error"]["code"] == "invalid_scope"
@@ -202,7 +210,47 @@ def test_member_works_scope(client):
     assert client.get(f"{BASE}/members/m-zhou/works?scope=team").status_code == 200
 
 
-def test_guest_can_read_all_scopes(guest_client):
+def test_redblack_scope_follows_view(client):
+    month = date.today().strftime("%Y-%m")
+
+    group_data = _data(client.get(f"{BASE}/redblack?month={month}"))
+    assert group_data["month"] == month
+    assert group_data["scope"]["kind"] == "group"
+    assert group_data["board"]["groupId"] == GROUP_ID
+    assert group_data["board"]["theme"]
+    assert [board["groupId"] for board in group_data["boards"]] == [GROUP_ID]
+    for entry in group_data["board"]["red"] + group_data["board"]["black"]:
+        assert entry["groupId"] == GROUP_ID
+        assert entry["groupName"] == "前端体验组"
+        assert entry["teamId"] == TEAM_ID
+        assert entry["teamName"] == "星港产品团队"
+
+    team_data = _data(client.get(f"{BASE}/redblack?month={month}&scope=team"))
+    assert team_data["scope"]["kind"] == "team"
+    assert {board["groupId"] for board in team_data["boards"]} == TEAM_GROUPS
+    merged = team_data["board"]
+    assert merged["id"] is None
+    assert merged["exists"] is True
+    assert {entry["groupId"] for entry in merged["red"]} == TEAM_GROUPS
+    assert all(entry["groupName"] and entry["teamName"] for entry in merged["black"])
+
+    all_data = _data(client.get(f"{BASE}/redblack?month={month}&scope=all"))
+    assert all_data["scope"]["kind"] == "all"
+    assert {board["groupId"] for board in all_data["boards"]} == ALL_GROUPS
+    assert len(all_data["board"]["red"]) > len(team_data["board"]["red"])
+    assert len(all_data["board"]["black"]) >= len(team_data["board"]["black"])
+
+    # A month without any scoped board merges to an empty (non-null) aggregate board.
+    empty = _data(client.get(f"{BASE}/redblack?month=2030-01&scope=team"))
+    assert empty["board"]["id"] is None
+    assert empty["board"]["exists"] is False
+    assert empty["board"]["red"] == [] and empty["board"]["black"] == []
+    assert empty["boards"] == []
+    # Group scope keeps the legacy null board for a missing month.
+    assert _data(client.get(f"{BASE}/redblack?month=2030-01"))["board"] is None
+
+
+def test_non_super_scope_all_is_forbidden(guest_client):
     for path in (
         "overview",
         "tasks",
@@ -211,7 +259,27 @@ def test_guest_can_read_all_scopes(guest_client):
         "matrix",
         "announcements",
         "insights",
+        "redblack",
     ):
         response = guest_client.get(f"{BASE}/{path}?scope=all")
-        assert response.status_code == 200, (path, response.text)
-        assert response.json()["data"]["scope"]["kind"] == "all", path
+        assert response.status_code == 403, (path, response.text)
+        body = response.json()
+        assert body["ok"] is False
+        assert body["error"]["code"] == "scope_forbidden", path
+
+
+def test_guest_can_read_group_and_team_scopes(guest_client):
+    for path in (
+        "overview",
+        "tasks",
+        "todos",
+        "links",
+        "matrix",
+        "announcements",
+        "insights",
+        "redblack",
+    ):
+        for kind in ("group", "team"):
+            response = guest_client.get(f"{BASE}/{path}?scope={kind}")
+            assert response.status_code == 200, (path, kind, response.text)
+            assert response.json()["data"]["scope"]["kind"] == kind, (path, kind)

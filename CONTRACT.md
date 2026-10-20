@@ -3,92 +3,229 @@
 This document is the source of truth for backend/frontend collaboration. All API routes are
 JSON unless noted. Auth is cookie based. Every endpoint returns `{ "ok": true, "data": ... }`
 or an error `{ "ok": false, "error": { "code": "...", "message": "...", "details": ... } }`.
-All write endpoints require an admin unless explicitly marked "member-self".
+All write endpoints require an admin unless explicitly marked "member-self"; signed-in e-mail
+accounts may also edit their own profile, linked member data and their own todos.
+
+Round 5 replaced the bundled-mail / reminder stack with password-less e-mail accounts: the
+primary sign-in path is a six-digit e-mail code, settings are layered (site vs domain), and the
+red/black board follows the active browsing scope.
 
 ## Identity & permissions
 
-`GET /api/auth/me` returns:
+`GET /api/auth/me` returns the current identity (`source` is one of `local`, `sso`, `email`,
+`ip`, `guest`; the response also slides the session cookie):
 
 ```json
 {
-  "id": "admin@local",
-  "name": "Admin",
-  "email": "",
+  "id": "lin.zhixia",
+  "name": "林知夏",
+  "email": "lin.zhixia@corp.example",
+  "avatar": "/uploads/avatars/9f1c….png",
+  "avatarColor": "#7c3aed",
+  "bio": "把体验做细，把协作做顺。",
+  "skills": ["React", "设计系统"],
   "authenticated": true,
-  "source": "local | sso | guest",
-  "isDeviceAdmin": true,
-  "admin": { "role": "super", "teamIds": [], "groupIds": [] },
-  "linkedMemberId": null,
+  "source": "email",
+  "isDeviceAdmin": false,
+  "isSuperAdmin": false,
+  "userRole": "member",
+  "emailVerified": true,
+  "admin": { "role": null, "teamIds": [], "groupIds": [] },
+  "linkedMemberId": "m-lin",
+  "linkedMemberName": "林知夏",
+  "ssoConfigured": false,
   "permissions": {
-    "canEditSettings": true,
-    "canEditAny": true,
-    "canEditGroup": true,
-    "canEditSelf": true
-  },
-  "ssoConfigured": false
+    "canEditSettings": false,
+    "canEditAny": false,
+    "canEditSelf": true,
+    "canManageUsers": false,
+    "canViewAllScope": false,
+    "canManageWorkspace": false
+  }
 }
 ```
 
-Admin roles: `super` (deployment device, name always `Admin`, never stored in config),
-`team_admin` (all groups of `teamIds`), `group_admin` (specific `groupIds`). A member
-without an admin role may only edit their linked member profile/works and their own todos.
-`team_admin` may also create/delete development groups inside its `teamIds`; creating or
-deleting a whole team is reserved for the `super` device Admin (`group_admin` cannot
-restructure the workspace).
+Roles (`users` table, `userRole`): `member | group_admin | team_admin | super`.
 
-Local requests (loopback or one of the deployment machine's own IPv4 addresses) are always
-the `Admin` super user. SSO identities are matched against `auth.adminWhitelist.ids` by
-id/email. IP entries accept exact IPs and CIDR ranges.
+- `super` = super administrator. It has every permission the deployment device Admin has,
+  including site settings, account management and the cross-team `all` browsing scope.
+  `isSuperAdmin` is `true` for the device Admin and for stored `super` accounts.
+- `team_admin` = full edit rights over every group of its `teamIds`; may create/delete groups
+  inside those teams, but cannot create/delete a team or read site settings.
+- `group_admin` = full edit rights over its `groupIds` only.
+- `member` = linked member self-service: own profile, own works, own tasks and own todos;
+  read-only elsewhere.
+- A member whose e-mail matches a group-scoped `members` row is linked (`linkedMemberId`).
+
+Permission flags:
+
+| Flag | Meaning |
+| --- | --- |
+| `canEditSettings` | Site-level settings (`/api/settings*`), super admins only |
+| `canManageUsers` | Account administration (`/api/users*`), super admins only |
+| `canViewAllScope` | May use `?scope=all`; every other identity gets `403 scope_forbidden` |
+| `canManageWorkspace` | May open the workspace manager (super admin or a team admin) |
+| `canEditAny` / `canEditSelf` | In-scope admin writes / member self-service |
+
+The deployment device itself (loopback or one of the machine's own IPv4 addresses) is always the
+built-in `Admin` (super, never stored). A stored `super` account behaves the same, except that
+the device Admin row is not manageable or deletable. The optional ID/IP admin whitelist
+(`auth.adminWhitelist`) still grants `team_admin` / `group_admin` scopes to SSO / e-mail or IP
+identities; it no longer contains `super` entries — use the accounts API for that.
+
+Sessions are sliding: `/api/bootstrap` and `/api/auth/me` re-issue the signed HttpOnly cookie on
+every visit, so `auth.session.maxAgeDays` (default 7) counts from the most recent request. SSO
+is an optional alternative sign-in path; guests are never redirected automatically.
 
 ## Auth
 
-- `GET /api/auth/me` – current identity (guest is unauthenticated but readable)
-- `GET /api/auth/login?next=/` – starts OIDC login; redirects back with `?sso=unconfigured`
-  when SSO is not configured (automatic guest fallback)
-- `GET /api/auth/callback?code=&state=` – OIDC callback, sets HttpOnly session cookie
-- `POST /api/auth/logout` – clears session
-- `GET /api/auth/config` – safe public SSO info (`enabled`, `providerName`, `configured`)
+Password-less e-mail code login / registration:
+
+- `POST /api/auth/email/request` `{ email }` → sends a one-time code and returns
+  `{ sent, email, purpose: "login"|"register", registered, expiresInSeconds,
+  resendAfterSeconds, codeLength }`.
+  - `429 code_rate_limited` with `details.retryAfterSeconds` while inside the resend window.
+  - `403 email_login_disabled` / `503 email_not_configured` when the flow or SMTP relay is off.
+  - `502 email_send_failed` when the SMTP relay rejects the message.
+- `POST /api/auth/email/verify` `{ email, code }` →
+  `{ loggedIn, isNewUser, user, sessionDays }` and sets the signed cookie.
+  - Any valid e-mail registers a `member` account on first use; pre-created (unverified)
+    accounts are activated on their first successful code login.
+  - Errors: `code_format_invalid`, `code_invalid`, `code_expired`, `code_mismatch`
+    (`details.remainingAttempts`), `code_attempts_exceeded`, `user_id_conflict`.
+- `GET /api/auth/config` – public auth info: `guestMode`, `allowGuestRead`, `emailLogin`
+  (`enabled`, `codeLength`, `codeExpiryMinutes`, `resendSeconds`), `sessionDays`,
+  `sso { enabled, configured, providerName }`, `emailService { enabled, configured }`.
+
+Verification codes live in `email_codes`: HMAC-hashed six-digit codes (length configurable),
+10-minute expiry, 60-second resend window, at most 5 attempts; the plain code is never stored or
+logged. Sessions are HMAC-SHA256 signed HttpOnly `SameSite=Lax` cookies.
+
+Optional SSO and common endpoints:
+
+- `GET /api/auth/login?next=/` – starts OIDC authorization-code + PKCE login; falls back to the
+  guest view with `?sso=unconfigured` when SSO is not configured and guests are allowed.
+- `GET /api/auth/callback?code=&state=` – OIDC callback, sets the session cookie.
+- `POST /api/auth/logout` – clears the session, returns `{ loggedOut, endSessionUrl }`
+  (`endSessionUrl` is the configured IdP logout URL or `null`).
 
 ## Bootstrap
 
-`GET /api/bootstrap?teamId=&groupId=` returns config for navigation plus workspace tree and
-current context. The active team/group is resolved server-side from the query or from the
-first team/group.
+`GET /api/bootstrap?teamId=&groupId=` returns navigation config, the workspace tree and the
+current context (it also refreshes the sliding session):
 
 ```json
 {
   "me": { },
-  "config": { "site": {...}, "modules": {...}, "features": {...}, "auth": { "sso": {...} } },
+  "config": { "site": {...}, "modules": {...}, "announcements": {...}, "calendar": {...},
+              "redblack": {...}, "features": {...},
+              "email": { "enabled", "configured", "fromEmail", "fromName" },
+              "auth": { "guestMode", "allowGuestRead", "emailLogin": {...}, "sessionDays",
+                        "sso": { "enabled", "configured", "providerName" } } },
   "teams": [{ "id": "team-aurora", "name": "...", "groups": [{ "id": "grp-frontend", "name": "..." }] }],
   "active": { "team": { }, "group": { } },
-  "stats": { "members": 8, "todos": 14, "pinned": 3 }
+  "stats": { "teams": 1, "groups": 3, "members": 8, "todos": 14, "pinned": 3,
+             "currentWorks": 5, "serverDate": "2026-10-20" },
+  "serverTime": "2026-10-20",
+  "deviceAdminName": "Admin"
 }
 ```
 
-- `GET /api/teams` – teams + groups visible to current user (all demo data is visible)
-- `GET /api/teams/{teamId}/groups/{groupId}` – group detail with members
+- `GET /api/teams` – teams + groups visible to the current user.
+- `GET /api/teams/{teamId}/groups/{groupId}` – group detail with members.
+
+## Accounts, users & personal home page
+
+`users` rows are e-mail accounts: `id` is the lower-cased e-mail local part and is immutable,
+`email` is unique and lower-cased, `name` defaults to the local part, and `email_verified` is
+`0` for accounts pre-created by a super admin (they activate on first code login). Personal
+fields: `avatar`, `avatar_color`, `bio`, `skills` (JSON array).
+
+Account administration (super administrators only):
+
+- `GET /api/users` → `{ users, deviceAdminName, permissions: { canManageUsers } }`. The first
+  row is the synthetic device Admin (`isDeviceAdmin: true`, `canManage: false`,
+  `roleLabel: "超级管理员（部署设备）"`).
+- `POST /api/users` `{ email, name?, role?, teamIds?, groupIds?, emailVerified? }` – creates an
+  account; the default is an unverified `member` that becomes active on first code login.
+- `PATCH /api/users/{userId}` `{ name?, role?, teamIds?, groupIds? }`
+- `DELETE /api/users/{userId}` – cannot delete yourself or the device Admin; also clears the
+  account's pending `email_codes`.
+- Validation: `invalid_role`, `invalid_team_scope`, `invalid_group_scope`,
+  `team_scope_required`, `group_scope_required`, `user_id_conflict`, `email_exists`,
+  `device_admin_immutable`.
+
+Profile / personal home page:
+
+- `GET /api/profile` (authenticated) → `ProfilePayload` for the signed-in account. Device,
+  IP and SSO identities without a stored account still get a read-only profile.
+- `GET /api/users/{userId}/profile` (read access: signed-in member, or guest read mode) → `ProfilePayload`.
+- `PATCH /api/profile` (self) `{ name?, avatarColor?, bio?, skills? }`; `name` 1–60 chars,
+  `bio` ≤2000 chars, up to 20 skills of ≤30 chars each. Rejected for the device Admin
+  (`device_admin_profile`).
+- `POST /api/profile/avatar` multipart `file` (PNG / JPEG / WebP / GIF, ≤2 MB) →
+  `{ avatar, user }`; the old file is removed.
+- `DELETE /api/profile/avatar` → `{ user }`, restores the initials avatar.
+
+`ProfilePayload`:
+
+```json
+{
+  "user": { "id","email","name","avatar","avatarColor","bio","skills","role","roleLabel",
+            "teamIds","groupIds","emailVerified","createdBy","createdAt","updatedAt",
+            "isDeviceAdmin" },
+  "members": [{ "id","name","email","title","role","avatarColor","avatar","bio","tags",
+                "skills","status","groupId","groupName","teamId","teamName" }],
+  "duties": [{ "id","area","description","role":"owner|backup","channel","contact",
+               "groupId","groupName","teamId","teamName" }],
+  "currentTasks": [MemberTask],
+  "historyTasks": [MemberTask],
+  "todos": [{ "id","title","description","dueDate","dueTime","status":"todo|done","priority",
+              "groupId","groupName","teamId","teamName" }],
+  "redblack": { "red": [EntryWithGroupAndMonth], "black": [...] },
+  "stats": { "duties","currentTasks","completedTasks","openTodos","redEntries","blackEntries" },
+  "canEdit": true,
+  "isSelf": true
+}
+```
+
+Profile personal fields are mirrored onto every linked `members` row by e-mail; personal edits
+made on a member record are mirrored back to the account, so member cards, the personal home page
+and account settings always agree. Avatar files are served from `/uploads/avatars/...`.
+
+### Member personal vs organizational information
+
+`PATCH /api/teams/{team}/groups/{group}/members/{memberId}`:
+
+- **Personal fields** – `name`, `email`, `bio`, `avatarColor`, `tags`, `skills`, `avatar` /
+  `avatarUrl` – only a super administrator or the linked account owner
+  (`user.linkedMemberId == memberId`, or the member e-mail matches the signed-in account).
+  Otherwise `403 personal_info_forbidden`.
+- **Organizational fields** – `title`, `role`, `status` – editable by in-scope team/group admins.
+- The member payload carries `avatar`; accepted personal edits sync to the linked `users` row.
+  Member creation (`POST /members`) may set the initial personal fields for in-scope admins.
 
 ## Workspace administration (admins)
 
 Base: `/api/workspace`. All routes return `403 not_admin` for identities outside their
-permission domain. Destructive routes require the exact target name in the JSON body and
-answer `422 confirm_mismatch` (details `{ "expected": "<name>" }`) when it does not match.
+permission domain. Destructive routes require the exact target name in the JSON body and answer
+`422 confirm_mismatch` (details `{ "expected": "<name>" }`) when it does not match.
 
-- `GET /api/workspace/manage` – management tree for the caller's domain: device Admin sees
-  every team, `team_admin` only its `teamIds`. Team: `{ id, name, shortName, description,
-  color, groupCount, memberCount, canDelete, canCreateGroup, groups[] }`; group: `{ id,
-  teamId, name, description, color, icon, memberCount, canDelete }`. Top-level `permissions`:
+- `GET /api/workspace/manage` – management tree for the caller's domain: super admins see
+  every team, `team_admin` only its `teamIds`. Team: `{ id, name, shortName, description, color,
+  groupCount, memberCount, canDelete, canCreateGroup, groups[] }`; group: `{ id, teamId, name,
+  description, color, icon, memberCount, canDelete }`. Top-level `permissions`:
   `{ canCreateTeam, canCreateGroup, canManageAnyTeam }`.
 - `POST /api/workspace/teams` (super) – `{ name, shortName?, description?, color? }`
-- `DELETE /api/workspace/teams/{teamId}` (super) – `{ confirmName }`; cascades groups,
-  members, works, todos, tasks, boards, links, matrix, announcements and tags.
+- `DELETE /api/workspace/teams/{teamId}` (super) – `{ confirmName }`; cascades groups, members,
+  works, todos, tasks, boards, links, matrix, announcements and tags.
 - `POST /api/workspace/teams/{teamId}/groups` (super or that team's `team_admin`) –
   `{ name, description?, color?, icon? }`
-- `DELETE /api/workspace/teams/{teamId}/groups/{groupId}` (super or that team's
-  `team_admin`) – `{ confirmName }`; cascades the group's business data.
+- `DELETE /api/workspace/teams/{teamId}/groups/{groupId}` (super or that team's `team_admin`) –
+  `{ confirmName }`; cascades the group's business data.
 
-The workspace manager UI (`工作区管理`) lives in the user menu for the device Admin and
-team admins (`web/src/components/WorkspaceManager.tsx`).
+The workspace manager UI (`工作区管理`) lives in the user menu for super administrators and team
+admins (`web/src/components/WorkspaceManager.tsx`).
 
 ## Group-scoped feature routes
 
@@ -96,8 +233,10 @@ Base: `/api/teams/{teamId}/groups/{groupId}`. All GET routes are available in gu
 
 ### Browsing scope (multi-group reads)
 
-Every read route below accepts `?scope=group|team|all` (default `group`, fully backward
-compatible). Responses add a top-level `scope` object and per-item group metadata:
+Every read route below accepts `?scope=group|team|all` (default `group`). Only super
+administrators (`permissions.canViewAllScope`) may request `all`; every other identity gets
+`403 scope_forbidden`. An unknown value is `422 invalid_scope`. Responses add a top-level `scope`
+object and per-item group metadata:
 
 ```json
 {
@@ -117,18 +256,17 @@ compatible). Responses add a top-level `scope` object and per-item group metadat
 Members/works/todos/links/matrix/announcements gain `groupId` + `groupName`; tasks and todos
 also gain `teamId` + `teamName`. Writes stay group-scoped: the frontend routes an edit/delete
 to the group that owns the item (`groupId` on the payload), and creates into the currently
-selected group. Invalid scope → `422 invalid_scope`.
+selected group. The frontend hides the `全部团队` option for every non-super identity.
 
 ### Overview / members / works
 
 - `GET /overview?scope=` – `{ group, scope, members, works, recentActivity, stats, workloads, workloadSummary }`
-  - member shape: `{ id, name, email, title, role, avatarColor, bio, tags[], status,
-    duties[], currentWorks[], historyWorks[], stats: { current, done, todos },
+  - member shape: `{ id, name, email, avatar, title, role, avatarColor, bio, tags[], skills[],
+    status, duties[], currentWorks[], historyWorks[], stats: { current, done, todos },
     groupId, groupName, teamId, teamName }`
   - work shape: `{ id, memberId, title, description, status: "current"|"done"|"planned",
     period, category, progress, updatedAt, groupId, groupName, teamId, teamName }`
-- `PATCH /members/{memberId}` – member-self or admin. Editable: name, title, role, bio,
-  tags, skills, status, email.
+- `PATCH /members/{memberId}` – see [Member personal vs organizational information](#member-personal-vs-organizational-information).
 - `POST /members` (admin) – create member (same fields + id optional)
 - `DELETE /members/{memberId}` (admin)
 - `GET /members/{memberId}/works`
@@ -141,11 +279,11 @@ selected group. Invalid scope → `422 invalid_scope`.
 - `GET /todos?month=YYYY-MM&scope=` – todos in month (month filter applies across the scope)
 - `POST /todos` – any signed-in user may create a todo for self; admins for anyone.
   Body: `{ title, description, dueDate: "YYYY-MM-DD", dueTime: "HH:MM",
-  assigneeMemberId, priority: "low"|"normal"|"high"|"urgent", reminderOffsetsDays?: [3,1,0],
-  emailEnabled: true }`
+  assigneeMemberId, priority: "low"|"normal"|"high"|"urgent" }`
 - `PATCH /todos/{todoId}` – creator, assignee member-self, or admin
 - `DELETE /todos/{todoId}` – creator or admin
-- Reminder metadata on a todo: `reminderOffsetsDays`, `emailEnabled`, `remindersSent`.
+- Todo payloads no longer contain `reminderOffsetsDays`, `emailEnabled` or `remindersSent`;
+  calendar reminders were removed together with the bundled mail server.
 
 ### Task ledger, workload & shared tags
 
@@ -175,14 +313,38 @@ Full task/workload payloads and the load-point model live in `TASKS_CONTRACT.md`
     buckets with `days=null, start=null`.
   - Invalid range → `422 invalid_range`; guests may read.
 
-### Red / black board (monthly)
+### Red / black board (monthly, scope-following)
 
-- `GET /redblack?month=YYYY-MM` – `{ month, board, availableMonths }`
-  `board`: `{ id, month, theme, updatedAt, red: Entry[], black: Entry[] }`
-  Entry: `{ id, side, memberId, memberName, title, reason, score, createdAt }`
-- `PUT /redblack` (admin) – upsert month board:
-  `{ month, theme, red: [{ memberId?, memberName, title, reason, score }], black: [...] }`
-- `POST /redblack/rollover` (admin) – create next month from current month skeleton.
+- `GET /redblack?month=YYYY-MM&scope=` →
+
+```json
+{
+  "month": "2026-10",
+  "scope": { "kind": "group", "label": "前端体验组", "teamIds": [], "groupIds": [],
+             "groups": [], "team": null, "group": null },
+  "board": { "id": "board-…", "groupId": "grp-frontend", "groupName": "前端体验组",
+             "teamId": "team-aurora", "teamName": "星港产品团队", "month": "2026-10",
+             "theme": "", "updatedAt": "ISO", "red": [Entry], "black": [Entry],
+             "exists": true },
+  "boards": [ { "id", "groupId", "groupName", "teamId", "teamName", "month", "theme",
+                "updatedAt", "red": [Entry], "black": [Entry], "exists": true } ],
+  "availableMonths": ["2026-10", "2026-09"]
+}
+```
+
+  - Group scope keeps the single-board semantics (`theme` + writable board); `board` is `null`
+    when the month has no board.
+  - Team / `all` scopes return a merged, read-only `board` (`id: null`, `groupId: null`,
+    `theme: ""`, `exists` tells whether any scoped group has a board) plus `boards[]`, one per
+    scoped group. Entry: `{ id, side, memberId, memberName, title, reason, score, groupId,
+    groupName, teamId, teamName, createdAt }`. The frontend hides editing and month rollover in
+    aggregate scopes and shows a read-only hint.
+- `PUT /redblack` (admin, group-scoped) – upsert that group's month board:
+  `{ month, theme, red: [{ memberId?, memberName, title, reason, score }], black: [...] }`;
+  returns `{ month, board, availableMonths }`.
+- `POST /redblack/rollover` (admin, group-scoped) – create the next month from the current
+  month skeleton; body `{ fromMonth?, toMonth?, month? }`, returns
+  `{ month, sourceMonth, created, board, availableMonths }`.
 
 ### Links board
 
@@ -210,87 +372,143 @@ Full task/workload payloads and the load-point model live in `TASKS_CONTRACT.md`
 - `PATCH /announcements/{id}` (admin) – same pinned limit
 - `DELETE /announcements/{id}` (admin)
 
-## Settings (super admin only unless noted)
+## Settings (two layers)
 
-- `GET /api/settings` – full settings JSON + `meta` (path, updatedAt, schemaVersion)
+### Site level (super admins only)
+
+- `GET /api/settings` – full settings JSON + `meta` (path, updatedAt, schemaVersion, deviceAdminName)
 - `PUT /api/settings` – replace full config; 422 with `details: [{ path, message }]` on error
 - `POST /api/settings/validate` – validate without saving, returns same shape as PUT
 - `GET /api/settings/schema` – JSON Schema for the GUI/JSON editor
 - `GET /api/settings/defaults` – default config (no secrets)
-- `GET /api/settings/workspace` – admin: team/group/member summary for GUI selectors
+- `GET /api/settings/workspace` – team/group/member summary for GUI selectors (super only)
 
-`site.theme.mode` accepts `auto | light | dark` and defaults to `auto`: the public config
-tells the frontend to follow `prefers-color-scheme` until the visitor explicitly picks a
-theme (stored only in that browser's `localStorage`). The light palette is a neutral
-low-glare paper white (`--bg #f7f7f5`), not warm/cream.
+Config sections: `site` (name, tagline, theme), `modules` (overview, tasks, insights, calendar,
+redblack, links, matrix, announcements, settings — no email module), `announcements`,
+`calendar` (weekStartsOn, showWeekends, allowPastDue — no reminder defaults), `redblack`,
+`email` (SMTP relay + verification templates, see below), `auth` (`emailLogin`, `sso`,
+`adminWhitelist`, `session.maxAgeDays`, guest flags), `features`.
 
-## Email reminders & bundled mail server (admin)
+`site.theme.mode` accepts `auto | light | dark` and defaults to `auto`: the public config tells
+the frontend to follow `prefers-color-scheme` until the visitor explicitly picks a theme
+(stored only in that browser's `localStorage`). The light palette is a neutral low-glare paper
+white (`--bg #f7f7f5`), not warm/cream.
 
-- `GET /api/email/status` – `{ enabled, remindersEnabled, deliveryMode, builtin:
-  { enabled, running, host, port, hostname, stored, limit, retentionDays, lastError },
-  smtpConfigured, fromEmail, lastScanAt, pendingReminders, sentToday, failedToday,
-  scheduler: { running, lastScanAt, nextScanAt, lastError }, templatePreview }`
-- `GET /api/email/logs?limit=50` – recent outbox records
-- `GET /api/email/mailbox?limit=50&box=all|outbound|inbound` – `{ messages, total, builtin }`
-  (`bodyText` truncated in list mode)
-- `GET /api/email/mailbox/{id}` – `{ message }` with full body; marks `read_at`
-- `DELETE /api/email/mailbox/{id}` (admin) – `{ deleted: true }`
-- `POST /api/email/builtin/restart` (admin) – restart the bundled SMTP server
-- `POST /api/email/test` – `{ to? }` send a test mail (works offline in `builtin` mode)
-- `POST /api/email/scan` – run reminder scan now; returns `{ sent, skipped, failed, entries }`
+Legacy round-4 keys (`email.deliveryMode`, `email.builtin`, `email.reminders`,
+`calendar.defaultReminderOffsetsDays/defaultReminderTime/defaultEmailEnabled`,
+`modules.email`) are stripped automatically when an older `data/settings.json` is loaded.
 
-`email.deliveryMode` is `builtin` (default) or `smtp`. In `builtin` mode the app delivers to
-the bundled SMTP server (`email.builtin`, default `127.0.0.1:2525`) which stores messages in
-`mailbox_messages`; no external SMTP account is needed. `smtp` mode keeps the previous external
-SMTP behaviour. The scheduler scans every configured interval, sends at
-`dueDate - offsetDays` at the configured local send time, and deduplicates by
-`(todoId, offsetDays, recipient)`. Templates are configurable and support these variables:
-`{{memberName}}`, `{{todoTitle}}`, `{{todoDescription}}`, `{{dueDate}}`, `{{dueTime}}`,
-`{{groupName}}`, `{{teamName}}`, `{{priority}}`, `{{announcements}}`, `{{extraContent}}`,
-`{{siteName}}`.
+### Domain level (any admin)
+
+- `GET /api/settings/domain` – only the caller's teams/groups:
+
+```json
+{
+  "teams": [{ "id", "name", "shortName", "description", "color", "canEdit",
+              "groups": [{ "id", "teamId", "name", "description", "color", "icon", "canEdit" }] }],
+  "permissions": { "canEditSite", "canEditStructure", "canEditTeam", "canEditGroup",
+                   "isSuperAdmin", "isDeviceAdmin" }
+}
+```
+
+- `PATCH /api/settings/teams/{teamId}` `{ name?, shortName?, description?, color? }` – super or
+  that team's `team_admin`.
+- `PATCH /api/settings/teams/{teamId}/groups/{groupId}`
+  `{ name?, description?, color?, icon? }` – super, the team's `team_admin`, or that group's
+  `group_admin`.
+- `canEdit` marks each entity the caller may change. Team/group admins cannot read site
+  settings (403); the frontend only renders the domain tab for them.
+
+## E-mail service (SMTP relay only)
+
+Round 5 removed the bundled SMTP server, the local mailbox centre and the calendar reminder
+scheduler. E-mail is used only to deliver account verification codes through one external SMTP
+relay configured in `settings.email`:
+
+```json
+{
+  "email": {
+    "enabled": true,
+    "smtp": { "host": "smtp.corp.example", "port": 587, "username": "teamstudio@corp.example",
+              "password": "应用专用密码", "fromEmail": "teamstudio@corp.example",
+              "fromName": "团队工作室", "useStartTls": true, "useSsl": false,
+              "timeoutSeconds": 15 },
+    "subjectTemplate": "[{{siteName}}] 邮箱验证码",
+    "bodyTemplate": "你的验证码是 {{code}}，{{expiresMinutes}} 分钟内有效。"
+  }
+}
+```
+
+- `enabled`, `smtp.host` and `smtp.fromEmail` must all be present for the code request to send;
+  otherwise it fails with `503 email_not_configured`.
+- `useStartTls` and `useSsl` are mutually exclusive; `username` / `password` are the relay
+  account, `fromEmail` / `fromName` the visible sender.
+- Templates support `{{siteName}}`, `{{code}}`, `{{expiresMinutes}}` and `{{purpose}}`.
+- Diagnostics (super admin only):
+  - `GET /api/email/status` → `{ enabled, configured, host, port, username, fromEmail,
+    fromName, useStartTls, useSsl, timeoutSeconds, lastSentAt, lastError, sentToday }`
+    (never returns the password).
+  - `GET /api/email/logs?limit=30` → `{ logs: [{ id, kind, recipient, subject, status, error,
+    created_at }] }`; recipients are masked.
+  - `POST /api/email/test` `{ to? }` – send a test message (defaults to `smtp.fromEmail`).
+- Delivery attempts are written to `email_logs`; the password never appears in logs.
 
 ## Storage
 
-- `data/settings.json` – all application settings, editable through API and UI
-- `data/teamstudio.db` – SQLite business data, including `task_tags`, `member_tasks.tags`
-  and `mailbox_messages` (bundled mail)
-- `data/.session_secret` – generated signing key (never exposed)
-- `data/email_outbox.jsonl` – SMTP audit log mirror
+- `data/settings.json` – all application settings, editable through API and UI (atomic writes).
+- `data/teamstudio.db` – SQLite business data: `teams`, `groups`, `members` (incl.
+  `avatar_url`), `works`, `todos`, `member_tasks`, `redblack_boards`/`entries`, `links`,
+  `matrix_areas`, `announcements`, `task_tags`, `users`, `email_codes`, `email_logs`,
+  `audit_logs`, `app_meta`.
+- `data/.session_secret` – generated HMAC signing key (never exposed).
+- `data/uploads/avatars/` – uploaded profile photos, served under `/uploads/avatars/...`.
+- There is no local mailbox, outbox mirror or reminder bookkeeping any more: the legacy
+  `mailbox_messages` and `email_reminders_sent` tables (plus the `todos` reminder columns) are
+  dropped during the additive round-5 migration.
 
 ## Frontend routes (hash based)
 
 `#/overview`, `#/tasks`, `#/insights`, `#/calendar`, `#/redblack`, `#/links`, `#/matrix`,
-`#/announcements`, `#/settings`, `#/profile`. Module flags hide nav entries, direct hash
-remains accessible to admins so a hidden settings module can be restored. Settings tabs:
-`#/settings?tab=appearance|modules|access|sso|email|json`.
+`#/announcements`, `#/profile`, `#/login`, `#/settings`.
 
-## File ownership (for parallel work)
+- `#/login` – password-less e-mail code login / registration (optional SSO button when
+  configured, guest browsing always reachable; guests are never auto-redirected).
+- `#/profile` – personal home page for the signed-in account; `#/profile?userId=<id>` views
+  another account (personal settings are only editable on your own page; super admins manage
+  other accounts through the accounts tab in settings).
+- `#/settings` – role-based tabs:
+  - super admin: `workspace` (工作区设置), `appearance` (外观与站点), `modules` (模块与展示),
+    `access` (成员与权限), `accounts` (账号与角色), `sso` (企业 SSO), `email` (邮件服务),
+    `json` (高级 JSON) — hash form `#/settings?tab=workspace|appearance|modules|access|accounts|sso|email|json`.
+  - team / group admins: only `workspace` (domain settings), rendered without site settings.
+- Module flags hide nav entries; a direct hash remains accessible to admins so a hidden settings
+  module can be restored. The `全部团队` scope option is hidden for non-super identities.
 
-- Lead: `backend/app/config.py`, `db.py`, `auth.py`, `main.py`, `scope.py`, `seed.py`,
-  `routers/settings.py`, `routers/auth.py`, `routers/bootstrap.py`, `services/scheduler.py`,
-  `backend/tests/conftest.py`, root docs/scripts, `web/src/App.tsx`, `store.tsx`, `api.ts`,
-  `types.ts`, `lib/scope.ts`, `components/AppShell.tsx`, `components/ShellScope.css`.
-- Backend data owner: `backend/app/routers/tasks.py`, `calendar.py`, `workspace.py`,
-  `boards.py`, `insights.py`, `services/tasks_service.py`, `services/insights_service.py`,
-  `backend/app/permissions.py`, new tests.
-- Backend mail owner: `backend/app/services/mail_server.py`, `email_service.py`,
-  `routers/email.py`, `backend/tests/test_mail_server.py`.
-- Frontend theme owner: `web/src/styles.css`, `pages/OverviewPage.tsx/.css`,
-  `components/MemberDrawer.tsx`.
-- Frontend settings owner: `pages/SettingsPage.tsx/.css`, `components/CodeEditor.tsx/.css`,
-  `web/vite.config.ts`.
-- Frontend interaction owner: `components/Select.tsx/.css`, `components/MultiSelect.tsx/.css`,
-  `TodoDialog.tsx`, `pages/CalendarPage.tsx/.css`, `MatrixPage.tsx`, `LinksPage.tsx`,
-  `AnnouncementsPage.tsx`, `RedBlackPage.tsx`.
-- Frontend data owner: `pages/TaskOverviewPage.tsx/.css`, `pages/InsightsPage.tsx/.css`,
-  `components/TaskDialog.tsx`, `components/TagPicker.tsx/.css`.
-- Workspace-admin owner (round 3): `routers/workspaces.py`, auth helpers
+## File ownership (round 5)
+
+- Lead / foundation: `backend/app/config.py`, `db.py`, `auth.py`, `main.py`, `scope.py`,
+  `seed.py`, `services/accounts.py`, `services/email_service.py`,
+  `routers/auth.py`, `bootstrap.py`, `settings.py`, `users.py`, `profile.py`, `email.py`,
+  `backend/tests/conftest.py`, root docs/scripts, `web/src/types.ts`, `api.ts`, `App.tsx`,
+  `store.tsx`, `lib/scope.ts`, `web/e2e/round5-acceptance.mjs`.
+- Backend boards owner: `backend/app/routers/boards.py` (red/black scope), `calendar.py`
+  (reminder removal), `tasks.py`, `insights.py`, `backend/tests/test_group_modules.py`,
+  `test_scope.py`, `test_sso_email.py`.
+- Backend members owner: `backend/app/routers/workspace.py` (personal-info permission and avatar
+  sync), `backend/tests/test_workspace_admin.py`, `test_matrix_backups.py`.
+- Frontend auth owner: `web/src/pages/LoginPage.tsx/.css`, `pages/ProfilePage.tsx/.css`,
+  `components/Avatar.tsx`, `components/AppShell.tsx`, `App.tsx`, `store.tsx`, `lib/utils.ts`.
+- Frontend settings owner: `web/src/pages/SettingsPage.tsx/.css` (role-based tabs, accounts,
+  SMTP, layered settings).
+- Frontend pages owner: `web/src/pages/RedBlackPage.tsx/.css`, `CalendarPage.tsx/.css`,
+  `components/TodoDialog.tsx`, `components/MemberDrawer.tsx`, `pages/OverviewPage.tsx/.css`.
+- Workspace structure (round 3): `routers/workspaces.py`, auth helpers
   `can_manage_team/can_create_team/require_team_manager`, `components/WorkspaceManager.tsx/.css`,
-  `components/Modal.tsx` (`ConfirmInputDialog`), `backend/tests/test_workspace_admin.py`.
-- Matrix multi-backup owner (round 3): `db.py` (`_migrate_matrix_backups`), matrix section of
-  `routers/boards.py`, `routers/workspace.py` `delete_member`, `seed.py` `_seed_matrix`,
-  `components/MatrixNetwork.tsx`, `backend/tests/test_matrix_backups.py`.
-- Workload-detail owner (round 3): `components/WorkloadMeter.tsx`,
+  `components/Modal.tsx` (`ConfirmInputDialog`).
+- Responsibility-matrix multi-backup (round 3): `db.py` (`_migrate_matrix_backups`), matrix
+  section of `routers/boards.py`, `routers/workspace.py` `delete_member`, `seed.py`
+  `_seed_matrix`, `components/MatrixNetwork.tsx`.
+- Workload detail (round 3): `components/WorkloadMeter.tsx`,
   `components/WorkloadDetailDialog.tsx/.css`, workload rail in `pages/TaskOverviewPage.tsx/.css`.
-- QA owner: `backend/tests/*` read-only except their own new tests, `web/e2e/*`
-  (new: `web/e2e/round3-features.mjs`).
+- Docs/QA owner: `CONTRACT.md`, `README.md`, `TASKS_CONTRACT.md`, `docs/ROUND5_CONTRACT.md`,
+  `web/package.json`, `web/e2e/*` (round-5 acceptance: `web/e2e/round5-acceptance.mjs`).
