@@ -220,8 +220,8 @@ def _redblack(conn: sqlite3.Connection, member_ids: list[str]) -> dict[str, list
 def _synthetic_account(user: CurrentUser) -> dict[str, Any]:
     """Build a read-only profile account for device/IP/SSO identities without a row."""
     if user.is_device_admin:
-        name, role, role_label = "Admin", "super", "超级管理员（部署设备）"
-        bio = "部署设备内置管理员，在本机浏览器中自动获得全部管理权限。"
+        name, role, role_label = "Admin", "super", "超级管理员"
+        bio = "系统内置管理员，在本机浏览器中自动获得全部管理权限。"
         color = "#0ea5e9"
     elif user.source == "ip":
         name, role, role_label = user.name or "IP 管理员", user.user_role or "team_admin", "IP 白名单管理员"
@@ -470,7 +470,7 @@ def upload_my_avatar(
     user: CurrentUser = Depends(require_authenticated),
 ):
     if user.is_device_admin:
-        raise fail(403, "部署设备内置管理员没有个人账号头像", "device_admin_profile")
+        raise fail(403, "系统内置管理员没有个人账号头像", "device_admin_profile")
     content = file.file.read()
     avatar_url = _avatar_bytes(file, content)
     with db() as conn:
@@ -489,7 +489,7 @@ def upload_my_avatar(
 @router.delete("/profile/avatar")
 def delete_my_avatar(user: CurrentUser = Depends(require_authenticated)):
     if user.is_device_admin:
-        raise fail(403, "部署设备内置管理员没有个人账号头像", "device_admin_profile")
+        raise fail(403, "系统内置管理员没有个人账号头像", "device_admin_profile")
     with db() as conn:
         account = _load_account(conn, user.id)
         if not account:
@@ -508,7 +508,7 @@ def update_my_profile(
     user: CurrentUser = Depends(require_authenticated),
 ):
     if user.is_device_admin:
-        raise fail(403, "部署设备内置管理员资料由系统固定", "device_admin_profile")
+        raise fail(403, "系统内置管理员资料由系统固定", "device_admin_profile")
     name = payload.get("name")
     if name is not None:
         name = str(name).strip()

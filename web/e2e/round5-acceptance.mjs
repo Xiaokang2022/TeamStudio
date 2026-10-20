@@ -391,7 +391,7 @@ try {
   await page.waitForTimeout(900);
   const accountText = await page.locator(".settings-page").innerText();
   record("账号列表含预创建超管", accountText.includes("super.one@corp.example"));
-  record("设备管理员行不可管理", accountText.includes("部署设备内置管理员"));
+  record("系统内置管理员行不可管理", accountText.includes("系统内置管理员"));
 
   // Pre-created accounts receive a one-time activation URL at creation time.
   const inviteEmail = `invited.${Date.now()}@corp.example`;
@@ -536,9 +536,9 @@ try {
   await page.waitForSelector("#login-email", { timeout: 20000 });
   record("退出后回到普通登录页", await page.locator("#login-email").isVisible());
   const deviceButton = page.locator(".login-device-entry button", {
-    hasText: "以设备管理员身份登录",
+    hasText: "以系统内置管理员身份登录",
   });
-  record("检测到部署设备时显示设备管理员登录按钮", await deviceButton.isVisible());
+  record("检测到系统内置管理员时显示登录按钮", await deviceButton.isVisible());
   await deviceButton.click();
   await page.waitForSelector(".user-chip", { timeout: 25000 });
   record(
@@ -550,10 +550,10 @@ try {
   await page.waitForSelector(".profile-page", { timeout: 20000 });
   const deviceHero = await page.locator(".profile-hero").innerText();
   record(
-    "部署设备个人主页不在角色中重复设备说明",
+    "系统内置管理员主页展示超级管理员与系统内置标识",
     deviceHero.includes("超级管理员") &&
-      !deviceHero.includes("超级管理员（部署设备）") &&
-      deviceHero.includes("部署设备"),
+      !deviceHero.includes("超级管理员（") &&
+      deviceHero.includes("系统内置"),
   );
 
   await page.locator(".scope-option", { hasText: "所有" }).first().click();

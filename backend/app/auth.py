@@ -41,7 +41,7 @@ SESSION_COOKIE_FALLBACK = "teamstudio_session"
 STATE_COOKIE = "teamstudio_sso_state"
 # Marks that the deployment device's browser explicitly logged out of the built-in
 # Admin identity. The flag only *disables* automatic device-admin privileges; it never
-# grants any. Visiting the login page can clear it again ("以设备管理员身份登录").
+# grants any. Visiting the login page can clear it again ("以系统内置管理员身份登录").
 DEVICE_LOGOUT_COOKIE = "teamstudio_device_logout"
 LOCAL_HOSTNAMES = {"localhost", "127.0.0.1", "::1", "testclient"}
 
@@ -643,7 +643,7 @@ def require_super(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
 def require_device_admin(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
     """Require the deployment device's built-in Admin identity."""
     if not user.is_device_admin:
-        raise HTTPException(status_code=403, detail="仅部署设备的 Admin 可执行此操作")
+        raise HTTPException(status_code=403, detail="仅系统内置的 Admin 可执行此操作")
     return user
 
 

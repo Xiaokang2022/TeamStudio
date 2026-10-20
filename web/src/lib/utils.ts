@@ -141,7 +141,7 @@ export function canManageGroup(
 
 /**
  * 个人信息（姓名 / 邮箱 / 简介 / 头像 / 头像颜色 / 标签 / 技能）的编辑权限。
- * 仅超级管理员（含部署设备内置 Admin）与绑定账号本人可编辑。
+ * 仅超级管理员（含系统内置 Admin）与绑定账号本人可编辑。
  */
 export function canEditPersonalInfo(
   user: CurrentUser | null | undefined,
@@ -157,7 +157,7 @@ export function canEditPersonalInfo(
 
 /**
  * 组织信息（职位 / 团队角色 / 状态）的编辑权限。
- * 仅超级管理员（含部署设备内置 Admin）与在管辖范围内的团队 / 开发组管理员可编辑。
+ * 仅超级管理员（含系统内置 Admin）与在管辖范围内的团队 / 开发组管理员可编辑。
  */
 export function canEditOrganizationalInfo(
   user: CurrentUser | null | undefined,

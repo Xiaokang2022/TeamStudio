@@ -23,7 +23,7 @@ from backend.app.seed import (
 )
 from backend.app.services import accounts
 
-DEVICE_ADMIN_MESSAGE = "仅部署设备的 Admin 可执行系统重置"
+DEVICE_ADMIN_MESSAGE = "仅系统内置的 Admin 可执行系统重置"
 ACKNOWLEDGE_MESSAGE = "重置操作需要显式确认"
 CONFIRM_MISMATCH_MESSAGE = "站点名称不匹配，无法重置系统"
 

@@ -97,7 +97,7 @@ function roleLabel(
   isGuest = false,
   isSuper = false,
 ): string {
-  if (isDevice) return "超级管理员（部署设备）";
+  if (isDevice) return "超级管理员";
   if (isGuest) return "访客";
   if (isSuper || role === "super") return "超级管理员";
   if (role === "team_admin") return "团队管理员";
@@ -551,6 +551,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                       >
                         <ShieldCheck size={12} /> {role}
                       </span>
+                      {me.isDeviceAdmin ? (
+                        <span className="badge badge-gray">系统内置</span>
+                      ) : null}
                       {me.source === "sso" ? <span className="badge badge-blue">SSO 已登录</span> : null}
                       {me.source === "email" ? <span className="badge badge-blue">邮箱已验证</span> : null}
                       {me.source === "ip" ? <span className="badge badge-blue">IP 白名单</span> : null}
@@ -615,7 +618,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                         <LogOut size={16} /> {loggingOut ? "退出中…" : "退出登录 / 切换账号"}
                       </button>
                     ) : me.source === "ip" ? (
-                      <div className="menu-note">当前通过部署方 IP 白名单获得管理权限。</div>
+                      <div className="menu-note">当前通过 IP 白名单获得管理权限。</div>
                     ) : null}
                   </div>
                 ) : null}

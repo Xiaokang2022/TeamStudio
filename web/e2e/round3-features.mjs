@@ -210,7 +210,7 @@ try {
     const scopeNote = await page.locator(".wm-scope-note").innerText().catch(() => "");
     record(
       "R1 user menu opens 工作区管理 and lists seeded workspace",
-      entryCount === 1 && initialTeamCount === 2 && initialGroupCount === 5 && scopeNote.includes("设备管理员"),
+      entryCount === 1 && initialTeamCount === 2 && initialGroupCount === 5 && scopeNote.includes("系统内置管理员"),
       { entryCount, initialTeamCount, initialGroupCount, scopeNote: scopeNote.slice(0, 40) },
     );
 

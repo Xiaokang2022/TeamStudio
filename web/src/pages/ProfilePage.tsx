@@ -453,7 +453,7 @@ export default function ProfilePage() {
                 <ShieldCheck size={12} />{" "}
                 {user.isDeviceAdmin ? "超级管理员" : user.roleLabel || "成员"}
               </span>
-              {user.isDeviceAdmin ? <span className="badge badge-green">部署设备</span> : null}
+              {user.isDeviceAdmin ? <span className="badge badge-green">系统内置</span> : null}
               {user.isDeviceAdmin ? null : user.emailVerified ? (
                 <span className="badge badge-blue">邮箱已验证</span>
               ) : (
@@ -858,7 +858,7 @@ export default function ProfilePage() {
       {me && isSelf && !canEdit ? (
         <div className="profile-readonly-hint">
           <ShieldCheck size={14} />
-          当前身份不支持在此修改个人资料（例如部署设备内置管理员），如有需要请联系超级管理员。
+          当前身份不支持在此修改个人资料（例如系统内置管理员），如有需要请联系超级管理员。
         </div>
       ) : null}
     </div>

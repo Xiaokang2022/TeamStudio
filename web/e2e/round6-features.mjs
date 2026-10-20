@@ -768,10 +768,10 @@ try {
   const deviceProfileText = await openProfile(adminPage);
   const deviceScope = await profileAdminScope(adminPage);
   record(
-    "设备管理员主页只显示超级管理员（保留部署设备徽章）",
+    "设备管理员主页只显示超级管理员（保留系统内置徽章）",
     deviceProfileText.includes("超级管理员") &&
-      deviceProfileText.includes("部署设备") &&
-      !deviceProfileText.includes("超级管理员（部署设备）") &&
+      deviceProfileText.includes("系统内置") &&
+      !deviceProfileText.includes("超级管理员（") &&
       !deviceProfileText.includes("团队管理员") &&
       !deviceProfileText.includes("开发组管理员"),
     excerpt(deviceProfileText),
@@ -791,6 +791,7 @@ try {
   await superLogin.page.waitForSelector(SEL.accountList, { timeout: 20000 });
   await superLogin.page.waitForTimeout(600);
   const superAccountsText = await superLogin.page.locator(SEL.settingsPage).innerText();
+  const superAccountListText = await superLogin.page.locator(SEL.accountList).innerText();
   const superDeviceRows = await superLogin.page.locator(SEL.deviceAccountRow).count();
   const superUsers = await superLogin.page.evaluate(async () => {
     const response = await fetch("/api/users");
@@ -798,8 +799,8 @@ try {
     return payload?.data?.users ?? [];
   });
   record(
-    "存储在册超级管理员的账号列表不含设备管理员行",
-    superDeviceRows === 0 && !superAccountsText.includes("部署设备内置管理员"),
+    "存储在册超级管理员的账号列表不含系统内置管理员行",
+    superDeviceRows === 0 && !superAccountListText.includes("系统内置管理员"),
     `deviceRows=${superDeviceRows}`,
   );
   record(
@@ -819,7 +820,7 @@ try {
   await adminPage.waitForTimeout(600);
   const deviceAdminRows = await adminPage.locator(SEL.deviceAccountRow).count();
   record(
-    "设备管理员本人的账号列表仍显示部署设备行（仅自己可见）",
+    "设备管理员本人的账号列表仍显示系统内置管理员行（仅自己可见）",
     deviceAdminRows === 1,
     `deviceRows=${deviceAdminRows}`,
   );

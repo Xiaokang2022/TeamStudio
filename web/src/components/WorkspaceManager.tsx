@@ -553,8 +553,8 @@ export function WorkspaceManager({ open, onClose }: WorkspaceManagerProps) {
               <p className="wm-scope-note">
                 <ShieldCheck size={13} />
                 {permissions?.canCreateTeam
-                  ? "设备管理员视图：可创建/删除任意团队与开发组。"
-                  : "团队管理员视图：可在所属团队内创建/删除开发组，删除团队需设备管理员操作。"}
+                  ? "系统内置管理员视图：可创建/删除任意团队与开发组。"
+                  : "团队管理员视图：可在所属团队内创建/删除开发组，删除团队需系统内置管理员操作。"}
               </p>
 
               {teamFormOpen ? (
@@ -571,7 +571,7 @@ export function WorkspaceManager({ open, onClose }: WorkspaceManagerProps) {
                   description={
                     permissions?.canCreateTeam
                       ? "当前工作区还没有团队。创建第一个团队后，即可在团队下添加开发组与成员。"
-                      : "当前权限范围内还没有可管理的团队，请联系设备管理员创建团队。"
+                      : "当前权限范围内还没有可管理的团队，请联系系统内置管理员创建团队。"
                   }
                   action={
                     permissions?.canCreateTeam && !teamFormOpen ? (

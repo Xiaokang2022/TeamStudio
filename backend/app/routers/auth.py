@@ -416,7 +416,7 @@ def logout(
 def device_admin_login(request: Request, response: Response):
     """Restore the built-in device Admin identity (only on the deployment device)."""
     if not is_local_request(request):
-        raise fail(403, "仅部署设备本机可使用设备管理员登录", "device_admin_unavailable")
+        raise fail(403, "仅本机可使用系统内置管理员登录", "device_admin_unavailable")
     clear_device_logout_cookie(response)
     clear_session_cookie(response)
     return ok({"deviceAdmin": True, "authenticated": True})

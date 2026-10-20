@@ -79,7 +79,7 @@ def _user_list(conn: sqlite3.Connection, user: CurrentUser) -> list[dict[str, An
                 "name": "Admin",
                 "avatar": "",
                 "avatarColor": "#0ea5e9",
-                "bio": "部署设备内置管理员",
+                "bio": "系统内置管理员",
                 "skills": [],
                 "role": "super",
                 "roleLabel": "超级管理员",
@@ -168,7 +168,7 @@ def create_activation_link(
     user: CurrentUser = Depends(require_super),
 ):
     if user_id == "device-admin":
-        raise fail(403, "部署设备的 Admin 身份不可管理", "device_admin_immutable")
+        raise fail(403, "系统内置的 Admin 身份不可管理", "device_admin_immutable")
     with db() as conn:
         account = accounts.get_user(conn, user_id)
         if not account:
@@ -194,7 +194,7 @@ def update_user(
     user: CurrentUser = Depends(require_super),
 ):
     if user_id == "device-admin":
-        raise fail(403, "部署设备的 Admin 身份不可管理", "device_admin_immutable")
+        raise fail(403, "系统内置的 Admin 身份不可管理", "device_admin_immutable")
     try:
         with db() as conn:
             existing = accounts.get_user(conn, user_id)
@@ -249,7 +249,7 @@ def update_user(
 @router.delete("/{user_id}")
 def delete_user(user_id: str, user: CurrentUser = Depends(require_super)):
     if user_id == "device-admin":
-        raise fail(403, "部署设备的 Admin 身份不可删除", "device_admin_immutable")
+        raise fail(403, "系统内置的 Admin 身份不可删除", "device_admin_immutable")
     if user_id == user.id:
         raise fail(409, "不能删除当前登录的账号", "cannot_delete_self")
     with db() as conn:

@@ -218,10 +218,10 @@ export default function LoginPage() {
           disabled={deviceLoggingIn}
         >
           <ShieldCheck size={17} />
-          {deviceLoggingIn ? "正在切换…" : "以设备管理员身份登录"}
+          {deviceLoggingIn ? "正在切换…" : "以系统内置管理员身份登录"}
         </button>
         <span className="login-device-hint">
-          已检测到部署设备：本机可直接使用设备管理员身份，无需邮箱。退出后可使用其他账号登录，其他账号不会获得设备管理权限。
+          已检测到系统内置管理员：本机可直接使用该身份登录，无需邮箱。退出后可使用其他账号登录，其他账号不会获得管理权限。
         </span>
       </div>
     ) : null;
@@ -323,7 +323,7 @@ export default function LoginPage() {
               {me.isDeviceAdmin ? (
                 <div className="login-device-note">
                   <ShieldCheck size={15} />
-                  当前使用部署设备管理员身份；退出后可使用其他账号登录，其他账号不会获得设备管理权限。
+                  当前使用系统内置管理员身份；退出后可使用其他账号登录，其他账号不会获得管理权限。
                 </div>
               ) : null}
               {deviceAdminAction}

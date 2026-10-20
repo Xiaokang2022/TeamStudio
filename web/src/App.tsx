@@ -79,7 +79,7 @@ function AccessDenied() {
         <p>
           {isAdmin
             ? "该模块目前未在导航中展示。你仍可以通过工作台继续浏览，或在设置中重新开启模块。"
-            : "当前身份没有权限进入工作室设置。如需管理权限，请联系团队管理员或使用部署设备的 Admin。"}
+            : "当前身份没有权限进入工作室设置。如需管理权限，请联系团队管理员或使用系统内置的 Admin。"}
         </p>
         <div className="state-actions">
           <button className="btn btn-primary" onClick={() => navigate("overview")}>

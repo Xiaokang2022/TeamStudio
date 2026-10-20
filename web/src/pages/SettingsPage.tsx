@@ -154,7 +154,7 @@ const TABS: { key: TabKey; label: string; hint: string; icon: LucideIcon }[] = [
 const RESET_TAB: { key: TabKey; label: string; hint: string; icon: LucideIcon } = {
   key: "reset",
   label: "重置系统",
-  hint: "仅设备管理员 · 危险操作",
+  hint: "仅系统内置管理员 · 危险操作",
   icon: ShieldAlert,
 };
 
@@ -608,8 +608,8 @@ function SettingsAccessDenied({ onBack }: { onBack: () => void }) {
         </span>
         <h1>仅超级管理员可编辑站点设置</h1>
         <p>
-          站点级设置只对<strong>超级管理员</strong>开放：部署设备内置的 <code>Admin</code>
-          以及账号角色为 <code>super</code> 的成员。设备 Admin 由服务端按请求来源自动识别，永远存在、
+          站点级设置只对<strong>超级管理员</strong>开放：系统内置的 <code>Admin</code>
+          以及账号角色为 <code>super</code> 的成员。系统内置 Admin 由服务端按请求来源自动识别，永远存在、
           不写入 <code>settings.json</code>。
         </p>
         <p className="small muted">
@@ -1362,8 +1362,8 @@ function AccessSection({
   return (
     <div className="settings-sections">
       <SettingsCard
-        title="超级管理员与设备 Admin"
-        description="站点级设置仅超级管理员可编辑；部署设备内置的 Admin 始终拥有最高权限。"
+        title="超级管理员与系统内置 Admin"
+        description="站点级设置仅超级管理员可编辑；系统内置的 Admin 始终拥有最高权限。"
         icon={<ShieldCheck size={18} />}
         extra={<span className="badge badge-green">始终可用</span>}
       >
@@ -1372,13 +1372,13 @@ function AccessSection({
             <span className="settings-device-avatar">{deviceAdminName.slice(0, 2).toUpperCase()}</span>
             <div>
               <strong>{deviceAdminName}</strong>
-              <span>部署设备内置管理员 · 超级管理员</span>
+              <span>系统内置管理员 · 超级管理员</span>
             </div>
           </div>
           <ul className="settings-device-points">
             <li>
               <CheckCircle2 size={14} />
-              来自本机回环地址或部署机自身 IPv4 的请求会自动获得该身份；设备管理员可在登录页退出，随后改用其他账号登录。
+              来自本机回环地址或本机自身 IPv4 的请求会自动获得该身份；系统内置管理员可在登录页退出，随后改用其他账号登录。
             </li>
             <li>
               <CheckCircle2 size={14} />
@@ -1386,7 +1386,7 @@ function AccessSection({
             </li>
             <li>
               <CheckCircle2 size={14} />
-              账号角色为 <code>super</code> 的超级管理员与设备 Admin 拥有相同的站点级权限：可编辑本页设置、
+              账号角色为 <code>super</code> 的超级管理员与系统内置 Admin 拥有相同的站点级权限：可编辑本页设置、
               管理账号与角色、查看所有团队。
             </li>
             <li>
@@ -2104,7 +2104,7 @@ function AccountScopeEditor({
     <p className="settings-note span-2">
       <ShieldCheck size={13} />
       {draft.role === "super"
-        ? "超级管理员拥有与部署设备 Admin 相同的站点级权限，请谨慎授予。"
+        ? "超级管理员拥有与系统内置 Admin 相同的站点级权限，请谨慎授予。"
         : "成员角色无需额外授权范围，登录后可浏览被允许的团队内容。"}
     </p>
   );
@@ -2480,7 +2480,7 @@ function AccountsSection({
 
       <SettingsCard
         title="账号列表"
-        description={`共 ${normalUsers.length} 个可管理账号${deviceRow ? "，另有 1 个部署设备内置管理员" : ""}。`}
+        description={`共 ${normalUsers.length} 个可管理账号${deviceRow ? "，另有 1 个系统内置管理员" : ""}。`}
         icon={<UsersRound size={18} />}
         extra={
           <button
@@ -2523,7 +2523,7 @@ function AccountsSection({
                       <span className="badge badge-gray">只读</span>
                     </div>
                     <div className="settings-account-meta">
-                      <span>部署设备内置管理员，不可管理</span>
+                      <span>系统内置管理员，不可管理</span>
                     </div>
                   </div>
                 </div>
@@ -3965,7 +3965,7 @@ function SystemResetSection({ onCompleted }: { onCompleted: () => Promise<void> 
           if (error.status === 403) {
             setStep("closed");
             setForbidden(true);
-            toast("仅部署设备内置 Admin 可以重置系统", "error");
+            toast("仅系统内置 Admin 可以重置系统", "error");
           } else if (error.status === 422 && error.code === "confirm_mismatch") {
             const expected =
               error.details && typeof error.details === "object"
@@ -4017,9 +4017,9 @@ function SystemResetSection({ onCompleted }: { onCompleted: () => Promise<void> 
           <span className="state-icon danger">
             <ShieldAlert size={26} />
           </span>
-          <h1>仅部署设备内置 Admin 可重置系统</h1>
+          <h1>仅系统内置 Admin 可重置系统</h1>
           <p>
-            系统重置会清空整个部署的数据，只对运行在部署设备上的内置 <code>Admin</code>{" "}
+            系统重置会清空整个站点的数据，只对系统内置的 <code>Admin</code>{" "}
             开放。存储在册的超级管理员账号即使拥有站点设置权限，也不能查看或执行该操作。
           </p>
           <div className="state-actions">
@@ -4099,8 +4099,8 @@ function SystemResetSection({ onCompleted }: { onCompleted: () => Promise<void> 
             <p className="settings-danger-success-note">
               <ShieldCheck size={15} />
               <span>
-                <strong>设备管理员身份保留</strong>
-                ：你仍以部署设备内置 <code>Admin</code> 身份登录，不会被登出。需要重建工作区时，前往
+                <strong>系统内置管理员身份保留</strong>
+                ：你仍以系统内置 <code>Admin</code> 身份登录，不会被登出。需要重建工作区时，前往
                 「工作区设置」重新创建团队与开发组即可。
               </span>
             </p>
@@ -4113,7 +4113,7 @@ function SystemResetSection({ onCompleted }: { onCompleted: () => Promise<void> 
               <ShieldAlert size={22} />
             </span>
             <div>
-              <span className="settings-danger-hero-eyebrow">DANGER ZONE · 仅设备管理员</span>
+              <span className="settings-danger-hero-eyebrow">DANGER ZONE · 仅系统内置管理员</span>
               <h2>重置整个系统为默认设置并清除所有数据</h2>
               <p>
                 这是一次不可撤销的出厂重置：全部业务数据与账号记录会被永久删除，所有设置恢复为默认值，
@@ -4155,7 +4155,7 @@ function SystemResetSection({ onCompleted }: { onCompleted: () => Promise<void> 
             <li>
               <ShieldCheck size={14} />
               <span>
-                设备管理员身份不写入配置，因此会保留；重置后工作区变为空白，可在「工作区设置」中重新创建。
+                系统内置管理员身份不写入配置，因此会保留；重置后工作区变为空白，可在「工作区设置」中重新创建。
               </span>
             </li>
           </ul>
@@ -4227,7 +4227,7 @@ function SystemResetSection({ onCompleted }: { onCompleted: () => Promise<void> 
       <ConfirmDialog
         open={step === "confirm"}
         title="确定要重置整个系统吗？"
-        message="重置会永久删除全部团队、开发组、成员、任务、待办、账号、日志与上传文件，并把所有设置恢复为默认值。设备管理员身份会保留，但所有业务数据都无法恢复。确认后还需要输入完整站点名称。"
+        message="重置会永久删除全部团队、开发组、成员、任务、待办、账号、日志与上传文件，并把所有设置恢复为默认值。系统内置管理员身份会保留，但所有业务数据都无法恢复。确认后还需要输入完整站点名称。"
         confirmLabel="确认重置"
         onClose={() => setStep("closed")}
         onConfirm={() => setStep("input")}
@@ -4245,7 +4245,7 @@ function SystemResetSection({ onCompleted }: { onCompleted: () => Promise<void> 
               账号、邮件验证码、激活令牌、邮件日志与审计日志，以及已上传的头像文件。
             </p>
             <p>
-              该操作<strong>不可撤销、无法恢复</strong>。设备管理员身份会保留，但工作区将变为空白，需要重新创建。
+              该操作<strong>不可撤销、无法恢复</strong>。系统内置管理员身份会保留，但工作区将变为空白，需要重新创建。
             </p>
             <p>
               请输入当前完整站点名称 <strong>{info.siteName}</strong> 以解锁最终按钮。
@@ -4274,7 +4274,7 @@ function DomainSettingsPage() {
     return <SettingsAccessDenied onBack={() => navigate("overview")} />;
   }
   const identityLabel = me?.isDeviceAdmin
-    ? "部署设备管理员"
+    ? "系统内置管理员"
     : me?.userRole === "super"
       ? "超级管理员"
       : me?.admin.role === "team_admin"
@@ -4941,7 +4941,7 @@ function SiteSettingsPage() {
 
   const canSave = hasUnsaved && !saving;
   const adminName = data?.me.name ?? "Admin";
-  const identityLabel = data?.me.isDeviceAdmin ? "部署设备管理员" : "超级管理员";
+  const identityLabel = data?.me.isDeviceAdmin ? "系统内置管理员" : "超级管理员";
   const isSiteTab =
     activeTab !== "workspace" && activeTab !== "accounts" && activeTab !== "reset";
   const saveLabel = activeTab === "json" ? "校验并保存" : "保存设置";
@@ -5022,7 +5022,7 @@ function SiteSettingsPage() {
         </span>
         <span className="settings-meta-chip">
           <Sparkles size={13} />
-          内置设备管理员 <strong>{meta?.deviceAdminName ?? "Admin"}</strong>
+          系统内置管理员 <strong>{meta?.deviceAdminName ?? "Admin"}</strong>
           <span className="settings-meta-divider">·</span>
           不写入配置
         </span>
