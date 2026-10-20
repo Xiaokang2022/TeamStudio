@@ -35,7 +35,7 @@ import type { TagLibraryGroupOption } from "../components/TagPicker";
 import { WorkloadMeter } from "../components/WorkloadMeter";
 import { WorkloadDetailDialog } from "../components/WorkloadDetailDialog";
 import { Select } from "../components/Select";
-import { cn, formatDate, formatDateTime } from "../lib/utils";
+import { cn, formatDate, formatDateTime, linkedMemberIdsOf } from "../lib/utils";
 import { TASK_RANGES, isWithinRange, rangeStartISO } from "../lib/scope";
 import {
   DIFFICULTY_META,
@@ -256,7 +256,10 @@ export default function TaskOverviewPage() {
   const me = data?.me ?? null;
   const teamId = currentTeam?.id ?? "";
   const groupId = currentGroup?.id ?? "";
+  /** Current development group's archive id (null when this group has no archive). */
   const selfMemberId = me?.linkedMemberId ?? null;
+  /** Every archive id of the signed-in account across all development groups. */
+  const selfMemberIds = useMemo(() => linkedMemberIdsOf(me), [me]);
   const canCreate = Boolean(me?.authenticated && (canManageActiveGroup || selfMemberId));
 
   const [payload, setPayload] = useState<TaskOverviewData | null>(null);
@@ -357,6 +360,29 @@ export default function TaskOverviewPage() {
   const windowLabel = meta.windowLabel || "近 4 周";
   const aggregate = scope !== "group";
   const showTeamBadge = scope === "all";
+
+  /**
+   * Archive id -> person id (the merged workload's main archive id). Tasks always
+   * carry the archive row they belong to, while filters / options / dialogs are
+   * person-based because aggregate scopes merge one person's rows into one card.
+   */
+  const personIdByMemberId = useMemo(() => {
+    const map = new Map<string, string>();
+    workloads.forEach((workload) => {
+      map.set(workload.memberId, workload.memberId);
+      (workload.memberIds ?? []).forEach((archiveId) => {
+        if (archiveId && archiveId !== workload.memberId && !map.has(archiveId)) {
+          map.set(archiveId, workload.memberId);
+        }
+      });
+    });
+    return map;
+  }, [workloads]);
+
+  const personIdOf = useCallback(
+    (memberId: string) => personIdByMemberId.get(memberId) ?? memberId,
+    [personIdByMemberId],
+  );
 
   /** #13 tasks active inside the selected time span. */
   const windowTasks = useMemo(
@@ -471,7 +497,7 @@ export default function TaskOverviewPage() {
       if (progressFilter !== "all" && task.progressStatus !== progressFilter) return false;
       if (healthFilter !== "all" && task.healthStatus !== healthFilter) return false;
       if (priorityFilter !== "all" && task.priority !== priorityFilter) return false;
-      if (memberFilter !== "all" && task.memberId !== memberFilter) return false;
+      if (memberFilter !== "all" && personIdOf(task.memberId) !== memberFilter) return false;
       if (tagFilter !== "all" && !(task.tags ?? []).some((tag) => tag.id === tagFilter)) return false;
       if (keyword) {
         const tagText = (task.tags ?? []).map((tag) => tag.name).join(" ");
@@ -490,6 +516,7 @@ export default function TaskOverviewPage() {
     priorityFilter,
     memberFilter,
     tagFilter,
+    personIdOf,
   ]);
 
   const sortedTasks = useMemo(
@@ -497,18 +524,18 @@ export default function TaskOverviewPage() {
     [filteredTasks, sort],
   );
 
+  // Person-deduplicated member filter options (one entry per human, not per archive).
   const memberOptions = useMemo(() => {
     const map = new Map<string, { id: string; name: string }>();
-    windowTasks.forEach((task) => {
-      if (!map.has(task.memberId)) map.set(task.memberId, { id: task.memberId, name: task.memberName });
-    });
-    workloads.forEach((workload) => {
-      if (!map.has(workload.memberId)) {
-        map.set(workload.memberId, { id: workload.memberId, name: workload.memberName });
-      }
-    });
+    const add = (memberId: string, name: string) => {
+      const personId = personIdByMemberId.get(memberId) ?? memberId;
+      if (!personId) return;
+      if (!map.has(personId)) map.set(personId, { id: personId, name: name || personId });
+    };
+    workloads.forEach((workload) => add(workload.memberId, workload.memberName));
+    windowTasks.forEach((task) => add(task.memberId, task.memberName));
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
-  }, [windowTasks, workloads]);
+  }, [windowTasks, workloads, personIdByMemberId]);
 
   /** Target group of the open dialog: task's own group when editing, current group when creating. */
   const dialogGroupId = dialog.task ? dialog.task.groupId : groupId;
@@ -520,38 +547,92 @@ export default function TaskOverviewPage() {
 
   const dialogMembers = useMemo<TaskMemberOption[]>(() => {
     const map = new Map<string, TaskMemberOption>();
-    if (scope === "group") {
-      workloads.forEach((workload) => {
-        map.set(workload.memberId, {
-          id: workload.memberId,
-          name: workload.memberName,
-          title: workload.memberTitle,
-          avatarColor: workload.avatarColor,
-        });
-      });
-    }
+    const add = (option: TaskMemberOption) => {
+      if (!option.id || map.has(option.id)) return;
+      map.set(option.id, option);
+    };
+    // Task rows are authoritative for the archive ids of the target group.
     tasks
       .filter((task) => task.groupId === dialogGroupId)
       .forEach((task) => {
-        map.set(task.memberId, {
+        add({
           id: task.memberId,
           name: task.memberName,
           title: task.memberTitle,
           avatarColor: task.memberAvatarColor,
         });
       });
+    // Person-merged workloads: keep the archive row that lives in the target group,
+    // so assigning a task never writes into another group's member id.
+    workloads.forEach((workload) => {
+      const membership = workload.memberships?.find((item) => item.groupId === dialogGroupId);
+      if (membership) {
+        add({
+          id: membership.memberId,
+          name: workload.memberName,
+          title: membership.title || workload.memberTitle,
+          avatarColor: workload.avatarColor,
+        });
+        return;
+      }
+      // Classic single-group payloads: the workload row is this group's archive.
+      if (scope === "group" && dialogGroupId === groupId) {
+        add({
+          id: workload.memberId,
+          name: workload.memberName,
+          title: workload.memberTitle,
+          avatarColor: workload.avatarColor,
+        });
+      }
+    });
     if (dialog.task) {
-      map.set(dialog.task.memberId, {
+      add({
         id: dialog.task.memberId,
         name: dialog.task.memberName,
         title: dialog.task.memberTitle,
         avatarColor: dialog.task.memberAvatarColor,
       });
     }
+    // Aggregate scope: the current group's own archive is always assignable when it
+    // exists (`linkedMemberId` is resolved per active group by the backend).
+    if (!dialog.task && selfMemberId && dialogGroupId === groupId && scope !== "group") {
+      const selfWorkload = workloads.find((workload) =>
+        (workload.memberIds?.length ? workload.memberIds : [workload.memberId]).includes(
+          selfMemberId,
+        ),
+      );
+      const selfMembership = selfWorkload?.memberships?.find(
+        (item) => item.groupId === groupId,
+      );
+      add({
+        id: selfMemberId,
+        name: me?.name || selfWorkload?.memberName || selfMemberId,
+        title: selfMembership?.title || selfWorkload?.memberTitle || "",
+        avatarColor: selfWorkload?.avatarColor || me?.avatarColor || "#7c3aed",
+      });
+    }
     return Array.from(map.values());
-  }, [scope, workloads, tasks, dialogGroupId, dialog.task]);
+  }, [scope, tasks, workloads, dialogGroupId, groupId, dialog.task, selfMemberId, me]);
 
-  const defaultMemberId = selfMemberId ?? dialogMembers[0]?.id ?? null;
+  // Creating a task defaults to my current-group archive; editing keeps the task's owner.
+  const defaultMemberId = useMemo(() => {
+    if (selfMemberId) {
+      const direct = dialogMembers.find((option) => option.id === selfMemberId);
+      if (direct) return direct.id;
+      const personId = personIdByMemberId.get(selfMemberId) ?? selfMemberId;
+      const merged = dialogMembers.find(
+        (option) => option.id === personId || personIdByMemberId.get(option.id) === personId,
+      );
+      if (merged) return merged.id;
+    }
+    return dialogMembers[0]?.id ?? null;
+  }, [selfMemberId, dialogMembers, personIdByMemberId]);
+
+  // Non-admins may only manage their own tasks: fix the dialog to the task's own
+  // archive row, so a task that lives in another development group is still editable
+  // (the account owns archives in several groups).
+  const dialogSelfMemberId =
+    !canManageActiveGroup && dialog.task ? dialog.task.memberId : selfMemberId;
 
   /** Groups offered by the tag library manager (aggregate scope can manage every visible group). */
   const tagGroupOptions = useMemo<TagLibraryGroupOption[]>(() => {
@@ -603,9 +684,9 @@ export default function TaskOverviewPage() {
     (task: MemberTask) =>
       Boolean(
         me?.authenticated &&
-          (canManageActiveGroup || (selfMemberId && task.memberId === selfMemberId)),
+          (canManageActiveGroup || selfMemberIds.includes(task.memberId)),
       ),
-    [me?.authenticated, canManageActiveGroup, selfMemberId],
+    [me?.authenticated, canManageActiveGroup, selfMemberIds],
   );
 
   const resetFilters = () => {
@@ -648,13 +729,13 @@ export default function TaskOverviewPage() {
         resetFilters();
       } else {
         setMemberFilter((current) =>
-          current !== "all" && current !== saved.memberId ? "all" : current,
+          current !== "all" && current !== personIdOf(saved.memberId) ? "all" : current,
         );
       }
       void loadTasks(true);
       void reload(true);
     },
-    [dialog.task, loadTasks, reload],
+    [dialog.task, loadTasks, reload, personIdOf],
   );
 
   const removeTask = async () => {
@@ -1374,7 +1455,7 @@ export default function TaskOverviewPage() {
         aggregate={aggregate}
         members={dialogMembers}
         canAssignOthers={canManageActiveGroup}
-        selfMemberId={selfMemberId}
+        selfMemberId={dialogSelfMemberId}
         defaultMemberId={defaultMemberId}
         onClose={() => setDialog({ open: false, task: null })}
         onSaved={handleSaved}

@@ -33,9 +33,25 @@
   color: var(--text);
 }
 
-.wl-detail-identity span {
+.wl-detail-identity > span {
   font-size: 12px;
   color: var(--text-3);
+}
+
+/* Multi-group badge strip: one person belongs to several development groups. */
+.wl-detail-groups {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.wl-detail-groups .badge {
+  font-size: 10px;
+  padding: 1px 7px;
+  gap: 4px;
 }
 
 .wl-detail-hero-level {

@@ -153,6 +153,73 @@
   color: var(--text-3);
 }
 
+/* ---------- Member archives (one per development group) ---------- */
+.profile-membership-chip {
+  gap: 5px;
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+  line-height: 1.5;
+}
+
+.profile-members {
+  padding: 20px 22px 22px;
+}
+
+.profile-members-note {
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+.profile-member-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.profile-member-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  min-width: 0;
+}
+
+.profile-member-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.profile-member-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.profile-member-head strong {
+  font-size: 12.5px;
+  letter-spacing: -0.01em;
+}
+
+.profile-member-head .badge {
+  font-size: 10px;
+  gap: 4px;
+}
+
+.profile-member-meta {
+  font-size: 10.5px;
+  color: var(--text-3);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
 /* ---------- Personal settings ---------- */
 .profile-settings {
   padding: 20px 22px 22px;
@@ -507,7 +574,8 @@
 
 @media (max-width: 960px) {
   .profile-grid,
-  .profile-rb {
+  .profile-rb,
+  .profile-member-list {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -528,6 +596,7 @@
 @media (max-width: 620px) {
   .profile-hero,
   .profile-section,
+  .profile-members,
   .profile-settings {
     padding: 16px;
   }

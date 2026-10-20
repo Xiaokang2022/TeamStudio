@@ -28,6 +28,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Iterable
 
 from ..db import json_loads, rows
+from .member_identity import group_members, identity_fields, member_ids
 
 CAPACITY_POINTS = 15
 WINDOW_WEEKS = 4
@@ -328,8 +329,11 @@ def build_workload_section(
 ) -> dict[str, Any]:
     """Return the workload array and aggregate summary for one or more groups.
 
-    Every member in scope is included, even with zero tasks, ordered by group then member
-    sort order. A single-group scope produces exactly the legacy payload.
+    Every person in scope is included, even with zero tasks, ordered by group then member
+    sort order. Round 7: when one account owns archive rows in several scoped groups the
+    rows are merged into a single workload record — points and counters are summed over
+    every archive's tasks and the average is recomputed from the merged task set over the
+    same four rolling windows. A single-group scope produces exactly the legacy payload.
     """
     groups = group_id_list(group_ids)
     members = _member_rows_for_scope(conn, groups)
@@ -350,10 +354,15 @@ def build_workload_section(
     now = local_now()
     today = now.date()
     windows = _windows(now)
-    workloads = [
-        _member_workload(member, tasks_by_member.get(member["id"], []), windows, today)
-        for member in members
-    ]
+    workloads: list[dict[str, Any]] = []
+    for person in group_members(members):
+        person_archive_ids = member_ids(person)
+        person_tasks: list[dict[str, Any]] = []
+        for member_id in person_archive_ids:
+            person_tasks.extend(tasks_by_member.get(member_id, []))
+        workload = _member_workload(person["primary"], person_tasks, windows, today)
+        workload.update(identity_fields(person))
+        workloads.append(workload)
     member_count = len(workloads)
     total_current = int(sum(item["currentPoints"] for item in workloads))
     total_average = _round_points(sum(item["averagePoints"] for item in workloads))

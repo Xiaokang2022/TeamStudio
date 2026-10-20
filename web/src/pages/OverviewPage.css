@@ -658,7 +658,15 @@
   font-weight: 700;
 }
 
-/* Group badge shown while browsing an aggregated scope. */
+/* Group badges shown while browsing an aggregated scope. */
+.ov-member-groups {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
 .ov-member-group {
   --group-color: var(--accent);
   max-width: 100%;
@@ -669,6 +677,13 @@
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-member-group-more {
+  --group-color: var(--text-3);
+  flex: none;
+  color: var(--text-2);
 }
 
 .ov-member-title {
@@ -1663,6 +1678,72 @@
 .md-tags .chip {
   font-size: 10px;
   padding: 3px 8px;
+}
+
+/* "所属团队 / 开发组" block: one row per development-group archive. */
+.md-memberships {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.md-membership {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.md-membership-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.md-membership-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.md-membership-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.md-membership-head .badge {
+  font-size: 10px;
+  gap: 4px;
+}
+
+.md-membership-team {
+  background: var(--surface);
+  color: var(--text-2);
+  border-color: var(--border-strong);
+}
+
+.md-membership-group {
+  --group-color: var(--accent);
+  background: color-mix(in srgb, var(--group-color) 10%, var(--surface));
+  border-color: color-mix(in srgb, var(--group-color) 32%, var(--border));
+  color: color-mix(in srgb, var(--group-color) 76%, var(--text));
+}
+
+.md-membership-meta {
+  color: var(--text-3);
+  font-size: 10.5px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 
 .md-work-list {

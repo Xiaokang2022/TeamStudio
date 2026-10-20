@@ -1,4 +1,18 @@
-import type { CurrentUser, Member, Todo, TodoPriority } from "../types";
+import type { CurrentUser, Member, MemberMembership, Todo, TodoPriority } from "../types";
+
+/**
+ * Minimal identity shape shared by member cards, workloads and profile rows.
+ * `memberIds` lists every archive row of the same person (main archive first).
+ */
+export type MemberIdentity = Pick<Member, "id" | "email"> & { memberIds?: string[] };
+
+/** One development group a person belongs to (used for multi-group badges). */
+export interface MemberGroupRef {
+  groupId: string;
+  groupName: string;
+  teamId: string;
+  teamName: string;
+}
 
 export function cn(...values: Array<string | false | null | undefined>): string {
   return values.filter(Boolean).join(" ");
@@ -140,19 +154,114 @@ export function canManageGroup(
 }
 
 /**
+ * Every member archive id linked to this account. The backend returns
+ * `linkedMemberIds` for all development groups; `linkedMemberId` (current
+ * group's archive) stays as a fallback for older payloads.
+ */
+export function linkedMemberIdsOf(user: CurrentUser | null | undefined): string[] {
+  if (!user) return [];
+  const ids = Array.isArray(user.linkedMemberIds) ? user.linkedMemberIds.filter(Boolean) : [];
+  const fallback = user.linkedMemberId ? [user.linkedMemberId] : [];
+  return Array.from(new Set([...ids, ...fallback]));
+}
+
+/** Every archive id of one person: the main archive id plus its merged `memberIds`. */
+export function memberArchiveIdsOf(
+  member: Pick<Member, "id"> & { memberIds?: string[] } | null | undefined,
+): string[] {
+  if (!member) return [];
+  const ids = [member.id, ...(Array.isArray(member.memberIds) ? member.memberIds : [])].filter(
+    Boolean,
+  );
+  return Array.from(new Set(ids));
+}
+
+/**
+ * "这是我" 判定：账号在任一开发组的档案都算本人（linkedMemberIds 命中），
+ * 或登录邮箱与该档案邮箱一致。超级管理员身份不在此列——那是权限而非本人。
+ */
+export function isLinkedMember(
+  user: CurrentUser | null | undefined,
+  member: MemberIdentity | null | undefined,
+): boolean {
+  if (!user || !member) return false;
+  const linkedIds = linkedMemberIdsOf(user);
+  if (memberArchiveIdsOf(member).some((id) => linkedIds.includes(id))) return true;
+  const viewerEmail = (user.email || "").trim().toLowerCase();
+  const memberEmail = (member.email || "").trim().toLowerCase();
+  return Boolean(viewerEmail) && Boolean(memberEmail) && viewerEmail === memberEmail;
+}
+
+/** Fields any payload may use to describe a person's development groups. */
+export interface GroupRefSource {
+  groupId?: string;
+  groupName?: string;
+  teamId?: string;
+  teamName?: string;
+  memberships?: MemberMembership[];
+  groupIds?: string[];
+  groupNames?: string[];
+  teamIds?: string[];
+  teamNames?: string[];
+}
+
+/**
+ * All development groups a person belongs to. Prefers the merged `memberships`
+ * payload, then the flat `groupIds`/`groupNames` arrays, and finally the single
+ * group fields of classic (non-aggregated) payloads.
+ */
+export function memberGroupRefs(
+  member: GroupRefSource | null | undefined,
+): MemberGroupRef[] {
+  if (!member) return [];
+  const memberships = Array.isArray(member.memberships) ? member.memberships : [];
+  if (memberships.length) {
+    return memberships
+      .map((item) => ({
+        groupId: item.groupId || "",
+        groupName: item.groupName || item.groupId || "",
+        teamId: item.teamId || "",
+        teamName: item.teamName || "",
+      }))
+      .filter((item) => item.groupId || item.groupName);
+  }
+  const groupIds = Array.isArray(member.groupIds) ? member.groupIds : [];
+  const groupNames = Array.isArray(member.groupNames) ? member.groupNames : [];
+  if (groupIds.length || groupNames.length) {
+    const teamNames = Array.isArray(member.teamNames) ? member.teamNames : [];
+    const count = Math.max(groupIds.length, groupNames.length);
+    return Array.from({ length: count }, (_, index) => ({
+      groupId: groupIds[index] ?? `group-${index}`,
+      groupName: groupNames[index] ?? groupIds[index] ?? "",
+      teamId: "",
+      teamName: teamNames[index] ?? teamNames[0] ?? "",
+    })).filter((item) => item.groupName);
+  }
+  if (member.groupId || member.groupName) {
+    return [
+      {
+        groupId: member.groupId ?? "",
+        groupName: member.groupName ?? "",
+        teamId: member.teamId ?? "",
+        teamName: member.teamName ?? "",
+      },
+    ];
+  }
+  return [];
+}
+
+/**
  * 个人信息（姓名 / 邮箱 / 简介 / 头像 / 头像颜色 / 标签 / 技能）的编辑权限。
  * 仅超级管理员（含系统内置 Admin）与绑定账号本人可编辑。
  */
 export function canEditPersonalInfo(
   user: CurrentUser | null | undefined,
-  member: Pick<Member, "id" | "email"> | null | undefined,
+  member: MemberIdentity | null | undefined,
 ): boolean {
   if (!user || !member) return false;
   if (user.isSuperAdmin || user.isDeviceAdmin) return true;
   if (!user.authenticated) return false;
-  if (user.linkedMemberId && user.linkedMemberId === member.id) return true;
-  const email = (user.email || "").trim().toLowerCase();
-  return Boolean(email) && (member.email || "").trim().toLowerCase() === email;
+  return isLinkedMember(user, member);
 }
 
 /**
@@ -174,16 +283,22 @@ export function canEditOrganizationalInfo(
 
 /**
  * 成员卡片「编辑资料」的入口权限：个人信息或组织信息至少有一项可编辑。
+ * `member` 可以是成员档案对象（推荐，支持合并卡的 `memberIds`）或单个档案 id。
  */
 export function canEditMember(
   user: CurrentUser | null | undefined,
   teamId: string,
   groupId: string,
-  memberId: string,
+  member: string | MemberIdentity | null | undefined,
 ): boolean {
   if (!user) return false;
   if (canEditOrganizationalInfo(user, teamId, groupId)) return true;
-  return Boolean(user.permissions.canEditSelf && user.linkedMemberId === memberId);
+  if (!user.permissions.canEditSelf || !member) return false;
+  if (typeof member === "string") {
+    return linkedMemberIdsOf(user).includes(member);
+  }
+  const linkedIds = linkedMemberIdsOf(user);
+  return memberArchiveIdsOf(member).some((id) => linkedIds.includes(id));
 }
 
 export interface CalendarCell {

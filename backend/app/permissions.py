@@ -45,7 +45,7 @@ def require_admin(user: CurrentUser, team_id: str, group_id: str) -> CurrentUser
 
 
 def can_self_edit(user: CurrentUser, member_id: str | None) -> bool:
-    if not member_id or user.linked_member_id != member_id:
+    if not member_id or not user.is_linked_member(member_id):
         return False
     return settings_service.get().features.allowMemberSelfEdit
 
@@ -67,8 +67,7 @@ def is_todo_creator(user: CurrentUser, todo: dict[str, Any]) -> bool:
 
 
 def is_todo_assignee(user: CurrentUser, todo: dict[str, Any]) -> bool:
-    assignee = todo.get("assignee_member_id")
-    return bool(user.linked_member_id) and user.linked_member_id == assignee
+    return user.is_linked_member(todo.get("assignee_member_id"))
 
 
 def require_todo_write(

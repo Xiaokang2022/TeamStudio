@@ -11,6 +11,7 @@ from ..auth import CurrentUser, get_current_user, refresh_session_cookie
 from ..config import settings_service
 from ..db import db, rows, scalar
 from ..http import ok
+from ..services.member_identity import first_member_in_group
 
 
 router = APIRouter(prefix="/api", tags=["bootstrap"])
@@ -88,6 +89,24 @@ def _resolve_active(
     return active_team, active_group
 
 
+def _resolve_active_linked_member(conn, user: CurrentUser, active_group: dict | None) -> None:
+    """Point ``me.linkedMemberId`` at the archive row of the **active** development group.
+
+    Round 7: one account may own archive rows in several groups. The global first row is
+    kept on ``/api/auth/me``, but the workspace top-right "my member card" must always
+    address the current group — and fall back to ``null`` when this group has no profile
+    (so the UI can hide the entry instead of rendering a dead link).
+    """
+    linked_ids = user.linked_member_id_list()
+    resolved = (
+        first_member_in_group(conn, active_group["id"], linked_ids)
+        if active_group
+        else None
+    )
+    user.linked_member_id = resolved["id"] if resolved else None
+    user.linked_member_name = resolved["name"] if resolved else None
+
+
 @router.get("/bootstrap")
 def bootstrap(
     response: Response,
@@ -102,6 +121,7 @@ def bootstrap(
     with db() as conn:
         teams = _workspace_tree(conn)
         active_team, active_group = _resolve_active(teams, teamId, groupId)
+        _resolve_active_linked_member(conn, user, active_group)
         stats = {
             "teams": len(teams),
             "groups": sum(len(team["groups"]) for team in teams),

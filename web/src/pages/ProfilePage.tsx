@@ -31,6 +31,7 @@ import {
   formatFullDate,
   hashRoute,
   PRIORITY_META as TODO_PRIORITY_META,
+  STATUS_META,
 } from "../lib/utils";
 import { PRIORITY_META as TASK_PRIORITY_META, TASK_PROGRESS_META } from "../lib/taskMeta";
 import type {
@@ -173,19 +174,88 @@ function SectionCard({
   );
 }
 
-function MemberChips({ members }: { members: ProfileMember[] }) {
-  if (!members.length) {
+/**
+ * One `members` archive row per development group. The same account may own several
+ * rows (one per group, possibly across teams); the personal home page lists them once
+ * per development group.
+ */
+function uniqueMemberArchives(members: ProfileMember[]): ProfileMember[] {
+  const seen = new Set<string>();
+  const rows: ProfileMember[] = [];
+  for (const member of members) {
+    const key =
+      member.groupId || `${member.teamId || ""}::${member.groupName || ""}` || member.id;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push(member);
+  }
+  return rows;
+}
+
+/** Grouped "所属团队 / 开发组" summary (no per-archive chips, no duplicates). */
+function MembershipSummary({ teams, groups }: { teams: string[]; groups: string[] }) {
+  if (!teams.length && !groups.length) {
     return <span className="chip">暂未关联成员档案</span>;
   }
   return (
     <>
-      {members.map((member) => (
-        <span className="chip" key={member.id} title={`${member.teamName} / ${member.groupName}`}>
-          <UserRound size={11} /> {member.name}
-          {member.groupName ? <span className="profile-chip-muted">· {member.groupName}</span> : null}
+      {teams.length ? (
+        <span className="chip profile-membership-chip" title={`所属团队：${teams.join("、")}`}>
+          <Building2 size={11} /> 所属团队：{teams.join("、")}
         </span>
-      ))}
+      ) : null}
+      {groups.length ? (
+        <span className="chip profile-membership-chip" title={`所属开发组：${groups.join("、")}`}>
+          <Layers3 size={11} /> 开发组：{groups.join("、")}
+        </span>
+      ) : null}
     </>
+  );
+}
+
+/** Every member archive of this account, one row per development group. */
+function MemberArchiveList({ members }: { members: ProfileMember[] }) {
+  if (!members.length) {
+    return <div className="profile-empty">暂未关联成员档案</div>;
+  }
+  return (
+    <div className="profile-member-list">
+      {members.map((member) => {
+        const statusLabel = member.status
+          ? STATUS_META[member.status]?.label ?? member.status
+          : "";
+        return (
+          <div className="profile-member-row" key={member.id}>
+            <Avatar
+              name={member.name}
+              src={member.avatar}
+              color={member.avatarColor}
+              size="sm"
+            />
+            <div className="profile-member-main">
+              <div className="profile-member-head">
+                <strong>{member.name}</strong>
+                {member.teamName ? (
+                  <span className="badge badge-gray" title={`团队：${member.teamName}`}>
+                    <Building2 size={10} /> {member.teamName}
+                  </span>
+                ) : null}
+                {member.groupName ? (
+                  <span className="badge badge-blue" title={`开发组：${member.groupName}`}>
+                    <Layers3 size={10} /> {member.groupName}
+                  </span>
+                ) : null}
+              </div>
+              <span className="profile-member-meta">
+                {[member.title || "未填写职位", member.role || "成员", statusLabel]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -242,6 +312,11 @@ export default function ProfilePage() {
 
   const teamNames = useMemo(() => uniqueNames(profile?.members.map((m) => m.teamName) ?? []), [profile]);
   const groupNames = useMemo(() => uniqueNames(profile?.members.map((m) => m.groupName) ?? []), [profile]);
+  /** One row per development group; duplicate archives of the same group collapse. */
+  const memberArchives = useMemo(
+    () => uniqueMemberArchives(profile?.members ?? []),
+    [profile],
+  );
   const isSelf = Boolean(profile?.isSelf);
   const canEdit = Boolean(profile?.isSelf && profile?.canEdit);
   const readOnlySuperView = Boolean(profile && !profile.isSelf && profile.canEdit);
@@ -466,21 +541,11 @@ export default function ProfilePage() {
             </p>
             {profile.adminScope ? <AdminScopeChips scope={profile.adminScope} /> : null}
             <div className="profile-chip-row">
-              {teamNames.map((name) => (
-                <span className="chip" key={`team-${name}`}>
-                  <Building2 size={11} /> {name}
-                </span>
-              ))}
-              {groupNames.map((name) => (
-                <span className="chip" key={`group-${name}`}>
-                  <Layers3 size={11} /> {name}
-                </span>
-              ))}
-              <MemberChips members={profile.members} />
+              <MembershipSummary teams={teamNames} groups={groupNames} />
             </div>
             <p className="profile-joined">
               {user.createdAt
-                ? `加入时间：${formatFullDate(user.createdAt)} · 关联 ${memberTaskCount} 个成员档案`
+                ? `加入时间：${formatFullDate(user.createdAt)} · 关联 ${memberArchives.length} 个成员档案`
                 : "系统内置身份 · 未关联成员档案"}
             </p>
           </div>
@@ -493,6 +558,22 @@ export default function ProfilePage() {
             </div>
           ))}
         </div>
+      </section>
+
+      <section className="card profile-members" aria-label="成员档案">
+        <div className="profile-section-head">
+          <div className="profile-section-title">
+            <span className="profile-section-icon">
+              <Layers3 size={16} />
+            </span>
+            <h2>成员档案</h2>
+            <span className="badge badge-gray">{memberArchives.length}</span>
+          </div>
+          <span className="profile-members-note">
+            同一账号在多个开发组的档案，同一开发组只展示一次
+          </span>
+        </div>
+        <MemberArchiveList members={memberArchives} />
       </section>
 
       {canEdit ? (

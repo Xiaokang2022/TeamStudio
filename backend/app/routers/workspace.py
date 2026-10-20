@@ -25,6 +25,11 @@ from ..permissions import (
 )
 from ..scope import resolve_scope
 from ..services import accounts
+from ..services.member_identity import (
+    group_members,
+    identity_fields,
+    member_ids,
+)
 from ..services.tasks_service import build_workload_section
 
 router = APIRouter(
@@ -108,11 +113,11 @@ def _avatar_url(value: Any) -> str:
 
 
 def _can_edit_personal_info(user: CurrentUser, member: dict[str, Any]) -> bool:
-    """Super administrators and the linked account owner may edit personal info."""
+    """Super administrators and every archive row of the linked account may edit personal info."""
     if user.is_super_admin:
         return True
     member_id = str(member.get("id") or "")
-    if user.linked_member_id and str(user.linked_member_id) == member_id:
+    if user.is_linked_member(member_id):
         return True
     email = str(member.get("email") or "").strip().lower()
     return bool(email) and email == str(user.email or "").strip().lower()
@@ -388,14 +393,26 @@ def group_overview(
         if assignee and todo.get("status") != "done":
             open_todos_by_member[assignee] = open_todos_by_member.get(assignee, 0) + 1
 
-    members = [
-        _member_payload(member, works_by_member.get(member["id"], []), open_todos_by_member.get(member["id"], 0))
-        for member in member_rows
-    ]
+    members: list[dict[str, Any]] = []
+    # Round 7: one account may own archive rows in several development groups. Aggregate
+    # scopes merge them into one member card (the first row, by group ordering, is the
+    # primary archive); group scope is unaffected because an account is unique there.
+    people = group_members(member_rows)
+    for person in people:
+        person_archive_ids = member_ids(person)
+        person_works: list[dict[str, Any]] = []
+        for member_id in person_archive_ids:
+            person_works.extend(works_by_member.get(member_id, []))
+        open_todos = sum(
+            open_todos_by_member.get(member_id, 0) for member_id in person_archive_ids
+        )
+        card = _member_payload(person["primary"], person_works, open_todos)
+        card.update(identity_fields(person))
+        members.append(card)
     works = [_work_payload(work) for work in work_rows]
     done_todos = sum(1 for todo in todo_rows if todo.get("status") == "done")
     stats = {
-        "members": len(member_rows),
+        "members": len(people),
         "works": len(work_rows),
         "currentWorks": sum(1 for work in works if work["status"] == "current"),
         "doneWorks": sum(1 for work in works if work["status"] == "done"),
@@ -677,7 +694,7 @@ def delete_member(
         get_group(conn, team_id, group_id)
         member = get_member(conn, member_id, group_id)
         require_admin(user, team_id, group_id)
-        if user.linked_member_id == member_id:
+        if user.is_linked_member(member_id):
             raise fail(409, "不能删除与当前登录身份关联的成员", "cannot_delete_self")
         # Responsibility matrix columns have no FK; detach them before the cascade delete.
         conn.execute(

@@ -22,6 +22,7 @@ from ..db import db, json_dumps, json_loads, new_id, now_iso, row, rows
 from ..http import fail, get_group, get_member, ok, parse_date, text
 from ..permissions import audit, require_authenticated, require_read_access
 from ..scope import resolve_scope
+from ..services.member_identity import first_member_in_group
 from ..services.tasks_service import (
     DIFFICULTIES,
     HEALTH_STATUSES,
@@ -151,24 +152,34 @@ def _require_task_manager(
     if _is_group_admin(user, team_id, group_id):
         return True
     target_member = task["member_id"] if task is not None else member_id
-    if not user.linked_member_id or user.linked_member_id != target_member:
+    if not user.is_linked_member(target_member):
         raise fail(403, "普通成员只能管理自己的任务", "forbidden")
     return False
 
 
 def _resolve_created_member(
-    user: CurrentUser, team_id: str, group_id: str, raw_member_id: Any
+    conn: sqlite3.Connection,
+    user: CurrentUser,
+    team_id: str,
+    group_id: str,
+    raw_member_id: Any,
 ) -> tuple[str, bool]:
-    """Resolve the task owner for POST, defaulting to the caller's linked member."""
+    """Resolve the task owner for POST, defaulting to the caller's archive in this group.
+
+    Round 7: an account may own archive rows in several development groups. When
+    ``memberId`` is omitted the default is the caller's row in the **request's** group,
+    never the global first row of another group.
+    """
     is_admin = _is_group_admin(user, team_id, group_id)
     raw = text(raw_member_id, "成员 ID", 80)
     if not raw:
         if is_admin:
             raise fail(422, "请指定任务所属成员", "validation_error")
-        if not user.linked_member_id:
+        linked = first_member_in_group(conn, group_id, user.linked_member_id_list())
+        if not linked:
             raise fail(403, "只有开发组成员可以创建自己的任务", "forbidden")
-        return user.linked_member_id, is_admin
-    if not is_admin and user.linked_member_id != raw:
+        return linked["id"], is_admin
+    if not is_admin and not user.is_linked_member(raw):
         raise fail(403, "普通成员只能创建自己的任务", "forbidden")
     return raw, is_admin
 
@@ -201,7 +212,7 @@ def create_task(
     with db() as conn:
         get_group(conn, team_id, group_id)
         member_id, _ = _resolve_created_member(
-            user, team_id, group_id, payload.get("memberId")
+            conn, user, team_id, group_id, payload.get("memberId")
         )
         get_member(conn, member_id, group_id)
 
@@ -298,7 +309,7 @@ def update_task(
             raw_member = text(payload.get("memberId"), "成员 ID", 80)
             if not raw_member:
                 raise fail(422, "成员 ID 不能为空", "validation_error")
-            if not is_admin and user.linked_member_id != raw_member:
+            if not is_admin and not user.is_linked_member(raw_member):
                 raise fail(403, "普通成员只能管理自己的任务", "forbidden")
             get_member(conn, raw_member, group_id)
             updates["member_id"] = raw_member

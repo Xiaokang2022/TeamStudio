@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import {
   AtSign,
   Briefcase,
+  Building2,
   CalendarDays,
   CheckCircle2,
   Clock,
   Gauge,
   History,
+  Layers3,
   ListTodo,
   Mail,
   Pencil,
@@ -32,11 +34,13 @@ import {
   cn,
   formatDate,
   formatDateTime,
+  isLinkedMember,
+  memberGroupRefs,
   relativeTime,
   STATUS_META,
 } from "../lib/utils";
 import { formatPercent, formatPoints, WORKLOAD_LEVEL_META, workloadLevel } from "../lib/taskMeta";
-import type { Member, WorkItem, WorkStatus, Workload } from "../types";
+import type { Member, MemberMembership, WorkItem, WorkStatus, Workload } from "../types";
 
 const WORK_STATUS_META: Record<WorkStatus, { label: string; badge: string }> = {
   current: { label: "进行中", badge: "badge-violet" },
@@ -86,7 +90,7 @@ export function MemberDrawer({
   onClose,
   onChanged,
 }: MemberDrawerProps) {
-  const { data, scope, navigate } = useApp();
+  const { data, navigate } = useApp();
   const { toast } = useToast();
   const user = data?.me ?? null;
 
@@ -211,12 +215,56 @@ export function MemberDrawer({
   const canEditOrg = canEditOrganizationalInfo(user, teamId, groupId);
   // Work items are maintained by organizational admins or the linked owner.
   const canEdit = canEditOrg || canEditPersonal;
-  const viewerEmail = (user?.email || "").trim().toLowerCase();
-  const isSelf = Boolean(
-    user &&
-      (user.linkedMemberId === member.id ||
-        (viewerEmail && member.email && member.email.trim().toLowerCase() === viewerEmail)),
+  const isSelf = isLinkedMember(user, member);
+
+  // Every development group of this person. The backend returns `memberships` in the
+  // aggregate scopes; fall back to the flat/single group fields so the drawer still
+  // shows the current development group with classic payloads.
+  const groupColorById = new Map<string, string>();
+  const groupNameById = new Map<string, string>();
+  const teamNameById = new Map<string, string>();
+  for (const team of data?.teams ?? []) {
+    teamNameById.set(team.id, team.name);
+    for (const item of team.groups) {
+      groupColorById.set(item.id, item.color);
+      groupNameById.set(item.id, item.name);
+      teamNameById.set(item.id, team.name);
+    }
+  }
+  const memberships: MemberMembership[] = member.memberships?.length
+    ? member.memberships
+    : memberGroupRefs(member).length
+      ? memberGroupRefs(member).map((ref) => ({ memberId: member.id, ...ref }))
+      : groupId
+        ? [
+            {
+              memberId: member.id,
+              groupId,
+              groupName: groupNameById.get(groupId) ?? "",
+              teamId,
+              teamName: teamNameById.get(teamId) ?? "",
+            },
+          ]
+        : [];
+  const uniqueGroupNames = Array.from(
+    new Set(memberships.map((item) => item.groupName).filter(Boolean)),
   );
+  const uniqueTeamNames = Array.from(
+    new Set(memberships.map((item) => item.teamName).filter(Boolean)),
+  );
+  const primaryMembership = memberships[0] ?? null;
+  const membershipsTitle = memberships.length
+    ? `所属团队 / 开发组：${memberships
+        .map((item) => [item.teamName, item.groupName].filter(Boolean).join(" / "))
+        .join("、")}`
+    : undefined;
+  const membershipMeta = (item: MemberMembership) => {
+    const title = item.title || (item.memberId === member.id ? member.title : "");
+    const role = item.role || (item.memberId === member.id ? member.role : "");
+    const status = item.status ? STATUS_META[item.status]?.label ?? item.status : "";
+    return [title, role, status].filter(Boolean).join(" · ") || "开发组成员";
+  };
+
   const workloadLevelMeta = workload
     ? WORKLOAD_LEVEL_META[workloadLevel(workload.currentLoadPercent)] ?? WORKLOAD_LEVEL_META.balanced
     : null;
@@ -271,11 +319,23 @@ export function MemberDrawer({
                 {member.role ? ` · ${member.role}` : ""}
               </p>
               <div className="md-hero-badges">
-                {scope !== "group" && member.groupName ? (
-                  <span className="badge badge-blue">{member.groupName}</span>
+                {primaryMembership?.groupName ? (
+                  <span className="badge" title={membershipsTitle}>
+                    <Layers3 size={11} /> {primaryMembership.groupName}
+                  </span>
                 ) : null}
-                {scope === "all" && member.teamName ? (
-                  <span className="badge">{member.teamName}</span>
+                {uniqueTeamNames.length ? (
+                  <span className="badge" title={uniqueTeamNames.join("、")}>
+                    <Building2 size={11} />{" "}
+                    {uniqueTeamNames.length > 1
+                      ? `${uniqueTeamNames.length} 个团队`
+                      : uniqueTeamNames[0]}
+                  </span>
+                ) : null}
+                {uniqueGroupNames.length > 1 ? (
+                  <span className="badge" title={uniqueGroupNames.join("、")}>
+                    共 {uniqueGroupNames.length} 个开发组
+                  </span>
                 ) : null}
                 {isSelf ? <span className="badge">这是我</span> : null}
                 {isAdmin ? <span className="badge">{isSelf ? "管理员" : "管理员视角"}</span> : null}
@@ -343,6 +403,55 @@ export function MemberDrawer({
                 </span>
               </div>
             </div>
+          </section>
+
+          <section className="md-section">
+            <h3 className="md-section-title">
+              <Building2 size={15} /> 所属团队 / 开发组
+              <span className="md-section-count">{memberships.length}</span>
+            </h3>
+            {memberships.length ? (
+              <ul className="md-memberships" aria-label="所属团队与开发组">
+                {memberships.map((item, index) => {
+                  const color = groupColorById.get(item.groupId) ?? "#7c3aed";
+                  const isPrimary = index === 0;
+                  return (
+                    <li
+                      className="md-membership"
+                      key={`${item.groupId || item.memberId || "group"}-${index}`}
+                    >
+                      <span
+                        className="md-membership-dot"
+                        style={{ background: color }}
+                        aria-hidden="true"
+                      />
+                      <div className="md-membership-main">
+                        <div className="md-membership-head">
+                          {item.teamName ? (
+                            <span className="badge md-membership-team">
+                              <Building2 size={10} /> {item.teamName}
+                            </span>
+                          ) : null}
+                          {item.groupName ? (
+                            <span
+                              className="badge md-membership-group"
+                              style={{ "--group-color": color } as CSSProperties}
+                              title={`所属开发组：${item.groupName}`}
+                            >
+                              <Layers3 size={10} /> {item.groupName}
+                            </span>
+                          ) : null}
+                          {isPrimary ? <span className="badge">主档案</span> : null}
+                        </div>
+                        <span className="md-membership-meta">{membershipMeta(item)}</span>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <p className="md-bio">暂未关联任何团队 / 开发组档案。</p>
+            )}
           </section>
 
           {workload && workloadLevelMeta ? (

@@ -1,8 +1,17 @@
-import { CheckCircle2, Clock, Gauge, ListTodo, TriangleAlert, Users } from "lucide-react";
+import {
+  Building2,
+  CheckCircle2,
+  Clock,
+  Gauge,
+  Layers3,
+  ListTodo,
+  TriangleAlert,
+  Users,
+} from "lucide-react";
 import { Modal } from "./Modal";
 import { Avatar } from "./Avatar";
 import { EmptyState } from "./Feedback";
-import { cn, formatDate } from "../lib/utils";
+import { cn, formatDate, memberGroupRefs } from "../lib/utils";
 import {
   DIFFICULTY_META,
   PRIORITY_META,
@@ -74,7 +83,16 @@ export function WorkloadDetailDialog({
   const currentWidth = Math.max(0, Math.min(100, workload.currentLoadPercent));
   const averageWidth = Math.max(0, Math.min(100, workload.averageLoadPercent));
 
-  const memberTasks = tasks.filter((task) => task.memberId === workload.memberId);
+  // Aggregate scopes merge one person's development-group archives into one workload
+  // row: the task breakdown must cover every archive, not just the main one.
+  const archiveIds = workload.memberIds?.length ? workload.memberIds : [workload.memberId];
+  const archiveIdSet = new Set([workload.memberId, ...archiveIds]);
+  const memberTasks = tasks.filter((task) => archiveIdSet.has(task.memberId));
+  const groups = memberGroupRefs(workload);
+  const showGroups = groups.length > 1;
+  const teamNames = Array.from(
+    new Set(groups.map((group) => group.teamName).filter(Boolean)),
+  );
   const activeTasks = memberTasks
     .filter((task) => task.progressStatus !== "completed")
     .sort(CompareTask);
@@ -92,7 +110,9 @@ export function WorkloadDetailDialog({
       title={`${workload.memberName} · 负载详情`}
       description={`按任务逐条拆解当前负载：未完成任务点数合计 ÷ 每人每周容量（${formatPoints(
         capacity,
-      )}），${windowLabel}平均负载按滚动窗口统计。`}
+      )}），${windowLabel}平均负载按滚动窗口统计。${
+        showGroups ? `该成员同时属于 ${groups.length} 个开发组，负载与任务已按人员合并。` : ""
+      }`}
       size="lg"
       className="wl-detail-modal"
       footer={
@@ -133,6 +153,24 @@ export function WorkloadDetailDialog({
           <div className="wl-detail-identity">
             <strong>{workload.memberName}</strong>
             <span>{workload.memberTitle || "开发组成员"}</span>
+            {showGroups ? (
+              <span className="wl-detail-groups" aria-label="所属团队与开发组">
+                {teamNames.map((teamName) => (
+                  <span className="badge" key={`team-${teamName}`} title={`所属团队：${teamName}`}>
+                    <Building2 size={10} /> {teamName}
+                  </span>
+                ))}
+                {groups.map((group) => (
+                  <span
+                    className="badge badge-blue"
+                    key={group.groupId || group.groupName}
+                    title={`所属开发组：${group.groupName}`}
+                  >
+                    <Layers3 size={10} /> {group.groupName}
+                  </span>
+                ))}
+              </span>
+            ) : null}
           </div>
           <div className="wl-detail-hero-level">
             <span className={cn("load-pill", level.className)}>

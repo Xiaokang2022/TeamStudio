@@ -21,6 +21,7 @@
     "e2e:insights": "node e2e/t4-insights-real.mjs",
     "e2e:round5": "node e2e/round5-acceptance.mjs",
     "e2e:round6": "node e2e/round6-features.mjs",
+    "e2e:round7": "node e2e/round7-membership.mjs",
     "e2e:scope-all": "node e2e/scope-all.mjs",
     "e2e:activation": "node e2e/activation-copy.mjs",
     "e2e:reset": "node e2e/system-reset.mjs"

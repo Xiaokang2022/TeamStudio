@@ -22,6 +22,12 @@ export interface CurrentUser {
     groupIds: string[];
   };
   linkedMemberId: string | null;
+  /**
+   * Every member archive id of this account across all development groups
+   * (ordered by development group). Used to decide "this is me" for archives in
+   * any group while the aggregate scopes merge them into one member card.
+   */
+  linkedMemberIds: string[];
   linkedMemberName: string | null;
   ssoConfigured: boolean;
   /** True when the request comes from the deployment machine itself. */
@@ -156,6 +162,23 @@ export interface WorkItem {
   updatedAt: string;
 }
 
+/**
+ * One development-group membership row of a person. The same registered account
+ * may own several `members` rows (one per development group / team); aggregate
+ * read models merge them into a single person card and describe each row here.
+ */
+export interface MemberMembership {
+  memberId: string;
+  groupId: string;
+  groupName: string;
+  teamId: string;
+  teamName: string;
+  title?: string;
+  role?: string;
+  status?: string;
+  joinedAt?: string;
+}
+
 export interface Member {
   id: string;
   name: string;
@@ -177,6 +200,14 @@ export interface Member {
   groupName?: string;
   teamId?: string;
   teamName?: string;
+  /** Every member archive id merged into this person card (main archive first). */
+  memberIds?: string[];
+  /** One entry per development-group row inside the current scope. */
+  memberships?: MemberMembership[];
+  groupIds?: string[];
+  groupNames?: string[];
+  teamIds?: string[];
+  teamNames?: string[];
 }
 
 export interface GroupDetail {
@@ -269,6 +300,14 @@ export interface Workload {
   blockedTasks: number;
   overdueTasks: number;
   level: WorkloadLevel;
+  /** Every member archive id merged into this person workload (main archive first). */
+  memberIds?: string[];
+  /** One entry per development-group row inside the current scope. */
+  memberships?: MemberMembership[];
+  groupIds?: string[];
+  groupNames?: string[];
+  teamIds?: string[];
+  teamNames?: string[];
 }
 
 export interface WorkloadSummary {

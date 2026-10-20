@@ -262,6 +262,33 @@
   text-overflow: ellipsis;
 }
 
+/* Multi-group badge strip inside the workload card (aggregate scopes). */
+.tasks-wl-groups {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: wrap;
+  margin-top: 3px;
+  min-width: 0;
+}
+
+.tasks-wl-group {
+  max-width: 100%;
+  padding: 0 6px;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1.7;
+  gap: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tasks-wl-group-more {
+  flex: none;
+  color: var(--text-3);
+}
+
 /* Level pill (global `.load-pill` + `.is-*` are provided by the theme; fallback below). */
 .tasks-wl .load-pill {
   flex: none;

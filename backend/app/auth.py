@@ -35,7 +35,7 @@ from fastapi import Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
 from .config import DATA_DIR, settings_service
-from .db import db, json_loads, row
+from .db import db, json_loads, row, rows
 
 SESSION_COOKIE_FALLBACK = "teamstudio_session"
 STATE_COOKIE = "teamstudio_sso_state"
@@ -78,6 +78,10 @@ class CurrentUser:
     group_ids: set[str] = field(default_factory=set)
     linked_member_id: str | None = None
     linked_member_name: str | None = None
+    # Every ``members`` archive row owned by this identity across development groups,
+    # ordered by group (round 7). ``linked_member_id`` keeps the first entry for
+    # compatibility; write permissions check the whole list.
+    linked_member_ids: list[str] = field(default_factory=list)
     email_verified: bool = True
     sso_configured: bool = False
     # ``deploy_device`` is true whenever the request originates from the deployment
@@ -142,7 +146,28 @@ class CurrentUser:
             return False
         if not settings_service.get().features.allowMemberSelfEdit:
             return False
-        return self.source in {"email", "sso"} or bool(self.linked_member_id)
+        return (
+            self.source in {"email", "sso"}
+            or bool(self.linked_member_id)
+            or bool(self.linked_member_ids)
+        )
+
+    def linked_member_id_list(self) -> list[str]:
+        """All linked archive ids, keeping the legacy single id (if any) first."""
+        values = list(self.linked_member_ids)
+        if self.linked_member_id and self.linked_member_id not in values:
+            values.insert(0, self.linked_member_id)
+        return values
+
+    def is_linked_member(self, member_id: str | None) -> bool:
+        """Whether ``member_id`` is one of this identity's archive rows.
+
+        The legacy ``linked_member_id`` field is honoured so manual test identities
+        constructed before round 7 keep working.
+        """
+        if not member_id:
+            return False
+        return member_id in self.linked_member_id_list()
 
     def ensure_group(self, team_id: str, group_id: str) -> None:
         if not self.can_edit_group(team_id, group_id):
@@ -170,6 +195,7 @@ class CurrentUser:
             },
             "linkedMemberId": self.linked_member_id,
             "linkedMemberName": self.linked_member_name,
+            "linkedMemberIds": list(self.linked_member_ids),
             "ssoConfigured": self.sso_configured,
             "deployDevice": self.deploy_device,
             "deviceAdminActive": self.device_admin_active,
@@ -462,22 +488,30 @@ def _find_user(identity: SessionIdentity) -> dict[str, Any] | None:
     return None
 
 
-def _linked_member(identity: SessionIdentity) -> dict[str, Any] | None:
+def _linked_members(identity: SessionIdentity) -> list[dict[str, Any]]:
+    """Every ``members`` archive row owned by this session identity.
+
+    One query matches every account identifier (id / e-mail / SSO sub) against both
+    ``external_id`` and ``email``: historical rows store the e-mail in ``external_id``
+    while account-created rows store the account id, and the same account may own rows in
+    several development groups. Rows are ordered by development group and then by the
+    member's own ordering, so the first row is the global "primary" archive kept in
+    ``linked_member_id`` for the legacy contract.
+    """
     candidates = [identity.id, identity.email, identity.sub]
-    lowered = [value.lower() for value in candidates if value]
+    lowered = sorted({value.strip().lower() for value in candidates if value and value.strip()})
     if not lowered:
-        return None
+        return []
+    placeholders = ",".join("?" for _ in lowered)
     with db() as conn:
-        for value in lowered:
-            found = row(
-                conn,
-                "SELECT id, name FROM members WHERE lower(external_id)=? OR lower(email)=? "
-                "ORDER BY sort_order LIMIT 1",
-                (value, value),
-            )
-            if found:
-                return found
-    return None
+        return rows(
+            conn,
+            "SELECT m.id, m.name FROM members m JOIN groups g ON g.id=m.group_id "
+            f"WHERE lower(m.external_id) IN ({placeholders}) "
+            f"OR lower(m.email) IN ({placeholders}) "
+            "ORDER BY g.sort_order, g.name, m.sort_order, m.created_at, m.id",
+            (*lowered, *lowered),
+        )
 
 
 def _role_from_user(user: dict[str, Any] | None) -> str:
@@ -553,7 +587,9 @@ def build_user(request: Request) -> CurrentUser:
     elif role is None and (team_ids or group_ids):
         role = "team_admin" if team_ids else "group_admin"
 
-    linked = _linked_member(identity) if identity else None
+    linked_rows = _linked_members(identity) if identity else []
+    linked = linked_rows[0] if linked_rows else None
+    linked_ids = [item["id"] for item in linked_rows]
 
     if account and identity:
         display_name = account.get("name") or identity.name or account["id"]
@@ -574,6 +610,7 @@ def build_user(request: Request) -> CurrentUser:
             group_ids=group_ids,
             linked_member_id=linked["id"] if linked else None,
             linked_member_name=linked["name"] if linked else None,
+            linked_member_ids=linked_ids,
             email_verified=bool(account.get("email_verified")),
             sso_configured=sso_configured,
             deploy_device=local,
@@ -594,6 +631,7 @@ def build_user(request: Request) -> CurrentUser:
             group_ids=group_ids,
             linked_member_id=linked["id"] if linked else None,
             linked_member_name=linked["name"] if linked else None,
+            linked_member_ids=linked_ids,
             sso_configured=sso_configured,
             deploy_device=local,
             device_admin_active=False,

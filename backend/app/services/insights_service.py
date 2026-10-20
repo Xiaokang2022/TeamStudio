@@ -26,6 +26,7 @@ from typing import Any
 
 from ..db import rows
 from ..http import fail
+from .member_identity import group_members, member_ids
 from .tasks_service import (
     CAPACITY_POINTS,
     in_clause,
@@ -253,24 +254,30 @@ def build_insights(
             todos_by_member.setdefault(assignee, []).append(todo)
 
     members: list[dict[str, Any]] = []
-    for member in member_rows:
-        member_id = member["id"]
-        member_tasks = tasks_by_member.get(member_id, [])
-        member_todos = todos_by_member.get(member_id, [])
+    # Round 7: merge one account's archive rows into one people row (statistics summed).
+    # The payload keeps the exact legacy field set; only the row count becomes deduped.
+    for person in group_members(member_rows):
+        primary = person["primary"]
+        archive_ids = member_ids(person)
+        member_tasks: list[dict[str, Any]] = []
+        member_todos: list[dict[str, Any]] = []
+        for archive_id in archive_ids:
+            member_tasks.extend(tasks_by_member.get(archive_id, []))
+            member_todos.extend(todos_by_member.get(archive_id, []))
         if not member_tasks and not member_todos:
             continue
         task_stats = _task_stats(member_tasks, today)
         todo_stats = _todo_stats(member_todos)
         members.append(
             {
-                "memberId": member_id,
-                "memberName": member.get("name", ""),
-                "memberTitle": member.get("title", ""),
-                "avatarColor": member.get("avatar_color", "#5865f2"),
-                "teamId": member.get("group_team_id") or member.get("team_id", ""),
-                "teamName": member.get("team_name", ""),
-                "groupId": member.get("group_id", ""),
-                "groupName": member.get("group_name", ""),
+                "memberId": primary["id"],
+                "memberName": primary.get("name", ""),
+                "memberTitle": primary.get("title", ""),
+                "avatarColor": primary.get("avatar_color", "#5865f2"),
+                "teamId": primary.get("group_team_id") or primary.get("team_id", ""),
+                "teamName": primary.get("team_name", ""),
+                "groupId": primary.get("group_id", ""),
+                "groupName": primary.get("group_name", ""),
                 "tasks": task_stats["tasks"],
                 "openTasks": task_stats["openTasks"],
                 "completedTasks": task_stats["completedTasks"],
@@ -283,9 +290,15 @@ def build_insights(
             }
         )
 
-    member_ids_by_group: dict[str, list[str]] = {}
-    for row in members:
-        member_ids_by_group.setdefault(row["groupId"], []).append(row["memberId"])
+    # ``groups[].members`` keeps the archive-row semantics (one person active in two
+    # groups still counts towards both groups), so it is built from the raw rows.
+    member_ids_by_group: dict[str, set[str]] = {}
+    for member in member_rows:
+        member_key = member["id"]
+        if tasks_by_member.get(member_key) or todos_by_member.get(member_key):
+            member_ids_by_group.setdefault(member.get("group_id", ""), set()).add(
+                member_key
+            )
 
     tasks_by_group: dict[str, list[dict[str, Any]]] = {}
     for task in active_tasks:

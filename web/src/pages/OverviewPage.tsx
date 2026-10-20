@@ -41,11 +41,19 @@ import {
   cn,
   formatFullDate,
   hashRoute,
+  memberGroupRefs,
   relativeTime,
   todayISO,
 } from "../lib/utils";
 import { formatPercent, formatPoints, WORKLOAD_LEVEL_META, workloadLevel } from "../lib/taskMeta";
-import type { ActivityItem, Announcement, MemberCandidate, OverviewData } from "../types";
+import type {
+  ActivityItem,
+  Announcement,
+  Member,
+  MemberCandidate,
+  OverviewData,
+  Workload,
+} from "../types";
 import "./OverviewPage.css";
 
 const MAX_SEARCH_ACTIVITY = 9;
@@ -64,6 +72,61 @@ const ACTIVITY_META: Record<string, { label: string; tone: string; icon: typeof 
 };
 
 type ActivityRow = ActivityItem & { actorName?: string };
+
+const MAX_MEMBER_GROUP_BADGES = 2;
+
+/**
+ * All development groups of one person in aggregate scopes: one badge per group,
+ * collapsed into `+N` beyond two. The badge title always lists every group.
+ */
+function MemberGroupBadges({
+  member,
+  isAggregated,
+  groupMetaById,
+  fallbackColor,
+}: {
+  member: Member;
+  isAggregated: boolean;
+  groupMetaById: Map<string, { name: string; color: string }>;
+  fallbackColor: string;
+}) {
+  if (!isAggregated) return null;
+  const groups = memberGroupRefs(member);
+  if (!groups.length) return null;
+  const visible = groups.slice(0, MAX_MEMBER_GROUP_BADGES);
+  const hiddenCount = groups.length - visible.length;
+  const allGroupNames = groups.map((item) => item.groupName).filter(Boolean);
+  const allTeamNames = Array.from(
+    new Set(groups.map((item) => item.teamName).filter(Boolean)),
+  );
+  const allTitle = `所属开发组（${allGroupNames.length}）：${allGroupNames.join("、")}${
+    allTeamNames.length ? ` · 团队：${allTeamNames.join("、")}` : ""
+  }`;
+  return (
+    <span className="ov-member-groups">
+      {visible.map((group) => {
+        const color = groupMetaById.get(group.groupId)?.color ?? fallbackColor;
+        return (
+          <span
+            key={group.groupId || group.groupName}
+            className="badge ov-member-group"
+            style={{ "--group-color": color } as CSSProperties}
+            title={`所属开发组：${group.groupName}${
+              group.teamName ? `（团队：${group.teamName}）` : ""
+            }`}
+          >
+            {group.groupName}
+          </span>
+        );
+      })}
+      {hiddenCount > 0 ? (
+        <span className="badge ov-member-group ov-member-group-more" title={allTitle}>
+          +{hiddenCount}
+        </span>
+      ) : null}
+    </span>
+  );
+}
 
 function messageOf(error: unknown, fallback: string): string {
   return error instanceof ApiError ? error.message : fallback;
@@ -141,13 +204,31 @@ export default function OverviewPage() {
   const group = overview?.group ?? null;
   const serverDate = data?.stats.serverDate || data?.serverTime || todayISO();
 
-  const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
+  // A merged member card owns several archive ids; every one of them must resolve
+  // to the same card so deep links (`#/overview?member=<archive id>`, the user menu
+  // "我的成员卡片" entry and recent-activity clicks) always open the merged card.
+  const memberById = useMemo(() => {
+    const map = new Map<string, Member>();
+    for (const member of members) {
+      map.set(member.id, member);
+      for (const archiveId of member.memberIds ?? []) {
+        if (archiveId && !map.has(archiveId)) map.set(archiveId, member);
+      }
+    }
+    return map;
+  }, [members]);
 
   const workloads = useMemo(() => overview?.workloads ?? [], [overview?.workloads]);
-  const workloadByMember = useMemo(
-    () => new Map(workloads.map((workload) => [workload.memberId, workload])),
-    [workloads],
-  );
+  const workloadByMember = useMemo(() => {
+    const map = new Map<string, Workload>();
+    for (const workload of workloads) {
+      map.set(workload.memberId, workload);
+      for (const archiveId of workload.memberIds ?? []) {
+        if (archiveId && !map.has(archiveId)) map.set(archiveId, workload);
+      }
+    }
+    return map;
+  }, [workloads]);
 
   const filteredMembers = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -161,6 +242,9 @@ export default function OverviewPage() {
         member.email,
         ...(member.tags ?? []),
         ...(member.skills ?? []),
+        ...(member.groupNames ?? []),
+        ...(member.teamNames ?? []),
+        ...(member.memberships ?? []).flatMap((item) => [item.groupName, item.teamName]),
       ];
       return haystack.some((value) => value && value.toLowerCase().includes(query));
     });
@@ -207,17 +291,37 @@ export default function OverviewPage() {
   }, [scopeGroups, data?.teams]);
 
   // Member edits always route to the member's own group/team, never the active one.
+  // A merged card keeps the primary archive as `id`, so the draw always edits the
+  // archive the backend considers canonical for this person.
   const selectedMemberScope = useMemo(() => {
     const fallback = { teamId, groupId };
     if (!selectedMember) return fallback;
-    const memberGroupId = selectedMember.groupId || groupId;
+    const memberships = selectedMember.memberships ?? [];
+    const primaryMembership =
+      memberships.find((item) => item.memberId === selectedMember.id) ?? memberships[0] ?? null;
+    const memberGroupId = selectedMember.groupId || primaryMembership?.groupId || groupId;
     for (const team of data?.teams ?? []) {
       if (team.groups.some((item) => item.id === memberGroupId)) {
         return { teamId: team.id, groupId: memberGroupId };
       }
     }
-    return { teamId: selectedMember.teamId || teamId, groupId: memberGroupId };
+    return {
+      teamId: selectedMember.teamId || primaryMembership?.teamId || teamId,
+      groupId: memberGroupId,
+    };
   }, [selectedMember, data?.teams, teamId, groupId]);
+
+  // The merged card and the merged workload may not share the exact same primary
+  // archive id; resolve through every archive id of the person.
+  const selectedMemberWorkload = useMemo(() => {
+    if (!selectedMember) return null;
+    const archiveIds = [selectedMember.id, ...(selectedMember.memberIds ?? [])];
+    for (const archiveId of archiveIds) {
+      const workload = workloadByMember.get(archiveId);
+      if (workload) return workload;
+    }
+    return null;
+  }, [selectedMember, workloadByMember]);
 
   const heroStats = [
     { label: "团队成员", value: stats?.members ?? members.length, unit: "位", icon: Users },
@@ -509,14 +613,14 @@ export default function OverviewPage() {
           ) : filteredMembers.length ? (
             <div className="ov-member-grid">
               {filteredMembers.map((member, index) => {
-                const memberWorkload = workloadByMember.get(member.id) ?? null;
-                const memberGroupMeta = isAggregated
-                  ? groupMetaById.get(member.groupId ?? "") ?? null
-                  : null;
-                const memberGroupName = isAggregated
-                  ? member.groupName || memberGroupMeta?.name || ""
-                  : "";
-                const memberGroupColor = memberGroupMeta?.color ?? currentGroup.color;
+                // The merged card and the merged workload should share the main archive
+                // id, but resolve through every archive id to stay robust.
+                const memberWorkload =
+                  workloadByMember.get(member.id) ??
+                  (member.memberIds ?? [])
+                    .map((archiveId) => workloadByMember.get(archiveId))
+                    .find(Boolean) ??
+                  null;
                 const workloadMeta = memberWorkload
                   ? WORKLOAD_LEVEL_META[workloadLevel(memberWorkload.currentLoadPercent)] ??
                     WORKLOAD_LEVEL_META.balanced
@@ -544,15 +648,12 @@ export default function OverviewPage() {
                       <div className="ov-member-id">
                         <div className="ov-member-name-row">
                           <h3>{member.name}</h3>
-                          {memberGroupName ? (
-                            <span
-                              className="badge ov-member-group"
-                              style={{ "--group-color": memberGroupColor } as CSSProperties}
-                              title={`所属开发组：${memberGroupName}`}
-                            >
-                              {memberGroupName}
-                            </span>
-                          ) : null}
+                          <MemberGroupBadges
+                            member={member}
+                            isAggregated={isAggregated}
+                            groupMetaById={groupMetaById}
+                            fallbackColor={currentGroup.color}
+                          />
                         </div>
                         <p className="ov-member-title">{member.title || "团队成员"}</p>
                         <span className="ov-member-role">{member.role || "成员"}</span>
@@ -799,7 +900,7 @@ export default function OverviewPage() {
         member={selectedMember}
         teamId={selectedMemberScope.teamId}
         groupId={selectedMemberScope.groupId}
-        workload={selectedMember ? workloadByMember.get(selectedMember.id) ?? null : null}
+        workload={selectedMemberWorkload}
         onClose={closeMember}
         onChanged={refreshEverything}
       />

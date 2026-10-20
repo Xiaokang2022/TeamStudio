@@ -27,6 +27,7 @@ from ..permissions import (
     require_todo_write,
 )
 from ..scope import resolve_scope
+from ..services.member_identity import first_member_in_group
 
 router = APIRouter(prefix="/api/teams/{team_id}/groups/{group_id}", tags=["calendar"])
 
@@ -136,7 +137,7 @@ def _validate_assignee(
         return None
     get_member(conn, member_id, group_id)  # 404 when the member is not in this group
     is_admin = user.authenticated and user.can_edit_group(team_id, group_id)
-    if not is_admin and user.linked_member_id != member_id:
+    if not is_admin and not user.is_linked_member(member_id):
         raise fail(403, "只能为自己创建或指派待办", "forbidden")
     return member_id
 
@@ -193,12 +194,10 @@ def create_todo(
 
         is_admin = user.authenticated and user.can_edit_group(team_id, group_id)
         if user.authenticated and not is_admin:
-            linked = user.linked_member_id
-            if not linked or not row(
-                conn,
-                "SELECT 1 FROM members WHERE id=? AND group_id=?",
-                (linked, group_id),
-            ):
+            linked = first_member_in_group(
+                conn, group_id, user.linked_member_id_list()
+            )
+            if not linked:
                 raise fail(403, "只有该开发组成员可以为该开发组创建待办", "forbidden")
 
         title = text(payload.get("title"), "待办标题", 120, required=True)
@@ -217,14 +216,12 @@ def create_todo(
             user=user,
             team_id=team_id,
         )
-        if assignee_id is None and user.linked_member_id:
-            linked = row(
-                conn,
-                "SELECT id FROM members WHERE id=? AND group_id=?",
-                (user.linked_member_id, group_id),
+        if assignee_id is None:
+            linked = first_member_in_group(
+                conn, group_id, user.linked_member_id_list()
             )
             if linked:
-                assignee_id = user.linked_member_id
+                assignee_id = linked["id"]
 
         todo_id = new_id("todo")
         now = now_iso()
@@ -294,7 +291,7 @@ def update_todo(
                 member_id = _member_id(raw_assignee)
                 if member_id is not None:
                     get_member(conn, member_id, group_id)
-                    if not is_admin and user.linked_member_id != member_id:
+                    if not is_admin and not user.is_linked_member(member_id):
                         raise fail(403, "只有管理员可以重新指派待办", "forbidden")
                     updates["assignee_member_id"] = member_id
         if updates:

@@ -1,6 +1,6 @@
-import { AlertTriangle, CalendarDays, Clock, ListTodo, Maximize2 } from "lucide-react";
+import { AlertTriangle, CalendarDays, Clock, Layers3, ListTodo, Maximize2 } from "lucide-react";
 import { Avatar } from "./Avatar";
-import { cn } from "../lib/utils";
+import { cn, memberGroupRefs } from "../lib/utils";
 import {
   WORKLOAD_LEVEL_META,
   formatPercent,
@@ -39,6 +39,12 @@ export function WorkloadMeter({
   const averageWidth = Math.max(0, Math.min(100, workload.averageLoadPercent));
   const hasBlocked = workload.blockedTasks > 0;
   const hasOverdue = workload.overdueTasks > 0;
+  // One person may belong to several development groups in aggregate scopes.
+  const memberGroups = memberGroupRefs(workload);
+  const showGroups = memberGroups.length > 1;
+  const visibleGroups = memberGroups.slice(0, 2);
+  const hiddenGroupCount = memberGroups.length - visibleGroups.length;
+  const allGroupNames = memberGroups.map((group) => group.groupName).join("、");
 
   return (
     <article
@@ -67,6 +73,29 @@ export function WorkloadMeter({
         <div className="workload-title tasks-wl-title">
           <strong>{workload.memberName}</strong>
           <small>{workload.memberTitle || "开发组成员"}</small>
+          {showGroups ? (
+            <span className="tasks-wl-groups" aria-label="所属开发组">
+              {visibleGroups.map((group) => (
+                <span
+                  className="badge tasks-wl-group"
+                  key={group.groupId || group.groupName}
+                  title={`所属开发组：${group.groupName}${
+                    group.teamName ? `（团队：${group.teamName}）` : ""
+                  }`}
+                >
+                  <Layers3 size={9} /> {group.groupName}
+                </span>
+              ))}
+              {hiddenGroupCount > 0 ? (
+                <span
+                  className="badge tasks-wl-group tasks-wl-group-more"
+                  title={`所属开发组（${memberGroups.length}）：${allGroupNames}`}
+                >
+                  +{hiddenGroupCount}
+                </span>
+              ) : null}
+            </span>
+          ) : null}
         </div>
         <span className={cn("load-pill", currentLevel.className)}>{currentLevel.label}</span>
         {onOpen ? <Maximize2 size={13} className="tasks-wl-open-icon" aria-hidden="true" /> : null}

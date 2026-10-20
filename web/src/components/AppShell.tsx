@@ -237,6 +237,31 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   };
 
+  /**
+   * Deep-link the signed-in account's own member card. `linkedMemberId` is resolved
+   * per active development group by the backend, so the button is hidden when the
+   * current group has no archive (the menu entry keeps the backend contract
+   * `me.linkedMemberId === null` -> no dead link).
+   *
+   * Assigning an already identical hash does not emit `hashchange`, which would leave
+   * the drawer closed; nudge the overview page in that edge case.
+   */
+  const openMyMemberCard = () => {
+    const memberId = me.linkedMemberId;
+    if (!memberId) return;
+    setUserMenuOpen(false);
+    const targetHash = `#/overview?member=${encodeURIComponent(memberId)}`;
+    const unchanged = window.location.hash === targetHash;
+    navigate("overview", { member: memberId });
+    if (!unchanged) return;
+    try {
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    } catch {
+      window.location.hash = "#/overview";
+      window.setTimeout(() => navigate("overview", { member: memberId }), 0);
+    }
+  };
+
   return (
     <div className={cn("app-shell", effectiveCollapsed && "sidebar-collapsed")}>
       <aside
@@ -568,13 +593,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                       <CircleUserRound size={16} /> 个人主页
                     </button>
                     {me.linkedMemberId ? (
-                      <button
-                        className="menu-row"
-                        onClick={() => {
-                          setUserMenuOpen(false);
-                          navigate("overview", { member: me.linkedMemberId! });
-                        }}
-                      >
+                      <button className="menu-row" onClick={openMyMemberCard}>
                         <UserRound size={16} /> 我的成员卡片
                       </button>
                     ) : null}
