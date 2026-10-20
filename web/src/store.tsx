@@ -125,18 +125,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
           selectionRef.current.groupId = result.active.group.id;
           localStorage.setItem(STORAGE_GROUP, result.active.group.id);
         }
-        // 非超级管理员不能使用「全部团队」视角：确认身份后降级为「整个团队」并持久化。
-        if (!result.me.isSuperAdmin) {
-          setScopeState((current) => {
-            if (current !== "all") return current;
-            try {
-              localStorage.setItem(STORAGE_SCOPE, "team");
-            } catch {
-              // ignore storage failures
-            }
-            return "team";
-          });
-        }
       } catch (err) {
         if (id !== requestId.current) return;
         const message = err instanceof ApiError ? err.message : "加载工作区失败";
@@ -237,20 +225,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const setScope = useCallback(
-    (next: ScopeKind) => {
-      const resolved: ScopeKind = next === "all" && !(data?.me.isSuperAdmin || data?.me.isDeviceAdmin)
-        ? "team"
-        : next;
-      setScopeState(resolved);
-      try {
-        localStorage.setItem(STORAGE_SCOPE, resolved);
-      } catch {
-        // ignore storage failures
-      }
-    },
-    [data?.me.isDeviceAdmin, data?.me.isSuperAdmin],
-  );
+  // Browsing scope is a view preference, not a permission boundary: every identity
+  // (guest included) may pick 开发组 / 团队 / 所有团队. The backend already allows
+  // `?scope=all` for everyone, so store the requested scope verbatim and persist it.
+  const setScope = useCallback((next: ScopeKind) => {
+    setScopeState(next);
+    try {
+      localStorage.setItem(STORAGE_SCOPE, next);
+    } catch {
+      // ignore storage failures
+    }
+  }, []);
 
   const navigate = useCallback((page: string, params?: Record<string, string>) => {
     navigateHash(page, params);
@@ -266,9 +251,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const canManageActiveGroup = canManageGroup(me, currentTeam?.id, currentGroup?.id);
   const scopeLabel =
     scope === "all"
-      ? "全部团队"
+      ? "所有团队"
       : scope === "team"
-        ? `${currentTeam?.name ?? "当前团队"} · 全团队`
+        ? currentTeam?.name ?? "当前团队"
         : currentGroup?.name ?? "当前开发组";
 
   const value = useMemo<AppContextValue>(

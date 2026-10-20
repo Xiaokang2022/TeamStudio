@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type ReactNode,
@@ -78,6 +79,7 @@ import {
   safeJsonParse,
 } from "../lib/utils";
 import type {
+  ActivationLink,
   AdminIdEntry,
   AdminIpEntry,
   AppSettings,
@@ -196,6 +198,7 @@ const FIELD_LABELS: Record<string, string> = {
   "auth.emailLogin.codeExpiryMinutes": "验证码有效期",
   "auth.emailLogin.resendSeconds": "重发间隔",
   "auth.emailLogin.maxAttempts": "最大尝试次数",
+  "auth.emailLogin.precreatedActivationMinutes": "激活链接有效期",
   "auth.sso.enabled": "启用 SSO",
   "auth.sso.providerName": "SSO 提供方名称",
   "auth.sso.issuer": "Issuer",
@@ -1359,7 +1362,7 @@ function AccessSection({
           <ul className="settings-device-points">
             <li>
               <CheckCircle2 size={14} />
-              来自本机回环地址或部署机自身 IPv4 的请求会自动获得该身份，无需登录、不会过期。
+              来自本机回环地址或部署机自身 IPv4 的请求会自动获得该身份；设备管理员可在登录页退出，随后改用其他账号登录。
             </li>
             <li>
               <CheckCircle2 size={14} />
@@ -1368,7 +1371,7 @@ function AccessSection({
             <li>
               <CheckCircle2 size={14} />
               账号角色为 <code>super</code> 的超级管理员与设备 Admin 拥有相同的站点级权限：可编辑本页设置、
-              管理账号与角色、查看全部团队。
+              管理账号与角色、查看所有团队。
             </li>
             <li>
               <ShieldAlert size={14} />
@@ -1411,7 +1414,7 @@ function AccessSection({
         <div className="settings-toggle-stack">
           <ToggleRow
             label="邮箱验证码登录"
-            description="使用邮箱 + 六位验证码登录；预创建账号在首次验证码登录时自动激活。"
+            description="使用邮箱 + 六位验证码登录；预创建账号通过一次性激活链接激活，无需验证码邮件。"
             checked={draft.auth.emailLogin.enabled}
             onChange={(checked) =>
               update((next) => {
@@ -1493,11 +1496,32 @@ function AccessSection({
               }
             />
           </Field>
+          <Field
+            label="激活链接有效期（分钟）"
+            error={errorText(errorsFor("auth.emailLogin.precreatedActivationMinutes"))}
+            hint="1 - 120 分钟，默认 10 分钟；预创建账号的激活链接一次性有效"
+          >
+            <input
+              className="input"
+              type="number"
+              min={1}
+              max={120}
+              value={draft.auth.emailLogin.precreatedActivationMinutes}
+              onChange={(event) =>
+                update((next) => {
+                  next.auth.emailLogin.precreatedActivationMinutes = toInt(
+                    event.target.value,
+                    10,
+                  );
+                })
+              }
+            />
+          </Field>
         </div>
         <p className="settings-note">
           <Mail size={13} />
-          验证码仅以 HMAC 哈希保存在 <code>email_codes</code> 表中，明文不会写入数据库或日志；
-          邮件内容与 SMTP 中继在「邮件服务」中配置。
+          验证码仅以 HMAC 哈希保存在 <code>email_codes</code> 表中；预创建账号的激活令牌只保存
+          SHA-256 哈希，链接一次性有效。邮件内容与 SMTP 中继在「邮件服务」中配置。
         </p>
 
         <div className="divider" />
@@ -2101,6 +2125,51 @@ function AccountsSection({
   const [savingId, setSavingId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<UserAccount | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [activation, setActivation] = useState<
+    (ActivationLink & { email: string; name: string }) | null
+  >(null);
+  const [activationBusy, setActivationBusy] = useState<string | null>(null);
+  // 复制失败时用它选中可见的激活链接输入框，保证用户可以直接 Ctrl+C 手动复制。
+  const activationInputRef = useRef<HTMLInputElement | null>(null);
+
+  const selectActivationInput = useCallback(() => {
+    // 激活卡片依赖 setActivation 渲染，等一帧后再选中（否则 ref 还是旧的 null）。
+    window.setTimeout(() => {
+      const input = activationInputRef.current;
+      if (!input) return;
+      input.focus();
+      input.select();
+      input.setSelectionRange(0, input.value.length);
+    }, 0);
+  }, []);
+
+  /**
+   * 激活链接的唯一展示入口（预创建 / 重新生成都走这里）：
+   * 先写剪贴板，再按 copyText 的真实结果 toast；只有真的复制成功才提示成功，
+   * 失败时提示手动复制并选中输入框。
+   */
+  const presentActivation = useCallback(
+    async (
+      next: ActivationLink & { email: string; name: string },
+      source: "created" | "regenerated",
+    ): Promise<boolean> => {
+      setActivation(next);
+      const copied = await copyText(next.url);
+      if (copied) {
+        toast(
+          source === "created"
+            ? "已创建并复制激活链接，可直接粘贴发送"
+            : "已重新生成并复制激活链接，可直接粘贴发送",
+          "success",
+        );
+      } else {
+        toast("激活链接已生成，但复制失败，请点击链接或「复制链接」手动复制", "error");
+        selectActivationInput();
+      }
+      return copied;
+    },
+    [selectActivationInput, toast],
+  );
 
   const load = useCallback(
     async (silent = false) => {
@@ -2154,10 +2223,18 @@ function AccountsSection({
         teamIds: createForm.role === "team_admin" ? createForm.teamIds : [],
         groupIds: createForm.role === "group_admin" ? createForm.groupIds : [],
       });
-      toast(
-        `账号「${result.user.name || result.user.email}」已预创建，首次邮箱验证码登录后自动激活`,
-        "success",
-      );
+      if (result.activation) {
+        await presentActivation(
+          {
+            ...result.activation,
+            email: result.user.email,
+            name: result.user.name || result.user.email,
+          },
+          "created",
+        );
+      } else {
+        toast(`账号「${result.user.name || result.user.email}」已创建`, "success");
+      }
       setCreateForm({ email: "", ...emptyAccountDraft() });
       setCreateTouched(false);
       await load(true);
@@ -2203,6 +2280,37 @@ function AccountsSection({
       toast(err instanceof ApiError ? err.message : "保存账号失败", "error");
     } finally {
       setSavingId(null);
+    }
+  };
+
+  const issueActivation = async (account: UserAccount) => {
+    if (activationBusy) return;
+    setActivationBusy(account.id);
+    try {
+      const result = await api.createActivationLink(account.id);
+      await presentActivation(
+        {
+          ...result.activation,
+          email: account.email,
+          name: account.name || account.email,
+        },
+        "regenerated",
+      );
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "生成激活链接失败", "error");
+    } finally {
+      setActivationBusy(null);
+    }
+  };
+
+  const copyActivation = async () => {
+    if (!activation) return;
+    const copied = await copyText(activation.url);
+    if (copied) {
+      toast("激活链接已复制", "success");
+    } else {
+      toast("复制失败，请手动选中复制", "error");
+      selectActivationInput();
     }
   };
 
@@ -2291,14 +2399,68 @@ function AccountsSection({
             {creating ? <Loader2 size={14} className="spin" /> : <UserPlus size={14} />}
             {creating ? "创建中…" : "预创建账号"}
           </button>
-          <span className="field-hint">账号创建后由对方通过邮箱验证码首次登录完成激活。</span>
+          <span className="field-hint">
+            创建后会同步生成一次性激活链接，复制发送给对方即可激活并登录。
+          </span>
         </div>
         <p className="settings-note">
-          <Mail size={13} />
-          预创建账号（含团队 / 开发组管理员与超级管理员）在激活前无法登录；激活时邮箱验证通过即自动生效。
-          权限变更在对方下次请求时立即生效。
+          <Link2 size={13} />
+          预创建账号（含团队 / 开发组管理员与超级管理员）在激活前无法登录；对方打开激活链接即自动激活并登录，
+          无需邮箱验证码，也不依赖 SMTP 邮件服务。链接默认 10 分钟内有效、仅可使用一次。
         </p>
       </SettingsCard>
+
+      {activation ? (
+        <SettingsCard
+          title="账号激活链接"
+          description={`${activation.name}（${activation.email}）的一次性激活链接，${activation.expiresInMinutes} 分钟内有效。`}
+          icon={<Link2 size={18} />}
+          extra={
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => setActivation(null)}
+              aria-label="关闭激活链接"
+            >
+              <X size={14} /> 关闭
+            </button>
+          }
+        >
+          <div className="settings-activation-link">
+            <input
+              ref={activationInputRef}
+              className="input settings-activation-input"
+              value={activation.url}
+              readOnly
+              spellCheck={false}
+              title="点击即可复制激活链接"
+              onFocus={(event) => event.currentTarget.select()}
+              onClick={(event) => {
+                const input = event.currentTarget;
+                const whole = input.value.length;
+                // 用户正在手动框选部分文本时不打断选择，也不重复复制。
+                const partialSelection =
+                  input.selectionStart !== input.selectionEnd &&
+                  !(input.selectionStart === 0 && input.selectionEnd === whole);
+                if (partialSelection) return;
+                input.select();
+                void copyActivation();
+              }}
+            />
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => void copyActivation()}>
+              <Copy size={14} /> 复制链接
+            </button>
+          </div>
+          <p className="settings-activation-hint">
+            <Copy size={12} /> 点击链接输入框即可复制；若复制失败，输入框会被自动选中，按 Ctrl+C 也能复制。
+          </p>
+          <p className="settings-note">
+            <Clock size={13} />
+            过期时间：{formatDateTime(activation.expiresAt)}。链接仅可使用一次；过期或需重新发送时，
+            可在账号列表中点击「激活链接」重新生成。
+          </p>
+        </SettingsCard>
+      ) : null}
 
       <SettingsCard
         title="账号列表"
@@ -2386,6 +2548,22 @@ function AccountsSection({
                       </div>
                     </div>
                     <div className="settings-account-actions">
+                      {!account.emailVerified ? (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => void issueActivation(account)}
+                          disabled={activationBusy === account.id}
+                          title="生成一次性激活链接"
+                        >
+                          {activationBusy === account.id ? (
+                            <Loader2 size={14} className="spin" />
+                          ) : (
+                            <Link2 size={14} />
+                          )}
+                          激活链接
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className="btn btn-ghost btn-sm"
@@ -3593,7 +3771,7 @@ function WorkspaceSettingsSection() {
   const groupTotal = teams.reduce((total, team) => total + team.groups.length, 0);
 
   const scopeHint = permissions?.isSuperAdmin
-    ? "你是超级管理员：可编辑全部团队与开发组的基础信息。"
+    ? "你是超级管理员：可编辑所有团队与开发组的基础信息。"
     : permissions?.canEditStructure
       ? "你是团队管理员：可编辑所属团队及其下开发组；如需新建或删除结构，请使用「管理工作区结构」。"
       : "你是开发组管理员：可编辑被授权开发组的信息，团队信息为只读。";
@@ -3712,7 +3890,7 @@ function DomainSettingsPage() {
           ? "开发组管理员"
           : "管理员";
   const scopeLabel = me?.isSuperAdmin
-    ? "全部团队"
+    ? "所有团队"
     : me?.admin.teamIds.length
       ? `${me.admin.teamIds.length} 个团队`
       : `${me?.admin.groupIds.length ?? 0} 个开发组`;

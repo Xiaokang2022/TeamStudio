@@ -170,6 +170,26 @@
   margin-top: 1px;
 }
 
+.login-device-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--border);
+}
+
+.login-device-entry .btn-lg {
+  width: 100%;
+}
+
+.login-device-hint {
+  font-size: 10.5px;
+  line-height: 1.7;
+  color: var(--text-3);
+  text-align: center;
+}
+
 @media (max-width: 480px) {
   .login-card {
     padding: 24px 20px;

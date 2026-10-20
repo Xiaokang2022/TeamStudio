@@ -583,7 +583,7 @@ export default function RedBlackPage() {
       {aggregate ? (
         <p className="rb-scope-hint" role="status">
           <Info size={14} />
-          团队 / 全部团队视角为只读汇总，切换到开发组视角可编辑
+          团队 / 所有团队视角为只读汇总，切换到开发组视角可编辑
         </p>
       ) : null}
 
@@ -629,7 +629,7 @@ export default function RedBlackPage() {
                 {aggregate
                   ? isEmptyBoard
                     ? `这个月${scopeLabel}还没有可汇总的红黑榜记录，切换到开发组视角可以创建本月榜单。`
-                    : `本期汇总 ${scopeLabel} 共 ${totalEntries} 条记录，来自 ${mergedGroupCount ? `${mergedGroupCount} 个` : "多个"}开发组；团队 / 全部团队视角为只读汇总。`
+                    : `本期汇总 ${scopeLabel} 共 ${totalEntries} 条记录，来自 ${mergedGroupCount ? `${mergedGroupCount} 个` : "多个"}开发组；团队 / 所有团队视角为只读汇总。`
                   : isEmptyBoard
                     ? "这个月还没有记录。被忽略的贡献值得补记，踩过的坑也值得复盘的勇气。"
                     : `本期共记录 ${totalEntries} 条上榜与复盘条目，每一次坦诚都是团队的一次升级。`}

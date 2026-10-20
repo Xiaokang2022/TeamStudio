@@ -1195,7 +1195,7 @@ export default function TaskOverviewPage() {
             成员自主维护任务进度、健康状态与预期完成时间；任务负载由基础 1 分、优先级与难度加成计算，
             每人每周容量 15 分，帮助团队在过载前及时调整节奏。
             {aggregate
-              ? ` 当前按「${scope === "all" ? "全部团队" : currentTeam.name}」聚合浏览。`
+              ? ` 当前按「${scope === "all" ? "所有团队" : currentTeam.name}」聚合浏览。`
               : ""}
           </p>
         </div>

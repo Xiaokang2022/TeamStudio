@@ -39,6 +39,10 @@ from .db import db, json_loads, row
 
 SESSION_COOKIE_FALLBACK = "teamstudio_session"
 STATE_COOKIE = "teamstudio_sso_state"
+# Marks that the deployment device's browser explicitly logged out of the built-in
+# Admin identity. The flag only *disables* automatic device-admin privileges; it never
+# grants any. Visiting the login page can clear it again ("以设备管理员身份登录").
+DEVICE_LOGOUT_COOKIE = "teamstudio_device_logout"
 LOCAL_HOSTNAMES = {"localhost", "127.0.0.1", "::1", "testclient"}
 
 USER_ROLES = ("member", "group_admin", "team_admin", "super")
@@ -76,6 +80,11 @@ class CurrentUser:
     linked_member_name: str | None = None
     email_verified: bool = True
     sso_configured: bool = False
+    # ``deploy_device`` is true whenever the request originates from the deployment
+    # machine; ``device_admin_active`` tells whether the built-in Admin identity is
+    # currently being used (false after an explicit logout).
+    deploy_device: bool = False
+    device_admin_active: bool = False
     session: SessionIdentity | None = field(default=None, repr=False)
 
     @property
@@ -93,7 +102,9 @@ class CurrentUser:
         return self.is_super_admin
 
     def can_view_all_scope(self) -> bool:
-        return self.is_super_admin
+        # Every identity (including guests) may aggregate all teams; browsing scope
+        # is a view preference, not a permission boundary.
+        return True
 
     def can_edit_group(self, team_id: str, group_id: str) -> bool:
         if self.is_super_admin:
@@ -160,6 +171,8 @@ class CurrentUser:
             "linkedMemberId": self.linked_member_id,
             "linkedMemberName": self.linked_member_name,
             "ssoConfigured": self.sso_configured,
+            "deployDevice": self.deploy_device,
+            "deviceAdminActive": self.device_admin_active,
             "permissions": {
                 "canEditSettings": self.can_edit_settings(),
                 "canEditAny": self.can_edit_any_group(),
@@ -289,6 +302,28 @@ def refresh_session_cookie(response: Any, user: CurrentUser) -> None:
 def clear_session_cookie(response: Any) -> None:
     cfg = settings_service.get()
     response.delete_cookie(cfg.auth.session.cookieName or SESSION_COOKIE_FALLBACK, path="/")
+
+
+def device_admin_logged_out(request: Request) -> bool:
+    """Whether this browser explicitly signed out of the built-in device Admin."""
+    return request.cookies.get(DEVICE_LOGOUT_COOKIE) == "1"
+
+
+def set_device_logout_cookie(response: Any) -> None:
+    cfg = settings_service.get()
+    response.set_cookie(
+        DEVICE_LOGOUT_COOKIE,
+        "1",
+        max_age=365 * 86400,
+        httponly=True,
+        samesite="lax",
+        secure=cfg.auth.session.secureCookie,
+        path="/",
+    )
+
+
+def clear_device_logout_cookie(response: Any) -> None:
+    response.delete_cookie(DEVICE_LOGOUT_COOKIE, path="/")
 
 
 def _local_addresses() -> set[str]:
@@ -435,8 +470,13 @@ def build_user(request: Request) -> CurrentUser:
     cfg = settings_service.get()
     sso_configured = settings_service.sso_configured()
     ip_value = client_ip(request)
+    local = is_local_request(request)
+    identity = read_session(request)
 
-    if is_local_request(request):
+    # A deployment-device browser is the built-in Admin until its owner explicitly
+    # signs out. After that, only the signed e-mail/SSO session (if any) identifies the
+    # request — it must never inherit device-admin privileges.
+    if local and not device_admin_logged_out(request):
         return CurrentUser(
             id="device-admin",
             name="Admin",
@@ -445,11 +485,17 @@ def build_user(request: Request) -> CurrentUser:
             is_device_admin=True,
             admin_role="super",
             user_role="super",
+            deploy_device=True,
+            device_admin_active=True,
             sso_configured=sso_configured,
         )
 
-    identity = read_session(request)
-    ip_entries, ip_display = match_ip_admin(ip_value)
+    if local:
+        # The device owner is using another account: IP-based admin grants are not
+        # applied so the session really behaves like any other browser session.
+        ip_entries, ip_display = [], ""
+    else:
+        ip_entries, ip_display = match_ip_admin(ip_value)
     entries: list[Any] = list(ip_entries)
     if identity:
         entries.extend(match_id_admin(identity))
@@ -500,6 +546,8 @@ def build_user(request: Request) -> CurrentUser:
             linked_member_name=linked["name"] if linked else None,
             email_verified=bool(account.get("email_verified")),
             sso_configured=sso_configured,
+            deploy_device=local,
+            device_admin_active=False,
             session=identity,
         )
 
@@ -517,6 +565,8 @@ def build_user(request: Request) -> CurrentUser:
             linked_member_id=linked["id"] if linked else None,
             linked_member_name=linked["name"] if linked else None,
             sso_configured=sso_configured,
+            deploy_device=local,
+            device_admin_active=False,
             session=identity,
         )
 
@@ -531,6 +581,8 @@ def build_user(request: Request) -> CurrentUser:
             team_ids=team_ids,
             group_ids=group_ids,
             sso_configured=sso_configured,
+            deploy_device=local,
+            device_admin_active=False,
         )
 
     return CurrentUser(
@@ -539,6 +591,8 @@ def build_user(request: Request) -> CurrentUser:
         authenticated=False,
         source="guest",
         sso_configured=sso_configured,
+        deploy_device=local,
+        device_admin_active=False,
     )
 
 

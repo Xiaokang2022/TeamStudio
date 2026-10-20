@@ -24,6 +24,10 @@ export interface CurrentUser {
   linkedMemberId: string | null;
   linkedMemberName: string | null;
   ssoConfigured: boolean;
+  /** True when the request comes from the deployment machine itself. */
+  deployDevice: boolean;
+  /** True while the browser is using the built-in device Admin identity. */
+  deviceAdminActive: boolean;
   permissions: {
     canEditSettings: boolean;
     canEditAny: boolean;
@@ -93,6 +97,7 @@ export interface PublicConfig {
       codeLength: number;
       codeExpiryMinutes: number;
       resendSeconds: number;
+      precreatedActivationMinutes: number;
     };
     sessionDays: number;
     sso: { enabled: boolean; configured: boolean; providerName: string };
@@ -498,6 +503,7 @@ export interface AppSettings {
       codeExpiryMinutes: number;
       resendSeconds: number;
       maxAttempts: number;
+      precreatedActivationMinutes: number;
     };
     sso: {
       enabled: boolean;
@@ -584,6 +590,12 @@ export interface UsersData {
   users: UserAccount[];
   deviceAdminName: string;
   permissions: { canManageUsers: boolean };
+}
+
+export interface ActivationLink {
+  url: string;
+  expiresAt: string;
+  expiresInMinutes: number;
 }
 
 export interface ProfileMember {

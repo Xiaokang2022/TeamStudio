@@ -27,8 +27,8 @@ end of the round as the long-term source of truth.
   not manageable/deletable.
 - Sessions are sliding: `/api/bootstrap` and `/api/auth/me` re-issue the cookie; duration is
   `auth.session.maxAgeDays` (default 7).
-- Non-super identities may **not** use `scope=all` (`resolve_scope(..., user)` raises
-  `403 scope_forbidden`). All feature routers must pass `user` to `resolve_scope`.
+- ~~Non-super identities may not use `scope=all`.~~ (Round 6 removed this restriction; browsing
+  views are no longer permission-gated. See `CONTRACT.md`.)
 
 ## 2. Auth API
 
@@ -148,4 +148,4 @@ edits mirror back to the account.
 - `#/settings` – tabs depend on role:
   - super: appearance / modules+calendar / access / accounts / sso / email / json / workspace
   - team & group admins: workspace (domain settings) only
-- `全部团队` scope option hidden for every non-super identity.
+- `所有团队` scope option hidden for every non-super identity.

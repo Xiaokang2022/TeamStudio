@@ -692,15 +692,14 @@ def test_self_and_super_edit_member_personal_fields_and_sync_account(client, as_
     assert _query("SELECT bio, avatar FROM users WHERE id='su.wan'")[0] == su_account_before
 
 
-def test_workspace_scope_all_is_super_only(client, as_user) -> None:
+def test_workspace_scope_all_is_available_to_every_identity(client, as_user) -> None:
     overview_url = f"/api/teams/{TEAM_ID}/groups/{GROUP_ID}/overview"
     works_url = f"{MEMBERS_BASE}/{MEMBER_ID}/works"
     for user in (team_admin(TEAM_ID), group_admin(), linked_member()):
         as_user(user)
         for path in (overview_url, works_url):
             response = client.get(path, params={"scope": "all"})
-            assert response.status_code == 403, (user.name, path)
-            assert _error(response)["code"] == "scope_forbidden"
+            assert response.status_code == 200, (user.name, path)
 
     as_user(team_admin(TEAM_ID))
     assert client.get(overview_url, params={"scope": "team"}).status_code == 200

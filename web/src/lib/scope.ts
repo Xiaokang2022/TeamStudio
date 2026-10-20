@@ -15,14 +15,14 @@ export const SCOPE_OPTIONS: {
   },
   {
     key: "team",
-    label: "整个团队",
+    label: "当前团队",
     shortLabel: "团队",
     description: "汇总当前团队下所有开发组的数据",
   },
   {
     key: "all",
-    label: "全部团队",
-    shortLabel: "全部",
+    label: "所有团队",
+    shortLabel: "所有",
     description: "跨团队浏览整个站点的数据",
   },
 ];
@@ -30,11 +30,10 @@ export const SCOPE_OPTIONS: {
 export type ScopeOption = (typeof SCOPE_OPTIONS)[number];
 
 /**
- * 浏览视角选项：`全部团队` 仅对超级管理员开放。
+ * 浏览视角选项：所有身份均可使用开发组 / 团队 / 所有团队视图。
  */
-export function scopeOptionsFor(isSuperAdmin: boolean): ScopeOption[] {
-  if (isSuperAdmin) return SCOPE_OPTIONS;
-  return SCOPE_OPTIONS.filter((option) => option.key !== "all");
+export function scopeOptionsFor(_isSuperAdmin: boolean): ScopeOption[] {
+  return SCOPE_OPTIONS;
 }
 
 export function isAggregateScope(scope: ScopeKind): boolean {

@@ -234,23 +234,61 @@ export function safeJsonParse<T = unknown>(text: string): { value: T | null; err
   }
 }
 
+/**
+ * 复制文本到剪贴板，返回「是否真的复制成功」。
+ *
+ * 注意：不能把「尝试过」当成成功。
+ * - 安全上下文（https / localhost）优先用 navigator.clipboard.writeText；
+ * - 非安全上下文（例如 plain-http 局域网地址）navigator.clipboard 为 undefined，
+ *   退回 textarea + execCommand("copy") 的旧方案，并把 execCommand 的布尔返回值透传出去；
+ * - 任何失败都返回 false，由调用方决定如何提示 / 提供手动复制回退。
+ */
 export async function copyText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
     try {
-      const area = document.createElement("textarea");
-      area.value = text;
-      area.style.position = "fixed";
-      area.style.opacity = "0";
-      document.body.appendChild(area);
-      area.select();
-      document.execCommand("copy");
-      document.body.removeChild(area);
+      await navigator.clipboard.writeText(text);
       return true;
     } catch {
-      return false;
+      // 权限被拒 / 非用户激活等场景：继续尝试旧方案，而不是直接判定成功。
+    }
+  }
+
+  const previousFocus = document.activeElement as HTMLElement | null;
+  let area: HTMLTextAreaElement | null = null;
+  try {
+    area = document.createElement("textarea");
+    area.value = text;
+    area.readOnly = true;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.top = "0";
+    area.style.left = "0";
+    area.style.width = "1px";
+    area.style.height = "1px";
+    area.style.padding = "0";
+    area.style.border = "none";
+    area.style.outline = "none";
+    area.style.boxShadow = "none";
+    area.style.background = "transparent";
+    area.style.opacity = "0";
+    area.style.pointerEvents = "none";
+    area.style.zIndex = "-1";
+    document.body.appendChild(area);
+    area.focus({ preventScroll: true });
+    area.select();
+    area.setSelectionRange(0, text.length);
+    if (typeof document.execCommand !== "function") return false;
+    return document.execCommand("copy") === true;
+  } catch {
+    return false;
+  } finally {
+    if (area?.parentNode) area.parentNode.removeChild(area);
+    if (previousFocus && typeof previousFocus.focus === "function") {
+      try {
+        previousFocus.focus({ preventScroll: true });
+      } catch {
+        // 焦点元素可能已卸载，忽略。
+      }
     }
   }
 }

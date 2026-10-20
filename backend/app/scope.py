@@ -6,10 +6,10 @@ Feature GET routes accept an optional ``scope`` query parameter:
 - ``team``: every development group of the path team.
 - ``all``: every development group of every team.
 
-Only super administrators may read the cross-team ``all`` scope (round 5 rule);
-every other identity is limited to the current development group or its current
-team. Writes stay group-scoped; the frontend routes a write back to the group that
-owns the entity (each payload item carries ``groupId``).
+Every identity (including guests) may read the cross-team ``all`` scope: browsing
+scope is a view preference, not a permission boundary (round 6 rule). Writes stay
+group-scoped; the frontend routes a write back to the group that owns the entity
+(each payload item carries ``groupId``).
 """
 
 from __future__ import annotations
@@ -34,15 +34,13 @@ def normalize_scope(value: str | None) -> str:
     return cleaned
 
 
-def allowed_scopes(user: CurrentUser | None) -> list[str]:
-    if user is not None and not user.is_super_admin:
-        return ["group", "team"]
-    return ["group", "team", "all"]
+def allowed_scopes(user: CurrentUser | None = None) -> list[str]:
+    """Every identity may use every browsing view (round 6)."""
+    return list(SCOPE_KINDS)
 
 
-def ensure_scope_allowed(kind: str, user: CurrentUser | None) -> str:
-    if user is not None and kind == "all" and not user.is_super_admin:
-        raise fail(403, "仅超级管理员可查看全部团队视角", "scope_forbidden")
+def ensure_scope_allowed(kind: str, user: CurrentUser | None = None) -> str:
+    """Browsing scope is no longer permission-gated; kept for call-site compatibility."""
     return kind
 
 
@@ -117,9 +115,9 @@ def resolve_scope(
     if kind == "group":
         label = active_group["name"] if active_group else "开发组"
     elif kind == "team":
-        label = f"{active_team['name']} · 全团队" if active_team else "全团队"
+        label = active_team["name"] if active_team else "当前团队"
     else:
-        label = "全部团队"
+        label = "所有团队"
 
     return {
         "kind": kind,

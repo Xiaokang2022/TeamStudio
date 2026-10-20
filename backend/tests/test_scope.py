@@ -64,7 +64,7 @@ def test_team_scope_aggregates_aurora_groups(client):
     data = _data(client.get(f"{BASE}/overview?scope=team"))
     scope = data["scope"]
     assert scope["kind"] == "team"
-    assert scope["label"] == "星港产品团队 · 全团队"
+    assert scope["label"] == "星港产品团队"
     assert set(scope["groupIds"]) == TEAM_GROUPS
     assert scope["teamIds"] == [TEAM_ID]
     assert {group["id"] for group in scope["groups"]} == TEAM_GROUPS
@@ -86,7 +86,7 @@ def test_all_scope_aggregates_every_team(client):
     data = _data(client.get(f"{BASE}/overview?scope=all"))
     scope = data["scope"]
     assert scope["kind"] == "all"
-    assert scope["label"] == "全部团队"
+    assert scope["label"] == "所有团队"
     assert set(scope["groupIds"]) == ALL_GROUPS
     assert set(scope["teamIds"]) == {"team-aurora", "team-voyage"}
     assert len(data["members"]) == 18
@@ -250,7 +250,8 @@ def test_redblack_scope_follows_view(client):
     assert _data(client.get(f"{BASE}/redblack?month=2030-01"))["board"] is None
 
 
-def test_non_super_scope_all_is_forbidden(guest_client):
+def test_every_identity_can_use_all_scope(guest_client):
+    """Round 6: browsing scope is a view preference, not a permission boundary."""
     for path in (
         "overview",
         "tasks",
@@ -261,25 +262,8 @@ def test_non_super_scope_all_is_forbidden(guest_client):
         "insights",
         "redblack",
     ):
-        response = guest_client.get(f"{BASE}/{path}?scope=all")
-        assert response.status_code == 403, (path, response.text)
-        body = response.json()
-        assert body["ok"] is False
-        assert body["error"]["code"] == "scope_forbidden", path
-
-
-def test_guest_can_read_group_and_team_scopes(guest_client):
-    for path in (
-        "overview",
-        "tasks",
-        "todos",
-        "links",
-        "matrix",
-        "announcements",
-        "insights",
-        "redblack",
-    ):
-        for kind in ("group", "team"):
+        for kind in ("group", "team", "all"):
             response = guest_client.get(f"{BASE}/{path}?scope={kind}")
             assert response.status_code == 200, (path, kind, response.text)
+            assert response.json()["data"]["scope"]["kind"] == kind, path
             assert response.json()["data"]["scope"]["kind"] == kind, (path, kind)

@@ -22,10 +22,14 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from ..auth import (
     STATE_COOKIE,
     CurrentUser,
+    clear_device_logout_cookie,
     clear_session_cookie,
+    device_admin_logged_out,
     get_current_user,
     hash_verification_code,
+    is_local_request,
     refresh_session_cookie,
+    set_device_logout_cookie,
     set_session_cookie,
     verification_code_matches,
 )
@@ -72,7 +76,8 @@ def _latest_code(email: str) -> dict | None:
     with db() as conn:
         return row(
             conn,
-            "SELECT * FROM email_codes WHERE email=? ORDER BY created_at DESC LIMIT 1",
+            "SELECT * FROM email_codes WHERE email=? AND purpose<>'activate' "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1",
             (email,),
         )
 
@@ -96,12 +101,15 @@ def me(
 
 
 @router.get("/config")
-def auth_config():
+def auth_config(request: Request):
     data = settings_service.public()["auth"]
     data["emailService"] = {
         "configured": settings_service.email_configured(),
         "enabled": settings_service.get().email.enabled,
     }
+    local = is_local_request(request)
+    data["deployDevice"] = local
+    data["deviceAdminActive"] = bool(local and not device_admin_logged_out(request))
     return ok(data)
 
 
@@ -110,17 +118,40 @@ def request_email_code(payload: dict = Body(...)):
     cfg = settings_service.get()
     if not cfg.auth.emailLogin.enabled:
         raise fail(403, "邮箱验证码登录未启用", "email_login_disabled")
+    try:
+        email = accounts.normalize_email(payload.get("email"))
+        accounts.email_local_part(email)
+    except accounts.AccountError as exc:
+        raise fail(exc.status_code, exc.message, exc.code) from exc
+
+    with db() as conn:
+        account = accounts.get_user_by_email(conn, email)
+        if not account:
+            # The immutable id is the e-mail local part; reject an unusable prefix
+            # before sending a code instead of failing at verification time.
+            conflict = accounts.get_user(conn, accounts.derive_user_id(email))
+            if conflict:
+                raise fail(
+                    409,
+                    "该邮箱前缀已被其他账号占用，请更换邮箱",
+                    "user_id_conflict",
+                )
+
+    # Pre-created accounts must first activate via the one-time link issued by the
+    # super administrator; they do not use e-mail codes. This works without SMTP.
+    if account and not account.get("email_verified"):
+        raise fail(
+            403,
+            "该账号尚未激活，请使用超级管理员提供的激活链接完成激活",
+            "account_not_activated",
+        )
+
     if not settings_service.email_configured():
         raise fail(
             503,
             "邮件服务尚未配置，请联系超级管理员在系统设置中填写 SMTP 服务器与发件邮箱",
             "email_not_configured",
         )
-    try:
-        email = accounts.normalize_email(payload.get("email"))
-        accounts.email_local_part(email)
-    except accounts.AccountError as exc:
-        raise fail(exc.status_code, exc.message, exc.code) from exc
 
     resend_seconds = cfg.auth.emailLogin.resendSeconds
     previous = _latest_code(email)
@@ -136,18 +167,6 @@ def request_email_code(payload: dict = Body(...)):
                 {"retryAfterSeconds": retry_after},
             )
 
-    with db() as conn:
-        account = accounts.get_user_by_email(conn, email)
-        if not account:
-            # The immutable id is the e-mail local part; reject an unusable prefix
-            # before sending a code instead of failing at verification time.
-            conflict = accounts.get_user(conn, accounts.derive_user_id(email))
-            if conflict:
-                raise fail(
-                    409,
-                    "该邮箱前缀已被其他账号占用，请更换邮箱",
-                    "user_id_conflict",
-                )
     registered = bool(account and account.get("email_verified"))
     purpose = "login" if registered else "register"
     code = "".join(str(secrets.randbelow(10)) for _ in range(cfg.auth.emailLogin.codeLength))
@@ -186,12 +205,14 @@ def request_email_code(payload: dict = Body(...)):
     return ok(
         {
             "sent": True,
+            "mode": "code",
             "email": email,
             "purpose": purpose,
             "registered": registered,
             "expiresInSeconds": expires_minutes * 60,
             "resendAfterSeconds": resend_seconds,
             "codeLength": cfg.auth.emailLogin.codeLength,
+            "precreatedActivationMinutes": cfg.auth.emailLogin.precreatedActivationMinutes,
         }
     )
 
@@ -275,6 +296,44 @@ def verify_email_code(
     )
 
 
+@router.get("/activate")
+def activate_account(token: str = Query(default="", max_length=200)):
+    """One-time activation link for pre-created accounts.
+
+    Opens automatically in the browser: validates the token, activates the account,
+    sets the session cookie and redirects into the workspace. Invalid / expired /
+    already-used links redirect to the login page with a status flag.
+    """
+
+    def target(status: str) -> RedirectResponse:
+        return RedirectResponse(f"/#/login?activation={quote(status)}", status_code=303)
+
+    if not token:
+        return target("invalid")
+    with db() as conn:
+        record = accounts.find_activation_token(conn, token)
+        if not record:
+            return target("invalid")
+        if record.get("used_at"):
+            return target("used")
+        expires_at = _parse_iso(record.get("expires_at"))
+        if expires_at is None or expires_at < _now():
+            return target("expired")
+        account = accounts.get_user(conn, record["user_id"])
+        if not account:
+            return target("invalid")
+        accounts.consume_activation_token(conn, record["token_hash"])
+        if not account.get("email_verified"):
+            account = accounts.mark_email_verified(conn, account["id"])
+        account = accounts.get_user(conn, account["id"])
+
+    assert account is not None
+    identity = accounts.account_session_identity(account)
+    response = RedirectResponse("/#/overview", status_code=303)
+    set_session_cookie(response, identity)
+    return response
+
+
 # --------------------------------------------------------------------------- SSO
 
 
@@ -334,7 +393,30 @@ def callback(
 
 
 @router.post("/logout")
-def logout():
-    response = JSONResponse(ok({"loggedOut": True, "endSessionUrl": logout_url()}))
+def logout(
+    request: Request,
+    response: Response,
+    user: CurrentUser = Depends(get_current_user),
+):
+    result = ok(
+        {
+            "loggedOut": True,
+            "endSessionUrl": logout_url() if user.source == "sso" else None,
+        }
+    )
     clear_session_cookie(response)
-    return response
+    # On the deployment device, also remember that the built-in Admin identity was
+    # intentionally signed out so the browser can use a normal e-mail account instead.
+    if is_local_request(request):
+        set_device_logout_cookie(response)
+    return result
+
+
+@router.post("/device/login")
+def device_admin_login(request: Request, response: Response):
+    """Restore the built-in device Admin identity (only on the deployment device)."""
+    if not is_local_request(request):
+        raise fail(403, "仅部署设备本机可使用设备管理员登录", "device_admin_unavailable")
+    clear_device_logout_cookie(response)
+    clear_session_cookie(response)
+    return ok({"deviceAdmin": True, "authenticated": True})

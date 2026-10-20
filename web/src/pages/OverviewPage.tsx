@@ -252,9 +252,9 @@ export default function OverviewPage() {
   }, [selectedMember, data?.teams, teamId, groupId]);
 
   const heroStats = [
-    { label: "团队成员", value: stats?.members ?? members.length, unit: "位成员", icon: Users },
-    { label: "在途工作", value: stats?.currentWorks ?? 0, unit: "项推进中", icon: Activity },
-    { label: "待跟进待办", value: stats?.openTodos ?? 0, unit: "条待办", icon: ListTodo },
+    { label: "团队成员", value: stats?.members ?? members.length, unit: "位", icon: Users },
+    { label: "在途工作", value: stats?.currentWorks ?? 0, unit: "项", icon: Activity },
+    { label: "待跟进待办", value: stats?.openTodos ?? 0, unit: "条", icon: ListTodo },
     { label: "置顶公告", value: pinned.length, unit: "条信号", icon: Megaphone },
   ];
 
@@ -363,7 +363,7 @@ export default function OverviewPage() {
               </>
             ) : (
               <>
-                全部团队
+                所有团队
                 <span aria-hidden="true"> · </span>
                 {scopeTeamCount} 个团队 / {scopeGroups.length} 个开发组的聚合视图。
               </>

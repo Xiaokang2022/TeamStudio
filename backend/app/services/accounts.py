@@ -8,8 +8,11 @@ settings always agree.
 
 from __future__ import annotations
 
+import hashlib
 import re
+import secrets
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..config import EMAIL_PATTERN, settings_service
@@ -273,6 +276,51 @@ def sync_user_from_member(conn: sqlite3.Connection, member: dict[str, Any]) -> N
     conn.execute(
         f"UPDATE users SET {assignments} WHERE id=?",
         (*updates.values(), account["id"]),
+    )
+
+
+def _hash_activation_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_activation_token(
+    conn: sqlite3.Connection,
+    user_id: str,
+    *,
+    minutes: int,
+    created_by: str = "",
+) -> tuple[str, str]:
+    """Issue a one-time activation token, invalidating older unused tokens."""
+    conn.execute(
+        "UPDATE user_activation_tokens SET used_at=? WHERE user_id=? AND used_at IS NULL",
+        (now_iso(), user_id),
+    )
+    token = secrets.token_urlsafe(32)
+    expires_at = (
+        datetime.now(timezone.utc).astimezone() + timedelta(minutes=minutes)
+    ).isoformat(timespec="seconds")
+    conn.execute(
+        "INSERT INTO user_activation_tokens (token_hash,user_id,expires_at,used_at,"
+        "created_at,created_by) VALUES (?,?,?,?,?,?)",
+        (_hash_activation_token(token), user_id, expires_at, None, now_iso(), created_by),
+    )
+    return token, expires_at
+
+
+def find_activation_token(conn: sqlite3.Connection, token: str) -> dict[str, Any] | None:
+    if not token:
+        return None
+    return row(
+        conn,
+        "SELECT * FROM user_activation_tokens WHERE token_hash=?",
+        (_hash_activation_token(token),),
+    )
+
+
+def consume_activation_token(conn: sqlite3.Connection, token_hash: str) -> None:
+    conn.execute(
+        "UPDATE user_activation_tokens SET used_at=? WHERE token_hash=? AND used_at IS NULL",
+        (now_iso(), token_hash),
     )
 
 

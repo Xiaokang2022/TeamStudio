@@ -11,14 +11,34 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends
+from urllib.parse import quote
+
+from fastapi import APIRouter, Body, Depends, Request
 
 from ..auth import CurrentUser, require_super
+from ..config import settings_service
 from ..db import db, log_audit, row, rows
 from ..http import fail, ok
 from ..services import accounts
 
 router = APIRouter(prefix="/api/users", tags=["users"])
+
+
+def _activation_url(request: Request, token: str) -> str:
+    base = str(request.base_url).rstrip("/")
+    return f"{base}/api/auth/activate?token={quote(token)}"
+
+
+def _issue_activation(conn, request: Request, user: dict[str, Any], created_by: str) -> dict[str, Any]:
+    minutes = settings_service.get().auth.emailLogin.precreatedActivationMinutes
+    token, expires_at = accounts.create_activation_token(
+        conn, user["id"], minutes=minutes, created_by=created_by
+    )
+    return {
+        "url": _activation_url(request, token),
+        "expiresAt": expires_at,
+        "expiresInMinutes": minutes,
+    }
 
 
 def _validate_scope(
@@ -55,7 +75,7 @@ def _user_list(conn: sqlite3.Connection, user: CurrentUser) -> list[dict[str, An
             "bio": "部署设备内置管理员",
             "skills": [],
             "role": "super",
-            "roleLabel": "超级管理员（部署设备）",
+            "roleLabel": "超级管理员",
             "teamIds": [],
             "groupIds": [],
             "emailVerified": True,
@@ -90,9 +110,11 @@ def list_users(user: CurrentUser = Depends(require_super)):
 
 @router.post("")
 def create_user(
+    request: Request,
     payload: dict[str, Any] = Body(...),
     user: CurrentUser = Depends(require_super),
 ):
+    activation: dict[str, Any] | None = None
     try:
         email = accounts.normalize_email(payload.get("email"))
         role = str(payload.get("role") or "member")
@@ -112,6 +134,8 @@ def create_user(
                 email_verified=bool(payload.get("emailVerified")),
                 created_by=user.id,
             )
+            if not created["email_verified"]:
+                activation = _issue_activation(conn, request, created, user.id)
             log_audit(
                 conn,
                 user.name or user.id,
@@ -122,7 +146,38 @@ def create_user(
             )
     except accounts.AccountError as exc:
         raise fail(exc.status_code, exc.message, exc.code) from exc
-    return ok({"user": accounts.user_payload(created)})
+    return ok(
+        {
+            "user": accounts.user_payload(created),
+            "activation": activation,
+        }
+    )
+
+
+@router.post("/{user_id}/activation-link")
+def create_activation_link(
+    user_id: str,
+    request: Request,
+    user: CurrentUser = Depends(require_super),
+):
+    if user_id == "device-admin":
+        raise fail(403, "部署设备的 Admin 身份不可管理", "device_admin_immutable")
+    with db() as conn:
+        account = accounts.get_user(conn, user_id)
+        if not account:
+            raise fail(404, "账号不存在", "user_not_found")
+        if account.get("email_verified"):
+            raise fail(409, "该账号已激活，无需重新生成激活链接", "account_already_activated")
+        activation = _issue_activation(conn, request, account, user.id)
+        log_audit(
+            conn,
+            user.name or user.id,
+            "user.activation_link",
+            "user",
+            user_id,
+            {"expiresInMinutes": activation["expiresInMinutes"]},
+        )
+    return ok({"activation": activation})
 
 
 @router.patch("/{user_id}")

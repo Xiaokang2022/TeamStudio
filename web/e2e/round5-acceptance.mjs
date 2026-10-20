@@ -164,18 +164,25 @@ async function configureSmtpAndAccounts() {
   const existing = await api("/api/users");
   const emails = new Set(existing.users.map((user) => user.email));
   const accounts = [
-    { email: "super.one@corp.example", name: "超级管理员一号", role: "super" },
+    {
+      email: "super.one@corp.example",
+      name: "超级管理员一号",
+      role: "super",
+      emailVerified: true,
+    },
     {
       email: "team.lead@corp.example",
       name: "团队负责人",
       role: "team_admin",
       teamIds: ["team-aurora"],
+      emailVerified: true,
     },
     {
       email: "group.lead@corp.example",
       name: "开发组负责人",
       role: "group_admin",
       groupIds: ["grp-frontend"],
+      emailVerified: true,
     },
   ];
   for (const account of accounts) {
@@ -272,7 +279,11 @@ try {
   record("访客可浏览概览", await page.locator(".ov-hero-title").first().isVisible());
   record("访客顶部显示登录入口", await page.locator(".login-button", { hasText: "登录" }).isVisible());
   record("访客看到访客横幅", await page.locator(".guest-banner").isVisible());
-  record("访客视角无“全部团队”", !(await scopeLabels(page)).some((text) => text.includes("全部")));
+  record(
+    "访客可使用所有团队视角",
+    (await scopeLabels(page)).length === 3 &&
+      (await scopeLabels(page)).some((text) => text.includes("所有")),
+  );
 
   await page.locator(".login-button").click();
   await page.waitForSelector("#login-email", { timeout: 15000 });
@@ -286,9 +297,9 @@ try {
     (await page.locator(".main-nav .nav-item", { hasText: "系统设置" }).count()) === 0,
   );
   record(
-    "非超级管理员视角仅开发组/团队",
-    (await scopeLabels(page)).length === 2 &&
-      !(await scopeLabels(page)).some((text) => text.includes("全部")),
+    "成员可使用所有团队视角",
+    (await scopeLabels(page)).length === 3 &&
+      (await scopeLabels(page)).some((text) => text.includes("所有")),
   );
 
   const cookies = await guest.cookies(BASE);
@@ -367,8 +378,8 @@ try {
   page = await loginWithCode(superCtx, "super.one@corp.example", "super");
   record("超级管理员登录", (await page.locator(".user-chip").innerText()).includes("超级管理员"));
   record(
-    "超级管理员可访问全部团队视角",
-    (await scopeLabels(page)).some((text) => text.includes("全部")),
+    "超级管理员可访问所有团队视角",
+    (await scopeLabels(page)).some((text) => text.includes("所有")),
   );
   await page.locator(".main-nav .nav-item", { hasText: "系统设置" }).click();
   await page.waitForSelector(".settings-tabs", { timeout: 20000 });
@@ -382,6 +393,31 @@ try {
   record("账号列表含预创建超管", accountText.includes("super.one@corp.example"));
   record("设备管理员行不可管理", accountText.includes("部署设备内置管理员"));
 
+  // Pre-created accounts receive a one-time activation URL at creation time.
+  const inviteEmail = `invited.${Date.now()}@corp.example`;
+  const invited = await api("/api/users", {
+    method: "POST",
+    body: { email: inviteEmail, name: "受邀成员", role: "member" },
+  });
+  record(
+    "预创建账号同步返回激活链接",
+    Boolean(invited.activation?.url) && invited.activation.url.includes("/api/auth/activate?token="),
+  );
+  const inviteCtx = await remoteContext(browser, "10.99.0.88");
+  const invitePage = await inviteCtx.newPage();
+  attachErrorCapture(invitePage, "activation-link");
+  await invitePage.goto(invited.activation.url, { waitUntil: "domcontentloaded" });
+  await invitePage.waitForSelector(".user-chip", { timeout: 25000 });
+  record(
+    "打开激活链接自动激活并登录",
+    (await invitePage.locator(".user-chip").innerText()).includes("受邀成员"),
+  );
+  record(
+    "激活账号不附带管理员权限",
+    (await invitePage.locator(".main-nav .nav-item", { hasText: "系统设置" }).count()) === 0,
+  );
+  await inviteCtx.close();
+
   await page.locator(".settings-tabs .settings-tab", { hasText: "邮件服务" }).click();
   await page.waitForTimeout(900);
   const emailText = await page.locator(".settings-page").innerText();
@@ -392,6 +428,13 @@ try {
   await page.waitForSelector(".rb-page", { timeout: 20000 });
   await setScope(page, "团队");
   await page.waitForTimeout(800);
+  const teamCrumb = (await page.locator(".breadcrumb").innerText()).replace(/\s+/g, " ");
+  record(
+    "团队视角面包屑使用团队名称且不重复",
+    (teamCrumb.match(/星港产品团队/g) || []).length === 1 &&
+      !teamCrumb.includes("全团队"),
+    teamCrumb,
+  );
   record("红黑榜随团队视角刷新", (await page.locator(".rb-scope-hint").count()) > 0);
   record("团队视角红黑榜显示开发组徽章", (await page.locator(".rb-group-badge").count()) > 0);
   record(
@@ -411,8 +454,8 @@ try {
   page = await loginWithCode(teamCtx, "team.lead@corp.example", "team-admin");
   record("团队管理员登录", (await page.locator(".user-chip").innerText()).includes("团队管理员"));
   record(
-    "团队管理员无全部团队视角",
-    !(await scopeLabels(page)).some((text) => text.includes("全部")),
+    "团队管理员可使用所有团队视角",
+    (await scopeLabels(page)).some((text) => text.includes("所有")),
   );
   await page.goto(`${BASE}/#/settings`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector(".settings-page", { timeout: 20000 });
@@ -483,6 +526,44 @@ try {
   } else {
     record("SMTP 测试邮件可投递", false, "test input not found");
   }
+
+  /* Device Admin can sign out and restore the built-in identity. */
+  await page.goto(`${BASE}/#/login`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".login-card", { timeout: 20000 });
+  const signOut = page.locator(".login-switch", { hasText: /退出登录/ });
+  record("设备管理员登录页可退出", (await signOut.count()) > 0);
+  await signOut.click();
+  await page.waitForSelector("#login-email", { timeout: 20000 });
+  record("退出后回到普通登录页", await page.locator("#login-email").isVisible());
+  const deviceButton = page.locator(".login-device-entry button", {
+    hasText: "以设备管理员身份登录",
+  });
+  record("检测到部署设备时显示设备管理员登录按钮", await deviceButton.isVisible());
+  await deviceButton.click();
+  await page.waitForSelector(".user-chip", { timeout: 25000 });
+  record(
+    "设备管理员身份可恢复",
+    (await page.locator(".user-chip").innerText()).includes("Admin"),
+  );
+
+  await page.goto(`${BASE}/#/profile`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".profile-page", { timeout: 20000 });
+  const deviceHero = await page.locator(".profile-hero").innerText();
+  record(
+    "部署设备个人主页不在角色中重复设备说明",
+    deviceHero.includes("超级管理员") &&
+      !deviceHero.includes("超级管理员（部署设备）") &&
+      deviceHero.includes("部署设备"),
+  );
+
+  await page.locator(".scope-option", { hasText: "所有" }).first().click();
+  await page.waitForTimeout(900);
+  const breadcrumb = await page.locator(".breadcrumb").innerText();
+  record(
+    "所有团队视角面包屑不重复",
+    (breadcrumb.match(/所有团队/g) || []).length === 1,
+    breadcrumb.replace(/\s+/g, " "),
+  );
   await page.close();
 
   const localErrors = consoleErrors.filter((entry) => !entry.includes("favicon"));

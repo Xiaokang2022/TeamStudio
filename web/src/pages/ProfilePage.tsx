@@ -388,7 +388,8 @@ export default function ProfilePage() {
             <div className="profile-name-row">
               <h2>{displayName}</h2>
               <span className={cn("badge", roleBadgeClass(user.role))}>
-                <ShieldCheck size={12} /> {user.roleLabel || "成员"}
+                <ShieldCheck size={12} />{" "}
+                {user.isDeviceAdmin ? "超级管理员" : user.roleLabel || "成员"}
               </span>
               {user.isDeviceAdmin ? <span className="badge badge-green">部署设备</span> : null}
               {user.isDeviceAdmin ? null : user.emailVerified ? (

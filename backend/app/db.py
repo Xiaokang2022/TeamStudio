@@ -257,6 +257,16 @@ CREATE TABLE IF NOT EXISTS email_codes (
 );
 CREATE INDEX IF NOT EXISTS idx_email_codes_email ON email_codes(email, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS user_activation_tokens (
+    token_hash TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at TEXT NOT NULL,
+    used_at TEXT,
+    created_at TEXT NOT NULL,
+    created_by TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_activation_tokens_user ON user_activation_tokens(user_id);
+
 CREATE TABLE IF NOT EXISTS email_logs (
     id TEXT PRIMARY KEY,
     group_id TEXT NOT NULL DEFAULT '',

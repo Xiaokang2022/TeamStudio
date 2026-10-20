@@ -1955,6 +1955,44 @@
   gap: 8px;
 }
 
+.settings-activation-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-activation-link .input {
+  flex: 1;
+  min-width: 240px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* 只读激活链接输入框本身可点击复制，用 copy 光标与轻提示告知交互。 */
+.settings-activation-link .settings-activation-input {
+  cursor: copy;
+}
+
+.settings-activation-link .settings-activation-input::selection {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+.settings-activation-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 0;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+.settings-activation-hint svg {
+  flex: none;
+  color: var(--accent);
+}
+
 /* ============================================================
    Round 5 · SMTP relay / verification mail
    ============================================================ */

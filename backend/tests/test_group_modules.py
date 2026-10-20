@@ -563,11 +563,12 @@ def test_redblack_scope_follows_view(api: TestApi) -> None:
     assert empty["board"]["red"] == [] and empty["board"]["black"] == []
     assert empty["boards"] == []
 
-    # Non-super identities may never request the cross-team view.
+    # Round 6: browsing views are not permission-gated — every identity may aggregate.
     api.as_member(MEMBER_ID)
-    response = api.client.get(url("/redblack"), params={"month": month, "scope": "all"})
-    assert response.status_code == 403
-    assert response.json()["error"]["code"] == "scope_forbidden"
+    assert (
+        api.client.get(url("/redblack"), params={"month": month, "scope": "all"}).status_code
+        == 200
+    )
     api.as_group_admin()
     assert (
         api.client.get(url("/redblack"), params={"month": month, "scope": "team"}).status_code
@@ -575,12 +576,15 @@ def test_redblack_scope_follows_view(api: TestApi) -> None:
     )
     assert (
         api.client.get(url("/redblack"), params={"month": month, "scope": "all"}).status_code
-        == 403
+        == 200
     )
-    # Guests may read the wider team view when guest read access is enabled.
     api.as_guest()
     assert (
         api.client.get(url("/redblack"), params={"month": month, "scope": "team"}).status_code
+        == 200
+    )
+    assert (
+        api.client.get(url("/redblack"), params={"month": month, "scope": "all"}).status_code
         == 200
     )
 

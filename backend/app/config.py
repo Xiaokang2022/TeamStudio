@@ -178,6 +178,9 @@ class EmailLoginSettings(StrictModel):
     codeExpiryMinutes: int = Field(default=10, ge=2, le=30)
     resendSeconds: int = Field(default=60, ge=30, le=600)
     maxAttempts: int = Field(default=5, ge=3, le=10)
+    # Pre-created accounts may activate (and log in) without an e-mail code. Entering
+    # their e-mail opens a confirmation window of this many minutes.
+    precreatedActivationMinutes: int = Field(default=10, ge=1, le=120)
 
 
 class AdminIdEntry(StrictModel):
@@ -423,6 +426,7 @@ class SettingsService:
                     "codeLength": cfg.auth.emailLogin.codeLength,
                     "codeExpiryMinutes": cfg.auth.emailLogin.codeExpiryMinutes,
                     "resendSeconds": cfg.auth.emailLogin.resendSeconds,
+                    "precreatedActivationMinutes": cfg.auth.emailLogin.precreatedActivationMinutes,
                 },
                 "sessionDays": cfg.auth.session.maxAgeDays,
                 "sso": {

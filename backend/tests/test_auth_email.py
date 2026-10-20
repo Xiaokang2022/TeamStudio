@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 
 from backend.app.auth import SessionIdentity, create_session_token
 from backend.app.config import DEFAULT_SETTINGS, settings_service
 from backend.app.db import db, row
 from backend.app.routers import auth as auth_router
 from backend.app.services import accounts
+
+
+def _activation_path(url: str) -> str:
+    parts = urlsplit(url)
+    return f"{parts.path}?{parts.query}"
 
 
 def _configure_email() -> None:
@@ -40,14 +46,17 @@ def _capture_codes(monkeypatch) -> dict:
 
 def _login_as_super(guest_client) -> None:
     with db() as conn:
-        accounts.create_user(
-            conn,
-            email="root.super@corp.example",
-            name="Root",
-            role="super",
-            email_verified=True,
-            created_by="test",
-        )
+        try:
+            accounts.create_user(
+                conn,
+                email="root.super@corp.example",
+                name="Root",
+                role="super",
+                email_verified=True,
+                created_by="test",
+            )
+        except accounts.AccountError:
+            pass  # already created earlier in this test database
     token = create_session_token(
         SessionIdentity(
             id="root.super",
@@ -144,17 +153,18 @@ def test_seeded_account_login_links_member_profile(guest_client, monkeypatch):
     assert me["linkedMemberId"] == "m-lin"
     assert me["permissions"]["canEditSelf"] is True
 
-    # A normal member cannot request the cross-team browsing scope.
-    denied = guest_client.get(
+    # Browsing views are not permission-gated in round 6: members may aggregate all teams.
+    aggregate = guest_client.get(
         "/api/teams/team-aurora/groups/grp-frontend/overview?scope=all"
     )
-    assert denied.status_code == 403
-    assert denied.json()["error"]["code"] == "scope_forbidden"
+    assert aggregate.status_code == 200
+    assert aggregate.json()["data"]["scope"]["kind"] == "all"
 
 
 def test_precreated_account_activation_and_super_admin(guest_client, monkeypatch):
-    _configure_email()
+    # No SMTP relay is configured on purpose: pre-created accounts must still activate.
     captured = _capture_codes(monkeypatch)
+    assert settings_service.email_configured() is False
     _login_as_super(guest_client)
 
     created = guest_client.post(
@@ -167,6 +177,11 @@ def test_precreated_account_activation_and_super_admin(guest_client, monkeypatch
     )
     assert created.status_code == 200
     assert created.json()["data"]["user"]["emailVerified"] is False
+    activation = created.json()["data"]["activation"]
+    assert activation is not None
+    assert "/api/auth/activate?token=" in activation["url"]
+    assert activation["expiresInMinutes"] == 10
+    activation_path = _activation_path(activation["url"])
 
     listed = guest_client.get("/api/users").json()["data"]
     assert listed["users"][0]["isDeviceAdmin"] is True
@@ -180,19 +195,20 @@ def test_precreated_account_activation_and_super_admin(guest_client, monkeypatch
         assert account["id"] == "future.super"
         assert account["email_verified"] == 0
 
-    # Clear the super session, then activate the pre-created account by code.
-    guest_client.cookies.clear()
-    requested = guest_client.post(
+    # The activation link must reject e-mail-code login for the unverified account.
+    email_request = guest_client.post(
         "/api/auth/email/request", json={"email": "future.super@corp.example"}
     )
-    assert requested.status_code == 200
-    assert requested.json()["data"]["registered"] is False
-    verified = guest_client.post(
-        "/api/auth/email/verify",
-        json={"email": "future.super@corp.example", "code": captured["code"]},
-    )
-    assert verified.status_code == 200
-    assert verified.json()["data"]["isNewUser"] is False
+    assert email_request.status_code == 403
+    assert email_request.json()["error"]["code"] == "account_not_activated"
+
+    # Clear the super session, open the one-time activation URL: it activates and logs in.
+    guest_client.cookies.clear()
+    opened = guest_client.get(activation_path, follow_redirects=False)
+    assert opened.status_code == 303
+    assert opened.headers["location"] == "/#/overview"
+    assert "teamstudio_session" in opened.headers.get("set-cookie", "")
+    assert captured == {}  # no e-mail code was generated or sent
 
     me = guest_client.get("/api/auth/me").json()["data"]
     assert me["isSuperAdmin"] is True
@@ -249,6 +265,96 @@ def test_email_not_configured_is_reported(guest_client):
     response = guest_client.post("/api/auth/email/request", json={"email": "someone@corp.example"})
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "email_not_configured"
+
+
+def test_activation_link_is_configurable_and_one_time(guest_client):
+    payload = DEFAULT_SETTINGS.model_dump(mode="json")
+    # The whole e-mail service is disabled: activation links must not depend on it.
+    payload["email"]["enabled"] = False
+    payload["email"]["smtp"]["host"] = ""
+    payload["email"]["smtp"]["fromEmail"] = ""
+    payload["auth"]["emailLogin"]["precreatedActivationMinutes"] = 5
+    settings_service.save(payload)
+
+    _login_as_super(guest_client)
+    created = guest_client.post(
+        "/api/users",
+        json={"email": "invited.user@corp.example", "name": "待激活成员"},
+    )
+    assert created.status_code == 200
+    user = created.json()["data"]["user"]
+    assert user["emailVerified"] is False
+    activation = created.json()["data"]["activation"]
+    assert activation["expiresInMinutes"] == 5
+    path = _activation_path(activation["url"])
+
+    # The unactivated account cannot use the e-mail code path.
+    rejected = guest_client.post(
+        "/api/auth/email/request", json={"email": "invited.user@corp.example"}
+    )
+    assert rejected.status_code == 403
+    assert rejected.json()["error"]["code"] == "account_not_activated"
+
+    guest_client.cookies.clear()
+    opened = guest_client.get(path, follow_redirects=False)
+    assert opened.status_code == 303
+    assert opened.headers["location"] == "/#/overview"
+    me = guest_client.get("/api/auth/me").json()["data"]
+    assert me["id"] == "invited.user"
+    assert me["name"] == "待激活成员"
+    assert me["emailVerified"] is True
+    assert me["authenticated"] is True
+
+    # One-time use: the same link reports as already used.
+    reused = guest_client.get(path, follow_redirects=False)
+    assert reused.status_code == 303
+    assert "activation=used" in reused.headers["location"]
+
+
+def test_activation_link_expiry_and_regeneration(guest_client):
+    payload = DEFAULT_SETTINGS.model_dump(mode="json")
+    payload["auth"]["emailLogin"]["precreatedActivationMinutes"] = 5
+    settings_service.save(payload)
+    _login_as_super(guest_client)
+    created = guest_client.post(
+        "/api/users",
+        json={"email": "expired.link@corp.example", "name": "过期链接"},
+    )
+    activation = created.json()["data"]["activation"]
+    old_path = _activation_path(activation["url"])
+    user_id = created.json()["data"]["user"]["id"]
+
+    with db() as conn:
+        expired_at = (
+            datetime.now(timezone.utc).astimezone() - timedelta(seconds=1)
+        ).isoformat(timespec="seconds")
+        conn.execute(
+            "UPDATE user_activation_tokens SET expires_at=? WHERE user_id=?",
+            (expired_at, user_id),
+        )
+
+    guest_client.cookies.clear()
+    expired = guest_client.get(old_path, follow_redirects=False)
+    assert expired.status_code == 303
+    assert "activation=expired" in expired.headers["location"]
+    assert guest_client.get("/api/auth/me").json()["data"]["authenticated"] is False
+
+    # The super administrator can issue a fresh link for the still-unverified account.
+    _login_as_super(guest_client)
+    renewed = guest_client.post(f"/api/users/{user_id}/activation-link")
+    assert renewed.status_code == 200
+    new_path = _activation_path(renewed.json()["data"]["activation"]["url"])
+    guest_client.cookies.clear()
+    opened = guest_client.get(new_path, follow_redirects=False)
+    assert opened.status_code == 303
+    assert opened.headers["location"] == "/#/overview"
+    assert guest_client.get("/api/auth/me").json()["data"]["id"] == "expired.link"
+
+    # Already activated accounts cannot get another link.
+    _login_as_super(guest_client)
+    already = guest_client.post(f"/api/users/{user_id}/activation-link")
+    assert already.status_code == 409
+    assert already.json()["error"]["code"] == "account_already_activated"
 
 
 def test_id_conflict_is_rejected_before_sending(guest_client, monkeypatch):

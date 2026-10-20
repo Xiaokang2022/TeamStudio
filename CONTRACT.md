@@ -34,12 +34,14 @@ red/black board follows the active browsing scope.
   "linkedMemberId": "m-lin",
   "linkedMemberName": "林知夏",
   "ssoConfigured": false,
+  "deployDevice": false,
+  "deviceAdminActive": false,
   "permissions": {
     "canEditSettings": false,
     "canEditAny": false,
     "canEditSelf": true,
     "canManageUsers": false,
-    "canViewAllScope": false,
+    "canViewAllScope": true,
     "canManageWorkspace": false
   }
 }
@@ -48,7 +50,8 @@ red/black board follows the active browsing scope.
 Roles (`users` table, `userRole`): `member | group_admin | team_admin | super`.
 
 - `super` = super administrator. It has every permission the deployment device Admin has,
-  including site settings, account management and the cross-team `all` browsing scope.
+  including site settings and account management. The cross-team `all` browsing scope is not a
+  super-only permission: every identity (guests included) may use it.
   `isSuperAdmin` is `true` for the device Admin and for stored `super` accounts.
 - `team_admin` = full edit rights over every group of its `teamIds`; may create/delete groups
   inside those teams, but cannot create/delete a team or read site settings.
@@ -63,15 +66,24 @@ Permission flags:
 | --- | --- |
 | `canEditSettings` | Site-level settings (`/api/settings*`), super admins only |
 | `canManageUsers` | Account administration (`/api/users*`), super admins only |
-| `canViewAllScope` | May use `?scope=all`; every other identity gets `403 scope_forbidden` |
+| `canViewAllScope` | Always `true`: every identity (including guests) may use `?scope=all` |
 | `canManageWorkspace` | May open the workspace manager (super admin or a team admin) |
 | `canEditAny` / `canEditSelf` | In-scope admin writes / member self-service |
 
-The deployment device itself (loopback or one of the machine's own IPv4 addresses) is always the
-built-in `Admin` (super, never stored). A stored `super` account behaves the same, except that
-the device Admin row is not manageable or deletable. The optional ID/IP admin whitelist
+The deployment device itself (loopback or one of the machine's own IPv4 addresses) uses the
+built-in `Admin` (super, never stored) **until that browser explicitly logs out**. After
+`POST /api/auth/logout` on the device, a one-year, HttpOnly `teamstudio_device_logout` marker
+suppresses automatic device-admin privileges: the device can then sign in with any e-mail
+account (or stay a guest) and that session has exactly the same permissions as on any other
+machine — no device-admin privileges are attached. `POST /api/auth/device/login` (accepted only
+from the deployment device) clears the marker and any account session, restoring the built-in
+Admin. `deployDevice` reports that the request comes from the deployment machine, while
+`deviceAdminActive` reports whether the built-in Admin identity is currently in use. A stored
+`super` account behaves the same as device Admin on any machine, except that the device Admin
+row is not manageable or deletable. The optional ID/IP admin whitelist
 (`auth.adminWhitelist`) still grants `team_admin` / `group_admin` scopes to SSO / e-mail or IP
-identities; it no longer contains `super` entries — use the accounts API for that.
+identities; it no longer contains `super` entries — use the accounts API for that. IP grants are
+not applied to the deployment device once it has logged out of device-admin mode.
 
 Sessions are sliding: `/api/bootstrap` and `/api/auth/me` re-issue the signed HttpOnly cookie on
 every visit, so `auth.session.maxAgeDays` (default 7) counts from the most recent request. SSO
@@ -86,6 +98,8 @@ Password-less e-mail code login / registration:
   resendAfterSeconds, codeLength }`.
   - `429 code_rate_limited` with `details.retryAfterSeconds` while inside the resend window.
   - `403 email_login_disabled` / `503 email_not_configured` when the flow or SMTP relay is off.
+  - `403 account_not_activated` for a pre-created account that has not used its activation
+    link yet (no e-mail code is sent for those accounts).
   - `502 email_send_failed` when the SMTP relay rejects the message.
 - `POST /api/auth/email/verify` `{ email, code }` →
   `{ loggedIn, isNewUser, user, sessionDays }` and sets the signed cookie.
@@ -94,12 +108,38 @@ Password-less e-mail code login / registration:
   - Errors: `code_format_invalid`, `code_invalid`, `code_expired`, `code_mismatch`
     (`details.remainingAttempts`), `code_attempts_exceeded`, `user_id_conflict`.
 - `GET /api/auth/config` – public auth info: `guestMode`, `allowGuestRead`, `emailLogin`
-  (`enabled`, `codeLength`, `codeExpiryMinutes`, `resendSeconds`), `sessionDays`,
-  `sso { enabled, configured, providerName }`, `emailService { enabled, configured }`.
+  (`enabled`, `codeLength`, `codeExpiryMinutes`, `resendSeconds`,
+  `precreatedActivationMinutes`), `sessionDays`,
+  `sso { enabled, configured, providerName }`, `emailService { enabled, configured }`,
+  and the request-scoped `deployDevice` / `deviceAdminActive` flags.
 
 Verification codes live in `email_codes`: HMAC-hashed six-digit codes (length configurable),
 10-minute expiry, 60-second resend window, at most 5 attempts; the plain code is never stored or
 logged. Sessions are HMAC-SHA256 signed HttpOnly `SameSite=Lax` cookies.
+
+### Pre-created account activation links
+
+When a super administrator pre-creates an account (`POST /api/users`, `emailVerified` false), the
+response includes a one-time activation URL:
+
+```json
+{
+  "user": { "...": "..." },
+  "activation": {
+    "url": "http://127.0.0.1:8000/api/auth/activate?token=…",
+    "expiresAt": "2026-10-20T20:10:00+08:00",
+    "expiresInMinutes": 10
+  }
+}
+```
+
+- Opening `GET /api/auth/activate?token=…` validates the token, marks the account verified, sets
+  the signed session cookie and redirects to `/#/overview` — no e-mail code and no SMTP required.
+- Tokens are one-time and expire after `auth.emailLogin.precreatedActivationMinutes` (default 10,
+  configurable 1–120 minutes); only a SHA-256 hash is stored in `user_activation_tokens`.
+- Invalid / expired / already-used links redirect to `/#/login?activation=invalid|expired|used`.
+- `POST /api/users/{userId}/activation-link` (super) regenerates a link for a still-unverified
+  account; already-activated accounts get `409 account_already_activated`.
 
 Optional SSO and common endpoints:
 
@@ -107,7 +147,11 @@ Optional SSO and common endpoints:
   guest view with `?sso=unconfigured` when SSO is not configured and guests are allowed.
 - `GET /api/auth/callback?code=&state=` – OIDC callback, sets the session cookie.
 - `POST /api/auth/logout` – clears the session, returns `{ loggedOut, endSessionUrl }`
-  (`endSessionUrl` is the configured IdP logout URL or `null`).
+  (`endSessionUrl` is the configured IdP logout URL or `null`). On the deployment device it also
+  sets the device-admin sign-out marker described above.
+- `POST /api/auth/device/login` – deployment device only; clears the sign-out marker (and any
+  account session) and restores the built-in `Admin`. Off-device requests get
+  `403 device_admin_unavailable`.
 
 ## Bootstrap
 
@@ -138,22 +182,25 @@ current context (it also refreshes the sliding session):
 
 `users` rows are e-mail accounts: `id` is the lower-cased e-mail local part and is immutable,
 `email` is unique and lower-cased, `name` defaults to the local part, and `email_verified` is
-`0` for accounts pre-created by a super admin (they activate on first code login). Personal
-fields: `avatar`, `avatar_color`, `bio`, `skills` (JSON array).
+`0` for accounts pre-created by a super admin (they activate through a one-time link, not an
+e-mail code). Personal fields: `avatar`, `avatar_color`, `bio`, `skills` (JSON array).
 
 Account administration (super administrators only):
 
 - `GET /api/users` → `{ users, deviceAdminName, permissions: { canManageUsers } }`. The first
   row is the synthetic device Admin (`isDeviceAdmin: true`, `canManage: false`,
-  `roleLabel: "超级管理员（部署设备）"`).
+  `roleLabel: "超级管理员"`).
 - `POST /api/users` `{ email, name?, role?, teamIds?, groupIds?, emailVerified? }` – creates an
-  account; the default is an unverified `member` that becomes active on first code login.
+  account and, for unverified accounts, returns
+  `{ user, activation: { url, expiresAt, expiresInMinutes } }` (copy the URL to the member).
+- `POST /api/users/{userId}/activation-link` – regenerates a one-time activation link for a
+  still-unverified account (`409 account_already_activated` otherwise).
 - `PATCH /api/users/{userId}` `{ name?, role?, teamIds?, groupIds? }`
 - `DELETE /api/users/{userId}` – cannot delete yourself or the device Admin; also clears the
-  account's pending `email_codes`.
+  account's pending `email_codes` and activation tokens (FK cascade).
 - Validation: `invalid_role`, `invalid_team_scope`, `invalid_group_scope`,
   `team_scope_required`, `group_scope_required`, `user_id_conflict`, `email_exists`,
-  `device_admin_immutable`.
+  `device_admin_immutable`, `account_already_activated`.
 
 Profile / personal home page:
 
@@ -233,16 +280,16 @@ Base: `/api/teams/{teamId}/groups/{groupId}`. All GET routes are available in gu
 
 ### Browsing scope (multi-group reads)
 
-Every read route below accepts `?scope=group|team|all` (default `group`). Only super
-administrators (`permissions.canViewAllScope`) may request `all`; every other identity gets
-`403 scope_forbidden`. An unknown value is `422 invalid_scope`. Responses add a top-level `scope`
-object and per-item group metadata:
+Every read route below accepts `?scope=group|team|all` (default `group`). Browsing scope is
+**not permission-gated** in round 6: every identity, including guests, may request `all`. An
+unknown value is `422 invalid_scope`. Responses add a top-level `scope` object and per-item group
+metadata:
 
 ```json
 {
   "scope": {
     "kind": "group | team | all",
-    "label": "前端体验组 | 星港产品团队 · 全团队 | 全部团队",
+    "label": "前端体验组 | 星港产品团队 | 所有团队",
     "teamIds": ["team-aurora"],
     "groupIds": ["grp-frontend"],
     "groups": [{ "id": "grp-frontend", "teamId": "team-aurora", "teamName": "星港产品团队",
@@ -256,7 +303,7 @@ object and per-item group metadata:
 Members/works/todos/links/matrix/announcements gain `groupId` + `groupName`; tasks and todos
 also gain `teamId` + `teamName`. Writes stay group-scoped: the frontend routes an edit/delete
 to the group that owns the item (`groupId` on the payload), and creates into the currently
-selected group. The frontend hides the `全部团队` option for every non-super identity.
+selected group. The frontend shows all three browsing views to every identity.
 
 ### Overview / members / works
 
@@ -458,8 +505,8 @@ relay configured in `settings.email`:
 - `data/settings.json` – all application settings, editable through API and UI (atomic writes).
 - `data/teamstudio.db` – SQLite business data: `teams`, `groups`, `members` (incl.
   `avatar_url`), `works`, `todos`, `member_tasks`, `redblack_boards`/`entries`, `links`,
-  `matrix_areas`, `announcements`, `task_tags`, `users`, `email_codes`, `email_logs`,
-  `audit_logs`, `app_meta`.
+  `matrix_areas`, `announcements`, `task_tags`, `users`, `email_codes`,
+  `user_activation_tokens`, `email_logs`, `audit_logs`, `app_meta`.
 - `data/.session_secret` – generated HMAC signing key (never exposed).
 - `data/uploads/avatars/` – uploaded profile photos, served under `/uploads/avatars/...`.
 - There is no local mailbox, outbox mirror or reminder bookkeeping any more: the legacy
@@ -482,7 +529,10 @@ relay configured in `settings.email`:
     `json` (高级 JSON) — hash form `#/settings?tab=workspace|appearance|modules|access|accounts|sso|email|json`.
   - team / group admins: only `workspace` (domain settings), rendered without site settings.
 - Module flags hide nav entries; a direct hash remains accessible to admins so a hidden settings
-  module can be restored. The `全部团队` scope option is hidden for non-super identities.
+  module can be restored. The `所有团队` (`?scope=all`) browsing scope is available to every
+  identity — guests, members, group/team admins and super admins alike. Scope is a view
+  preference, not a permission gate: `web/src/lib/scope.ts` exposes all three options to everyone
+  and the backend accepts `?scope=all` for every identity.
 
 ## File ownership (round 5)
 

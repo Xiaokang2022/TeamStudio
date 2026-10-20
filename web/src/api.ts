@@ -1,4 +1,5 @@
 import type {
+  ActivationLink,
   Announcement,
   AnnouncementsData,
   AppSettings,
@@ -141,6 +142,10 @@ export const api = {
     request<{ loggedOut: boolean; endSessionUrl?: string }>("/api/auth/logout", {
       method: "POST",
     }),
+  deviceLogin: () =>
+    request<{ deviceAdmin: boolean; authenticated: boolean }>("/api/auth/device/login", {
+      method: "POST",
+    }),
   ssoLoginHref: (next = "/") => `/api/auth/login?next=${encodeURIComponent(next)}`,
 
   /* ---------------------------------------------------------------- */
@@ -153,7 +158,16 @@ export const api = {
     role?: string;
     teamIds?: string[];
     groupIds?: string[];
-  }) => request<{ user: UserAccount }>("/api/users", { method: "POST", body }),
+  }) =>
+    request<{ user: UserAccount; activation: ActivationLink | null }>("/api/users", {
+      method: "POST",
+      body,
+    }),
+  createActivationLink: (userId: string) =>
+    request<{ activation: ActivationLink }>(
+      `/api/users/${encodeURIComponent(userId)}/activation-link`,
+      { method: "POST" },
+    ),
   updateUser: (
     userId: string,
     body: { name?: string; role?: string; teamIds?: string[]; groupIds?: string[] },

@@ -296,7 +296,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     <span className="group-option-dot" style={{ background: group.color }} />
                     <span className="group-option-copy">
                       <strong>{group.name}</strong>
-                      <small>{group.description || `${group.memberCount} 位成员`}</small>
+                      <small>{group.description || "暂无简介"}</small>
                     </span>
                     <span className="group-option-count">{group.memberCount}</span>
                     {active ? <span className="group-option-current">当前</span> : null}
@@ -468,10 +468,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <Menu size={20} />
             </button>
             <div className="breadcrumb">
-              <span>{currentTeam?.name}</span>
-              <i>/</i>
-              <strong>{scope === "group" ? currentGroup?.name : scopeLabel}</strong>
-              {scope !== "group" ? <span className="scope-chip">{scope === "all" ? "全部团队" : "全团队视角"}</span> : null}
+              {scope === "group" ? (
+                <>
+                  <span>{currentTeam?.name}</span>
+                  <i>/</i>
+                  <strong>{currentGroup?.name}</strong>
+                </>
+              ) : scope === "all" ? (
+                <strong className="breadcrumb-scope">
+                  <Globe2 size={13} /> 所有团队
+                </strong>
+              ) : (
+                <strong className="breadcrumb-scope">
+                  <UsersRound size={13} /> {currentTeam?.name ?? "当前团队"}
+                </strong>
+              )}
               <i>/</i>
               <span className="breadcrumb-page">{PAGE_LABELS[route] ?? "团队工作室"}</span>
             </div>
@@ -595,7 +606,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     >
                       <Info size={16} /> 关于团队工作室
                     </button>
-                    {me.source === "email" || me.source === "sso" ? (
+                    {me.isDeviceAdmin || me.source === "email" || me.source === "sso" ? (
                       <button
                         className="menu-row danger"
                         onClick={() => void handleLogout()}
@@ -605,9 +616,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                       </button>
                     ) : me.source === "ip" ? (
                       <div className="menu-note">当前通过部署方 IP 白名单获得管理权限。</div>
-                    ) : (
-                      <div className="menu-note">本机请求自动获得 Admin 权限，无需登录。</div>
-                    )}
+                    ) : null}
                   </div>
                 ) : null}
               </div>

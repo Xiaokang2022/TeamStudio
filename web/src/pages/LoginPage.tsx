@@ -15,14 +15,16 @@ import { api, ApiError } from "../api";
 import { useApp } from "../store";
 import { useToast } from "../components/Toast";
 import { Avatar } from "../components/Avatar";
+import { hashRoute } from "../lib/utils";
 import type { EmailCodeRequestResponse } from "../types";
 import "./LoginPage.css";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function roleText(isDeviceAdmin: boolean, isSuperAdmin: boolean, userRole: string | null): string {
-  if (isDeviceAdmin) return "超级管理员（部署设备）";
-  if (isSuperAdmin) return "超级管理员";
+  // The device status is explained by a dedicated note/badge on this page, so the
+  // role itself stays the plain "超级管理员" to avoid repeating the same information.
+  if (isDeviceAdmin || isSuperAdmin) return "超级管理员";
   if (userRole === "team_admin") return "团队管理员";
   if (userRole === "group_admin") return "开发组管理员";
   return "成员";
@@ -43,6 +45,7 @@ export default function LoginPage() {
   const [sending, setSending] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [switching, setSwitching] = useState(false);
+  const [deviceLoggingIn, setDeviceLoggingIn] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [error, setError] = useState("");
 
@@ -57,6 +60,8 @@ export default function LoginPage() {
   const expiryMinutes = emailLogin?.codeExpiryMinutes ?? 10;
   const me = data?.me;
   const authenticated = Boolean(me?.authenticated);
+  const deployDevice = Boolean(me?.deployDevice);
+  const deviceAdminActive = Boolean(me?.isDeviceAdmin);
 
   const emailValid = useMemo(() => EMAIL_PATTERN.test(email.trim()), [email]);
 
@@ -65,6 +70,23 @@ export default function LoginPage() {
     const timer = window.setTimeout(() => setCountdown((value) => Math.max(0, value - 1)), 1000);
     return () => window.clearTimeout(timer);
   }, [countdown]);
+
+  useEffect(() => {
+    const status = hashRoute().params.get("activation");
+    if (!status) return;
+    const message =
+      status === "expired"
+        ? "激活链接已过期，请联系超级管理员重新生成激活链接。"
+        : status === "used"
+          ? "该激活链接已被使用；如账号已激活，请直接使用邮箱验证码登录。"
+          : "激活链接无效，请确认链接完整或联系超级管理员。";
+    setError(message);
+    window.history.replaceState(
+      {},
+      "",
+      `${window.location.pathname}${window.location.search}#/login`,
+    );
+  }, []);
 
   if (!config || !data || !me) return null;
 
@@ -152,6 +174,20 @@ export default function LoginPage() {
     }
   };
 
+  const handleDeviceAdminLogin = async () => {
+    setDeviceLoggingIn(true);
+    setError("");
+    try {
+      await api.deviceLogin();
+      window.location.hash = "/overview";
+      window.location.reload();
+    } catch (err) {
+      setError(asMessage(err));
+    } finally {
+      setDeviceLoggingIn(false);
+    }
+  };
+
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     if (stage === "email") void handleSend();
@@ -171,6 +207,24 @@ export default function LoginPage() {
   ) : (
     <p className="login-guest-disabled">访客模式已关闭，登录后即可浏览团队内容。</p>
   );
+
+  const deviceAdminAction =
+    deployDevice && !deviceAdminActive ? (
+      <div className="login-device-entry">
+        <button
+          className="btn btn-secondary btn-lg"
+          type="button"
+          onClick={() => void handleDeviceAdminLogin()}
+          disabled={deviceLoggingIn}
+        >
+          <ShieldCheck size={17} />
+          {deviceLoggingIn ? "正在切换…" : "以设备管理员身份登录"}
+        </button>
+        <span className="login-device-hint">
+          已检测到部署设备：本机可直接使用设备管理员身份，无需邮箱。退出后可使用其他账号登录，其他账号不会获得设备管理权限。
+        </span>
+      </div>
+    ) : null;
 
   return (
     <div className="login-page">
@@ -250,7 +304,7 @@ export default function LoginPage() {
                 <div>
                   <strong>{me.name}</strong>
                   <span>
-                    {me.email || (me.isDeviceAdmin ? "部署设备内置管理员" : "已通过身份验证")} ·{" "}
+                    {me.email || "已通过身份验证"} ·{" "}
                     {roleText(me.isDeviceAdmin, me.isSuperAdmin, me.userRole)}
                   </span>
                 </div>
@@ -258,21 +312,21 @@ export default function LoginPage() {
               <button className="btn btn-primary btn-lg" onClick={() => navigate("overview")}>
                 进入工作室
               </button>
+              <button
+                className="btn btn-ghost btn-lg login-switch"
+                onClick={() => void handleSwitchAccount()}
+                disabled={switching}
+              >
+                {switching ? <Loader2 size={16} className="spin" /> : null}
+                {switching ? "正在退出…" : "退出登录 / 切换账号"}
+              </button>
               {me.isDeviceAdmin ? (
                 <div className="login-device-note">
                   <ShieldCheck size={15} />
-                  当前请求来自部署设备，已自动获得超级管理员权限；该身份由本机固定提供，无需切换账号。
+                  当前使用部署设备管理员身份；退出后可使用其他账号登录，其他账号不会获得设备管理权限。
                 </div>
-              ) : (
-                <button
-                  className="btn btn-ghost btn-lg login-switch"
-                  onClick={() => void handleSwitchAccount()}
-                  disabled={switching}
-                >
-                  {switching ? <Loader2 size={16} className="spin" /> : null}
-                  {switching ? "正在退出…" : "切换账号"}
-                </button>
-              )}
+              ) : null}
+              {deviceAdminAction}
             </>
           ) : (
             <>
@@ -397,6 +451,7 @@ export default function LoginPage() {
                 </div>
               )}
 
+              {deviceAdminAction}
               {ssoConfigured ? ssoLink : null}
               {guestAction}
             </>
