@@ -55,7 +55,7 @@ await page.waitForFunction(
 await atTop();
 // Back to the primary team for screenshots.
 await page.locator(".sidebar-team-switcher .team-switcher-button").click();
-await page.locator(".team-popover .team-option").filter({ hasText: "星港产品团队" }).click();
+await page.locator(".team-popover .team-option").filter({ hasText: "极光产品团队" }).click();
 await page.waitForFunction(
   () => document.querySelector(".group-copy strong")?.textContent?.includes("前端体验组") ?? false,
 );

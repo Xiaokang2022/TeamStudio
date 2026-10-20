@@ -233,9 +233,9 @@ def test_email_status_is_smtp_only_and_safe(client):
 
 def test_verification_template_rendering():
     subject = render_template(
-        "[{{siteName}}] 验证码", {"siteName": "星港", "code": "123456"}
+        "[{{siteName}}] 验证码", {"siteName": "团队工作室", "code": "123456"}
     )
-    assert subject == "[星港] 验证码"
+    assert subject == "[团队工作室] 验证码"
     body = render_template("{{a}}/{{missing}}", {"a": "x"})
     assert body == "x/"
 

@@ -13,6 +13,10 @@ guaranteed recovery path afterwards (it can rebuild a team through
 :func:`backend.app.seed.seed_if_empty` from refilling demo data on the next restart, so a
 reset system stays intentionally empty until the operator creates new teams.
 
+The wipe runs with ``secure_delete`` enabled and the database file is compacted afterwards
+(a truncating WAL checkpoint followed by ``VACUUM``), so the erased demo rows are not
+recoverable by inspecting the SQLite file or its ``-wal`` sidecar.
+
 Response envelope is always ``{"ok": true, "data": ...}``.
 """
 
@@ -32,7 +36,7 @@ from ..auth import (
     rotate_session_secret,
 )
 from ..config import DEFAULT_SETTINGS, UPLOAD_DIR, settings_service
-from ..db import db, get_meta, log_audit, now_iso, scalar, set_meta
+from ..db import connect, db, get_meta, log_audit, now_iso, scalar, set_meta
 from ..http import fail, ok
 
 router = APIRouter(prefix="/api/system", tags=["system"])
@@ -98,6 +102,27 @@ def _stat_counts(conn: sqlite3.Connection) -> dict[str, int]:
         key: int(scalar(conn, f"SELECT COUNT(*) FROM {table}", default=0) or 0)
         for key, table in _STAT_TABLES
     }
+
+
+def _scrub_database_file() -> None:
+    """Best-effort on-disk scrub so wiped rows are unrecoverable from the database file.
+
+    The wipe itself runs with ``secure_delete=ON`` so deleted cell content is zeroed; a
+    truncating WAL checkpoint then folds the WAL into the main file and ``VACUUM``
+    rewrites it without the freed pages, which keeps the erased demo data out of both
+    ``teamstudio.db`` and its ``-wal`` sidecar. Compaction is deliberately best effort: a
+    busy or read-only database must never turn an already committed reset into an error.
+    """
+    try:
+        conn = connect()
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.execute("VACUUM")
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        finally:
+            conn.close()
+    except sqlite3.Error:  # pragma: no cover - busy/read-only database stays wiped
+        pass
 
 
 def _upload_files() -> list[Path]:
@@ -204,6 +229,7 @@ def reset_system(
 
     with db() as conn:
         cleared = _stat_counts(conn)
+        conn.execute("PRAGMA secure_delete=ON")
         for table in _WIPE_TABLES:
             conn.execute(f"DELETE FROM {table}")
         conn.execute("DELETE FROM app_meta")
@@ -222,6 +248,7 @@ def reset_system(
             },
         )
 
+    _scrub_database_file()
     settings_service.save(DEFAULT_SETTINGS.model_dump(mode="json"))
     removed_files = _clear_upload_dir()
     rotated = rotate_session_secret()

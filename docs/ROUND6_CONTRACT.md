@@ -98,10 +98,10 @@
   "adminScope": {
     "role": "super | team_admin | group_admin | member",
     "roleLabel": "超级管理员 | 团队管理员 | 开发组管理员 | 成员",
-    "summary": "超级管理员 | 星港产品团队 团队管理员 | 前端体验组 开发组管理员 | （成员为空串）",
-    "teams": [{ "id": "team-aurora", "name": "星港产品团队" }],
+    "summary": "超级管理员 | 极光产品团队 团队管理员 | 前端体验组 开发组管理员 | （成员为空串）",
+    "teams": [{ "id": "team-aurora", "name": "极光产品团队" }],
     "groups": [{ "id": "grp-frontend", "name": "前端体验组",
-                 "teamId": "team-aurora", "teamName": "星港产品团队" }],
+                 "teamId": "team-aurora", "teamName": "极光产品团队" }],
     "isDeviceAdmin": false
   }
 }
@@ -127,7 +127,7 @@
 
 - `ProfilePage.tsx` 头部展示：
   - 超级管理员（含系统内置管理员）：仅角色徽章「超级管理员」，系统内置管理员另显示「系统内置」徽章；
-  - 团队管理员：展示管理团队 chip（如「星港产品团队 · 团队管理员」）；
+  - 团队管理员：展示管理团队 chip（如「极光产品团队 · 团队管理员」）；
   - 开发组管理员：展示管理开发组 chip（如「前端体验组 · 开发组管理员」，并注明所属团队）；
   - 普通成员：不额外展示。
 - 样式加入 `ProfilePage.css`，明暗主题均需可读。

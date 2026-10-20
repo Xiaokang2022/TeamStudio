@@ -32,7 +32,7 @@ const BASE = process.env.QA_URL || "http://127.0.0.1:8011";
 const SHOT_PATH = process.env.SHOT_PATH || "docs/screenshots/system-reset.png";
 const SHOT_CONFIRM_PATH =
   process.env.SHOT_CONFIRM_PATH || SHOT_PATH.replace(/\.png$/i, "-confirm.png");
-const CUSTOM_SITE_NAME = "星港重置验收站";
+const CUSTOM_SITE_NAME = "团队工作室验收站";
 const EXTRA_TEAM_NAME = "待清除验收团队";
 const SUPER_EMAIL = "stored.super.reset@corp.example";
 

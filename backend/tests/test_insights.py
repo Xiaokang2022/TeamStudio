@@ -152,7 +152,7 @@ def test_insights_structure_matches_frontend_contract(client):
     assert set(data["teams"][0]) == TEAM_ROW_KEYS
 
     assert data["groups"][0]["groupId"] == GROUP_ID
-    assert data["groups"][0]["teamName"] == "星港产品团队"
+    assert data["groups"][0]["teamName"] == "极光产品团队"
     assert data["teams"][0]["teamId"] == TEAM_ID
     assert data["trend"]["granularity"] == "week"
     point = data["trend"]["buckets"][0]

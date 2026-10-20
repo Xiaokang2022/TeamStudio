@@ -381,7 +381,7 @@ try {
     record(
       "R1 deleted team removed from sidebar team list",
       !sidebarAfterDelete.includes(teamName) &&
-        sidebarAfterDelete.includes("星港产品团队") &&
+        sidebarAfterDelete.includes("极光产品团队") &&
         sidebarAfterDelete.includes("远航数据团队"),
       sidebarAfterDelete,
     );

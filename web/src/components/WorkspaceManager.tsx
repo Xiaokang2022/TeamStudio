@@ -175,7 +175,7 @@ function CreateTeamForm({
             className="input"
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder="例如：星港产品团队"
+            placeholder="例如：产品团队"
             maxLength={40}
             required
             autoFocus

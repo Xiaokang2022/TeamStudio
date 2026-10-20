@@ -688,7 +688,7 @@ function AppearanceSection({
         icon={<Sparkles size={18} />}
       >
         <div className="form-grid">
-          <Field label="站点名称" error={errorText(errorsFor("site.name"))} hint="例如：星港团队工作室">
+          <Field label="站点名称" error={errorText(errorsFor("site.name"))} hint="例如：团队工作室">
             <input
               className="input"
               value={site.name}
@@ -3013,7 +3013,7 @@ function EmailSection({
               }
             />
           </Field>
-          <Field label="发件人名称" error={errorText(errorsFor("email.smtp.fromName"))} hint="例如：星港团队工作室">
+          <Field label="发件人名称" error={errorText(errorsFor("email.smtp.fromName"))} hint="例如：团队工作室">
             <input
               className="input"
               value={smtp.fromName}

@@ -70,12 +70,12 @@ def test_domain_settings_follow_admin_scope(client):
 
         renamed = remote.patch(
             "/api/settings/teams/team-aurora",
-            json={"name": "星港产品团队 (改)", "description": "团队级设置"},
+            json={"name": "极光产品团队 (改)", "description": "团队级设置"},
         )
         assert renamed.status_code == 200
-        assert renamed.json()["data"]["team"]["name"] == "星港产品团队 (改)"
+        assert renamed.json()["data"]["team"]["name"] == "极光产品团队 (改)"
         boot = remote.get("/api/bootstrap").json()["data"]
-        assert any(team["name"] == "星港产品团队 (改)" for team in boot["teams"])
+        assert any(team["name"] == "极光产品团队 (改)" for team in boot["teams"])
 
         group_renamed = remote.patch(
             "/api/settings/teams/team-aurora/groups/grp-frontend",

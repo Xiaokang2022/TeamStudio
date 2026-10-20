@@ -217,7 +217,7 @@ def test_team_scope_merges_new_account_into_one_person(guest_client):
     assert card["groupIds"] == [GROUP_ID, PLATFORM_GROUP_ID]
     assert card["groupNames"] == ["前端体验组", "服务端平台组"]
     assert card["teamIds"] == [TEAM_ID]
-    assert card["teamNames"] == ["星港产品团队"]
+    assert card["teamNames"] == ["极光产品团队"]
     assert len(card["memberships"]) == 2
     for membership in card["memberships"]:
         assert set(membership) == MEMBERSHIP_KEYS
@@ -298,7 +298,7 @@ def test_all_scope_merges_same_account_across_teams(guest_client):
     assert card["groupIds"] == [GROUP_ID, DATA_GROUP_ID, PLATFORM_GROUP_ID]
     assert card["groupNames"] == ["前端体验组", "数据智能组", "服务端平台组"]
     assert card["teamIds"] == [TEAM_ID, OTHER_TEAM_ID]
-    assert card["teamNames"] == ["星港产品团队", "远航数据团队"]
+    assert card["teamNames"] == ["极光产品团队", "远航数据团队"]
     assert len(card["memberships"]) == 3
     assert card["stats"]["current"] == 3
     assert len(card["currentWorks"]) == 3

@@ -431,7 +431,7 @@ try {
   const teamCrumb = (await page.locator(".breadcrumb").innerText()).replace(/\s+/g, " ");
   record(
     "团队视角面包屑使用团队名称且不重复",
-    (teamCrumb.match(/星港产品团队/g) || []).length === 1 &&
+    (teamCrumb.match(/极光产品团队/g) || []).length === 1 &&
       !teamCrumb.includes("全团队"),
     teamCrumb,
   );

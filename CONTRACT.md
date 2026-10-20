@@ -229,10 +229,10 @@ Profile / personal home page:
             "isDeviceAdmin" },
   "adminScope": { "role": "super | team_admin | group_admin | member",
                   "roleLabel": "超级管理员 | 团队管理员 | 开发组管理员 | 成员",
-                  "summary": "超级管理员 | 星港产品团队 团队管理员 | 前端体验组 开发组管理员 | \"\"",
-                  "teams": [{ "id": "team-aurora", "name": "星港产品团队" }],
+                  "summary": "超级管理员 | 极光产品团队 团队管理员 | 前端体验组 开发组管理员 | \"\"",
+                  "teams": [{ "id": "team-aurora", "name": "极光产品团队" }],
                   "groups": [{ "id": "grp-frontend", "name": "前端体验组",
-                               "teamId": "team-aurora", "teamName": "星港产品团队" }],
+                               "teamId": "team-aurora", "teamName": "极光产品团队" }],
                   "isDeviceAdmin": false },
   "members": [{ "id","name","email","title","role","avatarColor","avatar","bio","tags",
                 "skills","status","groupId","groupName","teamId","teamName" }],
@@ -316,12 +316,12 @@ metadata:
 {
   "scope": {
     "kind": "group | team | all",
-    "label": "前端体验组 | 星港产品团队 | 所有团队",
+    "label": "前端体验组 | 极光产品团队 | 所有团队",
     "teamIds": ["team-aurora"],
     "groupIds": ["grp-frontend"],
-    "groups": [{ "id": "grp-frontend", "teamId": "team-aurora", "teamName": "星港产品团队",
-                 "teamShortName": "星港", "name": "前端体验组", "color": "#7c3aed", "icon": "layers" }],
-    "team": { "id": "team-aurora", "name": "星港产品团队", "shortName": "星港", "color": "#5865f2" },
+    "groups": [{ "id": "grp-frontend", "teamId": "team-aurora", "teamName": "极光产品团队",
+                 "teamShortName": "极光", "name": "前端体验组", "color": "#7c3aed", "icon": "layers" }],
+    "team": { "id": "team-aurora", "name": "极光产品团队", "shortName": "极光", "color": "#5865f2" },
     "group": { "id": "grp-frontend", "teamId": "team-aurora", "name": "前端体验组", "color": "#7c3aed" }
   }
 }
@@ -413,7 +413,7 @@ Full task/workload payloads and the load-point model live in `TASKS_CONTRACT.md`
   "scope": { "kind": "group", "label": "前端体验组", "teamIds": [], "groupIds": [],
              "groups": [], "team": null, "group": null },
   "board": { "id": "board-…", "groupId": "grp-frontend", "groupName": "前端体验组",
-             "teamId": "team-aurora", "teamName": "星港产品团队", "month": "2026-10",
+             "teamId": "team-aurora", "teamName": "极光产品团队", "month": "2026-10",
              "theme": "", "updatedAt": "ISO", "red": [Entry], "black": [Entry],
              "exists": true },
   "boards": [ { "id", "groupId", "groupName", "teamId", "teamName", "month", "theme",
@@ -524,10 +524,10 @@ and the settings page only renders the tab for `isDeviceAdmin` identities.
 {
   "deviceAdmin": true,
   "canReset": true,
-  "siteName": "星港团队工作室",
-  "siteShortName": "星港",
-  "defaultSiteName": "星港团队工作室",
-  "defaultSiteShortName": "星港",
+  "siteName": "团队工作室",
+  "siteShortName": "TeamStudio",
+  "defaultSiteName": "团队工作室",
+  "defaultSiteShortName": "TeamStudio",
   "stats": { "teams": 1, "groups": 4, "members": 12, "works": 30, "todos": 20, "tasks": 40,
              "boards": 4, "entries": 12, "links": 12, "matrix": 12, "announcements": 8,
              "tags": 10, "accounts": 12, "emailCodes": 0, "activationTokens": 0,
@@ -548,6 +548,10 @@ and the settings page only renders the tab for `isDeviceAdmin` identities.
     rotates the session signing key (all issued account sessions become invalid), and writes one
     audit row (`system.factory_reset`) plus the `app_meta` markers
     `factoryResetAt` / `factoryResetBy`.
+  - The database file is also scrubbed on disk: the wiping connection enables
+    `PRAGMA secure_delete=ON`, and after the commit the file is compacted (truncating WAL
+    checkpoint + `VACUUM`), so the deleted demo rows cannot be recovered from
+    `teamstudio.db` or its `-wal` sidecar.
   - A factory-reset database stays empty across restarts: `seed_if_empty()` skips the demo seed
     whenever `app_meta.factoryResetAt` exists, so the restored system is truly clean. The
     built-in device Admin identity is not stored, so it survives the reset and can rebuild teams

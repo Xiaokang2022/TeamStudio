@@ -257,11 +257,11 @@ def test_profile_admin_scope_team_admin_resolves_team_names(guest_client):
     assert scope["role"] == "team_admin"
     assert scope["roleLabel"] == "团队管理员"
     assert scope["teams"] == [
-        {"id": "team-aurora", "name": "星港产品团队"},
+        {"id": "team-aurora", "name": "极光产品团队"},
         {"id": "team-voyage", "name": "远航数据团队"},
     ]
     assert scope["groups"] == []
-    assert scope["summary"] == "星港产品团队 团队管理员、远航数据团队 团队管理员"
+    assert scope["summary"] == "极光产品团队 团队管理员、远航数据团队 团队管理员"
     assert scope["isDeviceAdmin"] is False
 
 
@@ -289,7 +289,7 @@ def test_profile_admin_scope_group_admin_resolves_group_and_team(guest_client):
             "id": "grp-frontend",
             "name": "前端体验组",
             "teamId": "team-aurora",
-            "teamName": "星港产品团队",
+            "teamName": "极光产品团队",
         },
     ]
     assert scope["teams"] == []
@@ -358,7 +358,7 @@ def test_profile_admin_scope_is_public(guest_client):
     guest_client.cookies.clear()
     response = guest_client.get("/api/users/public.team.admin/profile")
     assert response.status_code == 200
-    assert response.json()["data"]["adminScope"]["summary"] == "星港产品团队 团队管理员"
+    assert response.json()["data"]["adminScope"]["summary"] == "极光产品团队 团队管理员"
 
 
 def test_profile_admin_scope_for_ip_whitelist_identity(client):
@@ -382,8 +382,8 @@ def test_profile_admin_scope_for_ip_whitelist_identity(client):
         scope = response.json()["data"]["adminScope"]
         assert scope["role"] == "team_admin"
         assert scope["roleLabel"] == "团队管理员"
-        assert scope["teams"] == [{"id": "team-aurora", "name": "星港产品团队"}]
-        assert scope["summary"] == "星港产品团队 团队管理员"
+        assert scope["teams"] == [{"id": "team-aurora", "name": "极光产品团队"}]
+        assert scope["summary"] == "极光产品团队 团队管理员"
         assert scope["isDeviceAdmin"] is False
 
 

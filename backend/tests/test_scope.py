@@ -40,7 +40,7 @@ def test_default_scope_keeps_legacy_group_payload(client):
     assert scope["teamIds"] == [TEAM_ID]
     assert scope["groups"][0]["id"] == GROUP_ID
     assert scope["groups"][0]["teamId"] == TEAM_ID
-    assert scope["groups"][0]["teamName"] == "星港产品团队"
+    assert scope["groups"][0]["teamName"] == "极光产品团队"
     assert scope["team"]["id"] == TEAM_ID
     assert scope["group"]["id"] == GROUP_ID
 
@@ -48,7 +48,7 @@ def test_default_scope_keeps_legacy_group_payload(client):
     assert member["groupId"] == GROUP_ID
     assert member["groupName"] == "前端体验组"
     assert member["teamId"] == TEAM_ID
-    assert member["teamName"] == "星港产品团队"
+    assert member["teamName"] == "极光产品团队"
 
     # Overview workloads still cover every member of the group.
     assert [item["memberId"] for item in data["workloads"]] == [
@@ -64,7 +64,7 @@ def test_team_scope_aggregates_aurora_groups(client):
     data = _data(client.get(f"{BASE}/overview?scope=team"))
     scope = data["scope"]
     assert scope["kind"] == "team"
-    assert scope["label"] == "星港产品团队"
+    assert scope["label"] == "极光产品团队"
     assert set(scope["groupIds"]) == TEAM_GROUPS
     assert scope["teamIds"] == [TEAM_ID]
     assert {group["id"] for group in scope["groups"]} == TEAM_GROUPS
@@ -76,7 +76,7 @@ def test_team_scope_aggregates_aurora_groups(client):
     assert len(data["workloads"]) == 12
     for member in data["members"]:
         assert member["groupName"]
-        assert member["teamName"] == "星港产品团队"
+        assert member["teamName"] == "极光产品团队"
     for work in data["works"]:
         assert work["groupId"] in TEAM_GROUPS
         assert work["groupName"]
@@ -148,7 +148,7 @@ def test_tasks_scope_returns_group_annotated_tasks(client):
     for task in team_data["tasks"]:
         assert task["groupName"]
         assert task["teamId"] == TEAM_ID
-        assert task["teamName"] == "星港产品团队"
+        assert task["teamName"] == "极光产品团队"
 
     all_data = _data(client.get(f"{BASE}/tasks?scope=all"))
     assert len(all_data["tasks"]) == 49
@@ -167,7 +167,7 @@ def test_todos_scope_aggregates_month(client):
     assert {todo["groupId"] for todo in team_data["todos"]} == TEAM_GROUPS
     for todo in team_data["todos"]:
         assert todo["groupName"]
-        assert todo["teamName"] == "星港产品团队"
+        assert todo["teamName"] == "极光产品团队"
 
     all_data = _data(client.get(f"{BASE}/todos?month={month}&scope=all"))
     assert len(all_data["todos"]) >= len(team_data["todos"]) >= len(group_data["todos"])
@@ -223,7 +223,7 @@ def test_redblack_scope_follows_view(client):
         assert entry["groupId"] == GROUP_ID
         assert entry["groupName"] == "前端体验组"
         assert entry["teamId"] == TEAM_ID
-        assert entry["teamName"] == "星港产品团队"
+        assert entry["teamName"] == "极光产品团队"
 
     team_data = _data(client.get(f"{BASE}/redblack?month={month}&scope=team"))
     assert team_data["scope"]["kind"] == "team"

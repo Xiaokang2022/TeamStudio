@@ -74,7 +74,7 @@ try {
   await page.locator(".team-option").filter({ hasText: "远航数据团队" }).click();
   await waitForFunctionText(".group-copy strong", "数据智能组");
   await page.locator(".sidebar-team-switcher .team-switcher-button").click();
-  await page.locator(".team-option").filter({ hasText: "星港产品团队" }).click();
+  await page.locator(".team-option").filter({ hasText: "极光产品团队" }).click();
   await waitForFunctionText(".group-copy strong", "前端体验组");
   await page.locator(".group-switcher-button").click();
   await page.locator(".group-popover .group-option").filter({ hasText: "服务端平台组" }).click();

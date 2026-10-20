@@ -57,8 +57,8 @@ class ThemeSettings(StrictModel):
 
 
 class SiteSettings(StrictModel):
-    name: str = Field(default="星港团队工作室", min_length=1, max_length=40)
-    shortName: str = Field(default="星港", min_length=1, max_length=12)
+    name: str = Field(default="团队工作室", min_length=1, max_length=40)
+    shortName: str = Field(default="TeamStudio", min_length=1, max_length=12)
     tagline: str = Field(default="把每一次协作，变成看得见的成长。", max_length=120)
     logoText: str = Field(default="TS", min_length=1, max_length=4)
     footerText: str = Field(default="TeamStudio · 让团队协作有温度", max_length=120)

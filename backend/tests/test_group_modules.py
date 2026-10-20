@@ -553,7 +553,7 @@ def test_redblack_scope_follows_view(api: TestApi) -> None:
     assert entry["groupId"] == GROUP_ID
     assert entry["groupName"] == "前端体验组"
     assert entry["teamId"] == TEAM_ID
-    assert entry["teamName"] == "星港产品团队"
+    assert entry["teamName"] == "极光产品团队"
 
     # Team scope merges every board of the team for read-only display.
     team_data = api.client.get(

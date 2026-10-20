@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 from backend.app.config import DEFAULT_SETTINGS, UPLOAD_DIR, settings_service
-from backend.app.db import db, get_meta, rows, scalar
+from backend.app.db import DB_PATH, db, get_meta, rows, scalar
 from backend.app.routers import auth as auth_router
 from backend.app.seed import (
     seed_if_empty,
@@ -127,6 +127,11 @@ def _assert_everything_empty() -> dict[str, int]:
 
 
 # --------------------------------------------------------------------------- device Admin only
+
+
+def test_default_site_settings_are_rebranded():
+    assert DEFAULT_SETTINGS.site.name == "团队工作室"
+    assert DEFAULT_SETTINGS.site.shortName == "TeamStudio"
 
 
 def test_reset_preview_and_device_admin_only(client, monkeypatch):
@@ -275,6 +280,18 @@ def test_factory_reset_wipes_data_and_stays_empty(client):
     assert data["cleared"] == pre_stats
     assert data["siteName"] == DEFAULT_SETTINGS.site.name
     assert data["siteShortName"] == DEFAULT_SETTINGS.site.shortName
+
+    # The reset is complete on disk, not just in SQLite's logical view: the compacted
+    # database (and its WAL sidecar) must not retain any recoverable demo content.
+    markers = ("极光产品团队", "林知夏", "corp.example")
+    db_bytes = DB_PATH.read_bytes()
+    for marker in markers:
+        assert marker.encode("utf-8") not in db_bytes
+    wal_path = Path(str(DB_PATH) + "-wal")
+    if wal_path.exists():
+        wal_bytes = wal_path.read_bytes()
+        for marker in markers:
+            assert marker.encode("utf-8") not in wal_bytes
 
     # Workspace and bootstrap are empty; the device Admin is the only account left.
     assert client.get("/api/teams").json()["data"]["teams"] == []

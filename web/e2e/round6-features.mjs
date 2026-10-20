@@ -117,7 +117,7 @@ const DATA_DIR = process.env.TEAMSTUDIO_DATA_DIR || path.join(REPO_ROOT, "artifa
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const SERVER_LOG = path.join(ARTIFACTS, `server-${stamp}.log`);
 
-const GROUP = { teamId: "team-aurora", groupId: "grp-frontend", teamName: "星港产品团队", groupName: "前端体验组" };
+const GROUP = { teamId: "team-aurora", groupId: "grp-frontend", teamName: "极光产品团队", groupName: "前端体验组" };
 const CANDIDATES_PATH = `/api/teams/${GROUP.teamId}/groups/${GROUP.groupId}/member-candidates`;
 
 const ACCOUNTS = {

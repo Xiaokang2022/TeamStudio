@@ -90,7 +90,7 @@ const SEL = {
   profileMemberRow: ".profile-member-row",
 };
 
-const TEAM_AURORA = { id: "team-aurora", name: "星港产品团队" };
+const TEAM_AURORA = { id: "team-aurora", name: "极光产品团队" };
 const TEAM_VOYAGE = { id: "team-voyage", name: "远航数据团队" };
 const GROUP_FRONTEND = { id: "grp-frontend", name: "前端体验组" };
 const GROUP_PLATFORM = { id: "grp-platform", name: "服务端平台组" };
@@ -98,7 +98,7 @@ const GROUP_DATA = { id: "grp-data", name: "数据智能组" };
 
 const ACCOUNT_NAME = "多组测试成员";
 const ACCOUNT_EMAIL = `round7.member.${stamp}@corp.example`;
-/** 测试账号在星港产品团队内的档案行数（前端体验组 + 服务端平台组）。 */
+/** 测试账号在极光产品团队内的档案行数（前端体验组 + 服务端平台组）。 */
 const NEW_PERSON_TEAM_ROWS = 2;
 /** 测试账号全部档案行数（再加数据智能组）。 */
 const NEW_PERSON_ALL_ROWS = 3;
@@ -960,7 +960,7 @@ try {
     }),
   );
   record(
-    "C. 合并卡 groupIds / groupNames / teamNames 去重后覆盖两个组与星港产品团队",
+    "C. 合并卡 groupIds / groupNames / teamNames 去重后覆盖两个组与极光产品团队",
     sameSet(mergedC?.groupIds, [GROUP_FRONTEND.id, GROUP_PLATFORM.id]) &&
       sameSet(mergedC?.groupNames, [GROUP_FRONTEND.name, GROUP_PLATFORM.name]) &&
       sameSet(mergedC?.teamNames, [TEAM_AURORA.name]),
@@ -1150,7 +1150,7 @@ try {
 
   const profileText = await page.locator(SEL.profilePage).innerText();
   record(
-    "E. 个人主页文本包含「前端体验组」「服务端平台组」「星港产品团队」",
+    "E. 个人主页文本包含「前端体验组」「服务端平台组」「极光产品团队」",
     profileText.includes(GROUP_FRONTEND.name) &&
       profileText.includes(GROUP_PLATFORM.name) &&
       profileText.includes(TEAM_AURORA.name),

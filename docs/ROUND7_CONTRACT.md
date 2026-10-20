@@ -39,7 +39,7 @@ personKey = lower(external_id)            # 优先：账号 ID
       "groupId": "grp-frontend",
       "groupName": "前端体验组",
       "teamId": "team-aurora",
-      "teamName": "星港产品团队",
+      "teamName": "极光产品团队",
       "title": "前端负责人",
       "role": "负责人",
       "status": "available",
@@ -50,7 +50,7 @@ personKey = lower(external_id)            # 优先：账号 ID
   "groupIds": ["grp-frontend", "grp-platform"],
   "groupNames": ["前端体验组", "服务端平台组"],
   "teamIds": ["team-aurora"],
-  "teamNames": ["星港产品团队"]
+  "teamNames": ["极光产品团队"]
 }
 ```
 
@@ -69,11 +69,11 @@ personKey = lower(external_id)            # 优先：账号 ID
 {
   "memberId": "m-front",
   "memberIds": ["m-front", "m-platform"],
-  "memberships": [{ "memberId": "m-front", "groupId": "grp-frontend", "groupName": "前端体验组", "teamId": "team-aurora", "teamName": "星港产品团队" }],
+  "memberships": [{ "memberId": "m-front", "groupId": "grp-frontend", "groupName": "前端体验组", "teamId": "team-aurora", "teamName": "极光产品团队" }],
   "groupIds": ["grp-frontend", "grp-platform"],
   "groupNames": ["前端体验组", "服务端平台组"],
   "teamIds": ["team-aurora"],
-  "teamNames": ["星港产品团队"]
+  "teamNames": ["极光产品团队"]
 }
 ```
 

@@ -204,8 +204,8 @@ def test_manage_payload_for_device_admin(client) -> None:
         "canCreateGroup",
         "groups",
     }
-    assert aurora["name"] == "星港产品团队"
-    assert aurora["shortName"] == "星港"
+    assert aurora["name"] == "极光产品团队"
+    assert aurora["shortName"] == "极光"
     assert aurora["color"] == "#5865f2"
     assert aurora["groupCount"] == 3
     assert aurora["memberCount"] == 12
@@ -308,10 +308,10 @@ def test_create_team_as_device_admin(client) -> None:
     assert _scalar("SELECT sort_order FROM teams WHERE id=?", (team["id"],)) == max_sort_before + 1
 
     # Omitted optional fields fall back to the documented defaults.
-    response = client.post("/api/workspace/teams", json={"name": "星港实验室"})
+    response = client.post("/api/workspace/teams", json={"name": "极光实验室"})
     assert response.status_code == 200
     defaulted = response.json()["data"]["team"]
-    assert defaulted["shortName"] == "星港实验"  # first 4 characters
+    assert defaulted["shortName"] == "极光实验"  # first 4 characters
     assert defaulted["description"] == ""
     assert defaulted["color"] == "#5865f2"
     assert defaulted["groups"] == []
@@ -506,7 +506,7 @@ def test_team_admin_cannot_manage_other_teams_or_teams(client, as_user) -> None:
 
     # Teams themselves.
     assert client.post("/api/workspace/teams", json={"name": "越权团队"}).status_code == 403
-    response = _delete(client, f"/api/workspace/teams/{TEAM_ID}", "星港产品团队")
+    response = _delete(client, f"/api/workspace/teams/{TEAM_ID}", "极光产品团队")
     assert response.status_code == 403
 
 
@@ -519,7 +519,7 @@ def test_group_admin_member_and_guest_cannot_restructure_workspace(client, as_us
         (
             "delete",
             f"/api/workspace/teams/{TEAM_ID}",
-            {"confirmName": "星港产品团队"},
+            {"confirmName": "极光产品团队"},
         ),
         (
             "post",
@@ -748,12 +748,12 @@ def test_workspace_writes_are_audited(client, as_user) -> None:
         assert ("Admin", action, entity, entity_id) in recorded, action
 
     # team_admin group writes are audited under the admin's display name.
-    as_user(team_admin(TEAM_ID, "星港管理员"))
+    as_user(team_admin(TEAM_ID, "极光管理员"))
     group = client.post(
         f"/api/workspace/teams/{TEAM_ID}/groups", json={"name": "审计组管理员创建"}
     ).json()["data"]["group"]
     audit_rows = _audit_rows("group.create")
     assert any(
-        actor == "星港管理员" and entity == "group" and entity_id == group["id"]
+        actor == "极光管理员" and entity == "group" and entity_id == group["id"]
         for actor, _action, entity, entity_id, _detail in audit_rows
     )

@@ -190,23 +190,8 @@ await patchDemoBackups();
   await page.waitForTimeout(900);
   await shot(page, "settings-json");
 
-  // Bundled mail centre (mailbox list + one message detail).
-  await openRoute(page, "settings?tab=email", ".email-panel");
-  const mailbox = page.locator(".email-mailbox-table");
-  if (await mailbox.count()) {
-    await mailbox.scrollIntoViewIfNeeded();
-    await page.waitForTimeout(800);
-    await shot(page, "mail");
-    const mailRow = page.locator(".email-mailbox-row").first();
-    if (await mailRow.count()) {
-      await mailRow.click();
-      await page.locator(".modal-panel").waitFor();
-      await page.waitForTimeout(500);
-      await shot(page, "mail-detail");
-      await page.locator(".modal-panel .modal-close").click();
-      await page.locator(".modal-panel").waitFor({ state: "detached" });
-    }
-  }
+  // The bundled mail centre was removed in round 5 (e-mail is now only an external
+  // SMTP relay for verification codes), so there is no mailbox UI left to capture.
 
   await context.close();
 }
