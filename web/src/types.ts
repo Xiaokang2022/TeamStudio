@@ -638,6 +638,22 @@ export interface UsersData {
   permissions: { canManageUsers: boolean };
 }
 
+/**
+ * A registered account (including pre-created, not-yet-activated accounts)
+ * that can still be added to a development group's member roster.
+ */
+export interface MemberCandidate {
+  id: string;
+  name: string;
+  email: string;
+  avatar: string;
+  avatarColor: string;
+  role: UserRole;
+  roleLabel: string;
+  emailVerified: boolean;
+  skills: string[];
+}
+
 export interface ActivationLink {
   url: string;
   expiresAt: string;
@@ -697,8 +713,35 @@ export interface ProfileRedBlackEntry extends RedBlackEntry {
   teamName: string;
 }
 
+export interface ProfileAdminScopeTeam {
+  id: string;
+  name: string;
+}
+
+export interface ProfileAdminScopeGroup {
+  id: string;
+  name: string;
+  teamId: string;
+  teamName: string;
+}
+
+/**
+ * Public administrator scope shown on the personal home page: which teams /
+ * development groups this account administers. `super` intentionally keeps
+ * empty arrays ("超级管理员" says it all).
+ */
+export interface ProfileAdminScope {
+  role: "super" | "team_admin" | "group_admin" | "member";
+  roleLabel: string;
+  summary: string;
+  teams: ProfileAdminScopeTeam[];
+  groups: ProfileAdminScopeGroup[];
+  isDeviceAdmin: boolean;
+}
+
 export interface ProfileData {
   user: UserAccount & { isDeviceAdmin: boolean };
+  adminScope: ProfileAdminScope;
   members: ProfileMember[];
   duties: ProfileDuty[];
   currentTasks: MemberTask[];

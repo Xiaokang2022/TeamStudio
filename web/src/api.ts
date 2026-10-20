@@ -19,6 +19,7 @@ import type {
   ManagedTeam,
   MatrixArea,
   Member,
+  MemberCandidate,
   MemberTask,
   OverviewData,
   ProfileData,
@@ -259,7 +260,16 @@ export const api = {
       method: "PATCH",
       body,
     }),
-  createMember: (teamId: string, groupId: string, body: Partial<Member>) =>
+  /** Registered accounts that are not yet on this group's member roster. */
+  memberCandidates: (teamId: string, groupId: string, search?: string) =>
+    request<{ candidates: MemberCandidate[]; total: number }>(
+      `${groupBase(teamId, groupId)}/member-candidates${q({ search })}`,
+    ),
+  createMember: (
+    teamId: string,
+    groupId: string,
+    body: { userId: string; title?: string; role?: string; status?: string },
+  ) =>
     request<{ member: Member }>(`${groupBase(teamId, groupId)}/members`, {
       method: "POST",
       body,

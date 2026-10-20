@@ -33,7 +33,14 @@ import {
   PRIORITY_META as TODO_PRIORITY_META,
 } from "../lib/utils";
 import { PRIORITY_META as TASK_PRIORITY_META, TASK_PROGRESS_META } from "../lib/taskMeta";
-import type { ProfileData, ProfileDuty, ProfileMember, ProfileTodo, TodoPriority } from "../types";
+import type {
+  ProfileAdminScope,
+  ProfileData,
+  ProfileDuty,
+  ProfileMember,
+  ProfileTodo,
+  TodoPriority,
+} from "../types";
 import "./ProfilePage.css";
 
 const AVATAR_COLORS = ["#7c3aed", "#2563eb", "#0ea5e9", "#16a34a", "#ea8a14", "#dc2626", "#db2777", "#4f6f8f"];
@@ -82,6 +89,61 @@ function GroupBadges({ teamName, groupName }: { teamName?: string | null; groupN
       ) : null}
     </span>
   );
+}
+
+/**
+ * Public administrator scope: which teams / development groups this account
+ * administers. Super administrators intentionally get no extra chips (their
+ * role badge already says everything); regular members get nothing either.
+ * The data is public, so it renders on other people's profile pages too.
+ */
+function AdminScopeChips({ scope }: { scope: ProfileAdminScope }) {
+  if (scope.role === "team_admin") {
+    if (!scope.teams.length) return null;
+    return (
+      <div className="profile-admin-scope" role="group" aria-label="管理员管理范围">
+        <span className="profile-admin-scope-label">
+          <ShieldCheck size={12} /> 管理范围
+        </span>
+        {scope.teams.map((team) => (
+          <span className="chip profile-admin-scope-chip" key={team.id} title={`管理团队：${team.name}`}>
+            <Building2 size={11} />
+            <span>{team.name}</span>
+            <span className="profile-admin-scope-role">· 团队管理员</span>
+          </span>
+        ))}
+      </div>
+    );
+  }
+  if (scope.role === "group_admin") {
+    if (!scope.groups.length) return null;
+    return (
+      <div className="profile-admin-scope" role="group" aria-label="管理员管理范围">
+        <span className="profile-admin-scope-label">
+          <ShieldCheck size={12} /> 管理范围
+        </span>
+        {scope.groups.map((group) => (
+          <span
+            className="chip profile-admin-scope-chip"
+            key={group.id}
+            title={
+              group.teamName
+                ? `${group.name} · 开发组管理员（所属团队：${group.teamName}）`
+                : `${group.name} · 开发组管理员`
+            }
+          >
+            <Layers3 size={11} />
+            <span>{group.name}</span>
+            <span className="profile-admin-scope-role">· 开发组管理员</span>
+            {group.teamName ? (
+              <span className="profile-chip-muted">· 团队：{group.teamName}</span>
+            ) : null}
+          </span>
+        ))}
+      </div>
+    );
+  }
+  return null;
 }
 
 function SectionCard({
@@ -402,6 +464,7 @@ export default function ProfilePage() {
             <p className="profile-email">
               <Mail size={14} /> {user.email || "未绑定邮箱"}
             </p>
+            {profile.adminScope ? <AdminScopeChips scope={profile.adminScope} /> : null}
             <div className="profile-chip-row">
               {teamNames.map((name) => (
                 <span className="chip" key={`team-${name}`}>

@@ -17,6 +17,7 @@ import {
   Clock,
   Layers3,
   ListTodo,
+  Mail,
   Megaphone,
   Plus,
   RefreshCw,
@@ -34,6 +35,7 @@ import { useToast } from "../components/Toast";
 import { Avatar } from "../components/Avatar";
 import { EmptyState, LoadingBlock } from "../components/Feedback";
 import { Modal } from "../components/Modal";
+import { Select, type SelectOption } from "../components/Select";
 import { MemberDrawer } from "../components/MemberDrawer";
 import {
   cn,
@@ -43,10 +45,9 @@ import {
   todayISO,
 } from "../lib/utils";
 import { formatPercent, formatPoints, WORKLOAD_LEVEL_META, workloadLevel } from "../lib/taskMeta";
-import type { ActivityItem, Announcement, OverviewData } from "../types";
+import type { ActivityItem, Announcement, MemberCandidate, OverviewData } from "../types";
 import "./OverviewPage.css";
 
-const AVATAR_COLORS = ["#7c3aed", "#2563eb", "#0ea5e9", "#16a34a", "#ea8a14", "#dc2626", "#db2777"];
 const MAX_SEARCH_ACTIVITY = 9;
 
 const LEVEL_META: Record<string, { label: string; badge: string }> = {
@@ -63,39 +64,6 @@ const ACTIVITY_META: Record<string, { label: string; tone: string; icon: typeof 
 };
 
 type ActivityRow = ActivityItem & { actorName?: string };
-
-interface MemberFormState {
-  id: string;
-  name: string;
-  title: string;
-  role: string;
-  email: string;
-  avatarColor: string;
-  tags: string;
-  bio: string;
-}
-
-const EMPTY_MEMBER_FORM: MemberFormState = {
-  id: "",
-  name: "",
-  title: "",
-  role: "成员",
-  email: "",
-  avatarColor: "#7c3aed",
-  tags: "",
-  bio: "",
-};
-
-function splitList(value: string): string[] {
-  return Array.from(
-    new Set(
-      value
-        .split(/[,，、\n]+/)
-        .map((item) => item.trim())
-        .filter(Boolean),
-    ),
-  );
-}
 
 function messageOf(error: unknown, fallback: string): string {
   return error instanceof ApiError ? error.message : fallback;
@@ -847,52 +815,99 @@ interface AddMemberDialogProps {
   onSaved: () => Promise<void> | void;
 }
 
+const CREATE_MEMBER_ERROR_TEXT: Record<string, string> = {
+  member_exists: "该账号已在当前开发组的成员档案中，无需重复添加。",
+  user_not_found: "未找到该账号，可能已被删除，请重新加载候选列表。",
+};
+
 function AddMemberDialog({ open, teamId, groupId, onClose, onSaved }: AddMemberDialogProps) {
   const { toast } = useToast();
   const { scope, currentGroup } = useApp();
-  const [form, setForm] = useState<MemberFormState>(EMPTY_MEMBER_FORM);
+  const [candidates, setCandidates] = useState<MemberCandidate[]>([]);
+  const [loadingCandidates, setLoadingCandidates] = useState(false);
+  const [candidatesError, setCandidatesError] = useState("");
+  const [selectedUserId, setSelectedUserId] = useState("");
+  const [title, setTitle] = useState("");
+  const [role, setRole] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
+  const loadCandidates = useCallback(async () => {
+    setLoadingCandidates(true);
+    setCandidatesError("");
+    try {
+      const result = await api.memberCandidates(teamId, groupId);
+      setCandidates(result.candidates ?? []);
+    } catch (err) {
+      setCandidatesError(messageOf(err, "加载可添加账号失败，请稍后重试。"));
+    } finally {
+      setLoadingCandidates(false);
+    }
+  }, [teamId, groupId]);
+
   useEffect(() => {
     if (!open) return;
-    setForm(EMPTY_MEMBER_FORM);
-    setError("");
+    setCandidates([]);
+    setCandidatesError("");
+    setSelectedUserId("");
+    setTitle("");
+    setRole("");
     setSaving(false);
-  }, [open]);
+    setError("");
+    void loadCandidates();
+  }, [open, loadCandidates]);
 
-  const setField = <Key extends keyof MemberFormState>(key: Key, value: MemberFormState[Key]) => {
-    setForm((current) => ({ ...current, [key]: value }));
-  };
+  const options = useMemo<SelectOption[]>(
+    () =>
+      candidates.map((candidate) => ({
+        value: candidate.id,
+        label: candidate.name || candidate.email || candidate.id,
+        description: [
+          candidate.email || "未绑定邮箱",
+          candidate.roleLabel || "成员",
+          candidate.emailVerified ? "" : "待激活",
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        color: candidate.avatarColor || undefined,
+      })),
+    [candidates],
+  );
+
+  const selectedCandidate = useMemo(
+    () => candidates.find((candidate) => candidate.id === selectedUserId) ?? null,
+    [candidates, selectedUserId],
+  );
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!form.name.trim()) {
-      setError("请填写成员姓名。");
+    if (!selectedUserId) {
+      setError("请先从候选列表中选择一个已注册账号。");
       return;
     }
     setSaving(true);
     setError("");
     try {
       await api.createMember(teamId, groupId, {
-        id: form.id.trim() || undefined,
-        name: form.name.trim(),
-        title: form.title.trim(),
-        role: form.role.trim(),
-        email: form.email.trim(),
-        avatarColor: form.avatarColor,
-        bio: form.bio.trim(),
-        tags: splitList(form.tags),
+        userId: selectedUserId,
+        title: title.trim() || undefined,
+        role: role.trim() || undefined,
       });
-      toast(`已添加成员「${form.name.trim()}」`, "success");
+      toast(`已将「${selectedCandidate?.name || selectedUserId}」加入开发组`, "success");
       await onSaved();
       onClose();
     } catch (err) {
-      setError(messageOf(err, "添加成员失败，请稍后重试。"));
+      if (err instanceof ApiError && CREATE_MEMBER_ERROR_TEXT[err.code]) {
+        setError(CREATE_MEMBER_ERROR_TEXT[err.code]);
+      } else {
+        setError(messageOf(err, "添加成员失败，请稍后重试。"));
+      }
     } finally {
       setSaving(false);
     }
   };
+
+  const submitDisabled = saving || loadingCandidates || !selectedUserId;
 
   return (
     <Modal
@@ -901,8 +916,8 @@ function AddMemberDialog({ open, teamId, groupId, onClose, onSaved }: AddMemberD
       title="添加团队成员"
       description={
         scope === "group"
-          ? "补全基础信息即可创建档案，工作项与待办可在档案中继续维护。"
-          : `聚合视角下，新成员会创建到当前开发组「${currentGroup?.name ?? "当前开发组"}」，创建后可在成员档案中继续维护。`
+          ? "只能从已注册账号中选择成员：姓名、邮箱与头像会自动从账号同步，职位与团队角色可按需补充。"
+          : `只能从已注册账号中选择成员，新档案会创建到当前开发组「${currentGroup?.name ?? "当前开发组"}」。`
       }
       size="md"
       footer={
@@ -910,110 +925,134 @@ function AddMemberDialog({ open, teamId, groupId, onClose, onSaved }: AddMemberD
           <button className="btn btn-ghost" type="button" onClick={onClose} disabled={saving}>
             取消
           </button>
-          <button className="btn btn-primary" type="submit" form="ov-add-member-form" disabled={saving}>
+          <button
+            className="btn btn-primary"
+            type="submit"
+            form="ov-add-member-form"
+            disabled={submitDisabled}
+          >
             {saving ? "创建中…" : "创建成员"}
           </button>
         </>
       }
     >
       <form id="ov-add-member-form" className="form-grid" onSubmit={submit}>
-        <div className="field">
-          <label htmlFor="ov-add-name">姓名 *</label>
-          <input
-            id="ov-add-name"
-            className="input"
-            value={form.name}
-            onChange={(event) => setField("name", event.target.value)}
-            placeholder="例如：林知夏"
-            maxLength={60}
-            required
-            autoFocus
-          />
+        <div className="field span-2">
+          <label htmlFor="ov-add-account">选择账号 *</label>
+          {loadingCandidates ? (
+            <LoadingBlock label="正在加载可添加的账号…" rows={2} />
+          ) : candidatesError ? (
+            <div className="ov-candidate-notice" role="alert">
+              <span className="ov-candidate-notice-text">{candidatesError}</span>
+              <button
+                className="btn btn-secondary btn-sm"
+                type="button"
+                onClick={() => void loadCandidates()}
+              >
+                <RefreshCw size={12} /> 重新加载
+              </button>
+            </div>
+          ) : candidates.length ? (
+            <>
+              <Select
+                id="ov-add-account"
+                value={selectedUserId}
+                onChange={(value) => {
+                  setSelectedUserId(value);
+                  setError("");
+                }}
+                options={options}
+                placeholder="搜索姓名、邮箱或账号 ID"
+                ariaLabel="选择已注册账号"
+                searchable
+              />
+              <span className="field-hint">
+                只列出已注册且尚未加入当前开发组的账号；未激活账号会标注「待激活」。
+              </span>
+            </>
+          ) : (
+            <div className="ov-candidate-notice">
+              <span className="ov-candidate-notice-text">
+                没有可添加的账号：所有已注册账号都已在本开发组，或系统里还没有账号。
+              </span>
+              <span className="field-hint">
+                可前往「系统设置 → 账号与角色」创建 / 预创建账号后回来刷新。
+              </span>
+              <button
+                className="btn btn-secondary btn-sm"
+                type="button"
+                onClick={() => void loadCandidates()}
+              >
+                <RefreshCw size={12} /> 刷新候选
+              </button>
+            </div>
+          )}
         </div>
-        <div className="field">
-          <label htmlFor="ov-add-id">成员 ID</label>
-          <input
-            id="ov-add-id"
-            className="input"
-            value={form.id}
-            onChange={(event) => setField("id", event.target.value)}
-            placeholder="留空自动生成"
-            maxLength={80}
-          />
-          <span className="field-hint">仅支持字母、数字、下划线与连字符。</span>
-        </div>
+
+        {selectedCandidate ? (
+          <div className="ov-candidate-preview span-2">
+            <Avatar
+              name={selectedCandidate.name || selectedCandidate.id}
+              src={selectedCandidate.avatar}
+              color={selectedCandidate.avatarColor || "#7c3aed"}
+              size="md"
+            />
+            <div className="ov-candidate-preview-main">
+              <div className="ov-candidate-preview-name">
+                <strong>{selectedCandidate.name || selectedCandidate.id}</strong>
+                {selectedCandidate.emailVerified ? (
+                  <span className="badge badge-blue">邮箱已验证</span>
+                ) : (
+                  <span className="badge badge-orange">待激活</span>
+                )}
+              </div>
+              <span className="ov-candidate-preview-meta">
+                <Mail size={12} />
+                {selectedCandidate.email || "未绑定邮箱"} · {selectedCandidate.roleLabel || "成员"}
+              </span>
+              {selectedCandidate.skills.length ? (
+                <div className="tag-list">
+                  {selectedCandidate.skills.slice(0, 6).map((skill) => (
+                    <span className="chip" key={skill}>
+                      {skill}
+                    </span>
+                  ))}
+                  {selectedCandidate.skills.length > 6 ? (
+                    <span className="chip">+{selectedCandidate.skills.length - 6}</span>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
         <div className="field">
           <label htmlFor="ov-add-title">职位</label>
           <input
             id="ov-add-title"
             className="input"
-            value={form.title}
-            onChange={(event) => setField("title", event.target.value)}
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
             placeholder="例如：高级前端工程师"
             maxLength={60}
+            disabled={saving}
           />
+          <span className="field-hint">可选，仅作为当前开发组内的组织信息。</span>
         </div>
         <div className="field">
           <label htmlFor="ov-add-role">团队角色</label>
           <input
             id="ov-add-role"
             className="input"
-            value={form.role}
-            onChange={(event) => setField("role", event.target.value)}
+            value={role}
+            onChange={(event) => setRole(event.target.value)}
             placeholder="例如：核心成员"
             maxLength={40}
+            disabled={saving}
           />
+          <span className="field-hint">可选，例如负责人、核心成员。</span>
         </div>
-        <div className="field">
-          <label htmlFor="ov-add-email">邮箱</label>
-          <input
-            id="ov-add-email"
-            className="input"
-            type="email"
-            value={form.email}
-            onChange={(event) => setField("email", event.target.value)}
-            placeholder="name@corp.example"
-            maxLength={120}
-          />
-        </div>
-        <div className="field span-2">
-          <label htmlFor="ov-add-bio">个人简介</label>
-          <textarea
-            id="ov-add-bio"
-            className="textarea"
-            value={form.bio}
-            onChange={(event) => setField("bio", event.target.value)}
-            placeholder="一句话介绍这位成员擅长什么、正在关注什么。"
-            maxLength={2000}
-            rows={3}
-          />
-        </div>
-        <div className="field span-2">
-          <label htmlFor="ov-add-tags">标签</label>
-          <input
-            id="ov-add-tags"
-            className="input"
-            value={form.tags}
-            onChange={(event) => setField("tags", event.target.value)}
-            placeholder="用逗号分隔，例如：React, 设计系统, 性能优化"
-          />
-        </div>
-        <div className="field span-2">
-          <span className="field-label">头像颜色</span>
-          <div className="ov-color-swatches" role="group" aria-label="选择头像颜色">
-            {AVATAR_COLORS.map((color) => (
-              <button
-                key={color}
-                type="button"
-                className={cn("ov-color-swatch", form.avatarColor === color && "active")}
-                style={{ background: color }}
-                onClick={() => setField("avatarColor", color)}
-                aria-label={`选择颜色 ${color}`}
-                aria-pressed={form.avatarColor === color}
-              />
-            ))}
-          </div>
-        </div>
+
         {error ? (
           <p className="ov-form-error span-2" role="alert">
             {error}
@@ -1022,7 +1061,7 @@ function AddMemberDialog({ open, teamId, groupId, onClose, onSaved }: AddMemberD
         <div className="ov-form-meta span-2">
           <Clock size={12} />{" "}
           {scope === "group"
-            ? "创建后会立即出现在成员档案与团队动态中。"
+            ? "创建后会立即出现在成员档案与团队动态中，个人资料由账号自动同步。"
             : `将创建到：${currentGroup?.name ?? "当前开发组"}，创建后立即出现在成员档案中。`}
         </div>
       </form>

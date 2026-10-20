@@ -1240,7 +1240,68 @@
   line-height: 1.65;
 }
 
-/* Add-member form extras */
+/* Add-member account picker (accounts are the only source of identity) */
+.ov-candidate-notice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+
+.ov-candidate-notice-text {
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--text-2);
+}
+
+.ov-candidate-preview {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface-2));
+}
+
+.ov-candidate-preview-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ov-candidate-preview-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.ov-candidate-preview-name strong {
+  font-size: 13px;
+  letter-spacing: -0.01em;
+}
+
+.ov-candidate-preview-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-2);
+  word-break: break-all;
+}
+
+.ov-candidate-preview-meta svg {
+  flex: none;
+  color: var(--text-3);
+}
+
+/* Member edit dialog avatar colour swatches (rendered by MemberDrawer). */
 .ov-color-swatches {
   display: flex;
   align-items: center;

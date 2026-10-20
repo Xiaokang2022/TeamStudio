@@ -180,7 +180,8 @@ current context (it also refreshes the sliding session):
 ```
 
 - `GET /api/teams` – teams + groups visible to the current user.
-- `GET /api/teams/{teamId}/groups/{groupId}` – group detail with members.
+- `GET /api/teams/{teamId}/groups/{groupId}/overview` – group overview (members, works,
+  activity, stats); there is no separate group-detail endpoint.
 
 ## Accounts, users & personal home page
 
@@ -191,9 +192,10 @@ e-mail code). Personal fields: `avatar`, `avatar_color`, `bio`, `skills` (JSON a
 
 Account administration (super administrators only):
 
-- `GET /api/users` → `{ users, deviceAdminName, permissions: { canManageUsers } }`. The first
-  row is the synthetic device Admin (`isDeviceAdmin: true`, `canManage: false`,
-  `roleLabel: "超级管理员"`).
+- `GET /api/users` → `{ users, deviceAdminName, permissions: { canManageUsers } }`. The synthetic
+  device Admin row (`isDeviceAdmin: true`, `canManage: false`, `roleLabel: "超级管理员"`) is
+  included **only when the caller is the deployment device Admin itself**; stored super
+  administrators (`role: "super"` accounts) never see that row.
 - `POST /api/users` `{ email, name?, role?, teamIds?, groupIds?, emailVerified? }` – creates an
   account and, for unverified accounts, returns
   `{ user, activation: { url, expiresAt, expiresInMinutes } }` (copy the URL to the member).
@@ -225,6 +227,13 @@ Profile / personal home page:
   "user": { "id","email","name","avatar","avatarColor","bio","skills","role","roleLabel",
             "teamIds","groupIds","emailVerified","createdBy","createdAt","updatedAt",
             "isDeviceAdmin" },
+  "adminScope": { "role": "super | team_admin | group_admin | member",
+                  "roleLabel": "超级管理员 | 团队管理员 | 开发组管理员 | 成员",
+                  "summary": "超级管理员 | 星港产品团队 团队管理员 | 前端体验组 开发组管理员 | \"\"",
+                  "teams": [{ "id": "team-aurora", "name": "星港产品团队" }],
+                  "groups": [{ "id": "grp-frontend", "name": "前端体验组",
+                               "teamId": "team-aurora", "teamName": "星港产品团队" }],
+                  "isDeviceAdmin": false },
   "members": [{ "id","name","email","title","role","avatarColor","avatar","bio","tags",
                 "skills","status","groupId","groupName","teamId","teamName" }],
   "duties": [{ "id","area","description","role":"owner|backup","channel","contact",
@@ -244,6 +253,18 @@ Profile personal fields are mirrored onto every linked `members` row by e-mail; 
 made on a member record are mirrored back to the account, so member cards, the personal home page
 and account settings always agree. Avatar files are served from `/uploads/avatars/...`.
 
+`adminScope` describes what the account administers and is public (visible to any signed-in user
+or guest reading the profile):
+
+- `super` (including the deployment device Admin): `summary="超级管理员"`, `teams=[]`,
+  `groups=[]`; `isDeviceAdmin` reflects the synthetic device identity.
+- `team_admin`: `teams` is resolved from the account / whitelist `teamIds`; `summary` is
+  `"<team name> 团队管理员"` (multiple teams joined with `、`).
+- `group_admin`: `groups` is resolved together with the owning team; `summary` is
+  `"<group name> 开发组管理员"` (multiple groups joined with `、`).
+- `member`: `summary=""`, both arrays empty. Stale team / group ids that no longer exist are
+  silently dropped (no error).
+
 ### Member personal vs organizational information
 
 `PATCH /api/teams/{team}/groups/{group}/members/{memberId}`:
@@ -254,7 +275,9 @@ and account settings always agree. Avatar files are served from `/uploads/avatar
   Otherwise `403 personal_info_forbidden`.
 - **Organizational fields** – `title`, `role`, `status` – editable by in-scope team/group admins.
 - The member payload carries `avatar`; accepted personal edits sync to the linked `users` row.
-  Member creation (`POST /members`) may set the initial personal fields for in-scope admins.
+  Member creation (`POST /members`) no longer accepts custom personal fields: it links a
+  registered account by `userId` and derives the initial personal fields from it (see
+  [Overview / members / works](#overview--members--works)).
 
 ## Workspace administration (admins)
 
@@ -318,7 +341,23 @@ selected group. The frontend shows all three browsing views to every identity.
   - work shape: `{ id, memberId, title, description, status: "current"|"done"|"planned",
     period, category, progress, updatedAt, groupId, groupName, teamId, teamName }`
 - `PATCH /members/{memberId}` – see [Member personal vs organizational information](#member-personal-vs-organizational-information).
-- `POST /members` (admin) – create member (same fields + id optional)
+- `GET /member-candidates?search=` (admin) – registered accounts (`users` rows, **including
+  pre-created but unverified accounts**) that are not yet in this group's member profiles:
+  `{ candidates: [{ id, name, email, avatar, avatarColor, role, roleLabel, emailVerified,
+  skills }], total }`. `search` matches name / e-mail / account id case-insensitively. A member
+  profile is considered a duplicate when `lower(members.email) = lower(users.email)` or
+  `lower(members.external_id) = lower(users.id)`. The built-in device Admin is not a `users`
+  row, so it can never appear; guests get `401`, out-of-scope admins `403`, unknown teams /
+  groups `404 group_not_found`.
+- `POST /members` (admin) – `{ userId, title?, role?, status?, sortOrder? }`. `userId` is
+  required (account id; an e-mail is also accepted for manual callers) and everything identity
+  related is derived from the `users` row — `members.external_id = users.id`, `name` (falling
+  back to the account id), `email`, `avatar_url`, `avatar_color`, `bio`, `skills`; `tags` is
+  reset to `[]` and any `name` / `email` / `id` / `avatar` in the body is ignored. Unknown
+  accounts and `userId=device-admin` → `404 user_not_found`; already in this group →
+  `409 member_exists`; missing / empty `userId` → `422 validation_error`. `title` / `role` /
+  `status` / `sortOrder` remain settable organizational fields. Writes a `member.create` audit
+  whose detail contains `userId` and returns `{ member: MemberDetail }`.
 - `DELETE /members/{memberId}` (admin)
 - `GET /members/{memberId}/works`
 - `POST /members/{memberId}/works` – member-self or admin

@@ -215,3 +215,202 @@ def test_avatar_upload_and_removal(guest_client):
         files={"file": ("notes.txt", b"not an image", "text/plain")},
     )
     assert bad.status_code == 422
+
+
+# --------------------------------------------------------------------------- admin scope
+
+
+def test_profile_admin_scope_super_and_member(client):
+    own = client.get("/api/profile").json()["data"]
+    assert own["adminScope"] == {
+        "role": "super",
+        "roleLabel": "超级管理员",
+        "summary": "超级管理员",
+        "teams": [],
+        "groups": [],
+        "isDeviceAdmin": True,
+    }
+
+    # A plain member's public page carries the empty member scope.
+    other = client.get("/api/users/lin.zhixia/profile")
+    assert other.status_code == 200
+    assert other.json()["data"]["adminScope"] == {
+        "role": "member",
+        "roleLabel": "成员",
+        "summary": "",
+        "teams": [],
+        "groups": [],
+        "isDeviceAdmin": False,
+    }
+
+
+def test_profile_admin_scope_team_admin_resolves_team_names(guest_client):
+    _create_account(
+        "multi.team@corp.example",
+        name="多团队管理员",
+        role="team_admin",
+        team_ids=["team-aurora", "team-voyage"],
+    )
+    _sign_in(guest_client, "multi.team", "multi.team@corp.example")
+
+    scope = guest_client.get("/api/profile").json()["data"]["adminScope"]
+    assert scope["role"] == "team_admin"
+    assert scope["roleLabel"] == "团队管理员"
+    assert scope["teams"] == [
+        {"id": "team-aurora", "name": "星港产品团队"},
+        {"id": "team-voyage", "name": "远航数据团队"},
+    ]
+    assert scope["groups"] == []
+    assert scope["summary"] == "星港产品团队 团队管理员、远航数据团队 团队管理员"
+    assert scope["isDeviceAdmin"] is False
+
+
+def test_profile_admin_scope_group_admin_resolves_group_and_team(guest_client):
+    _create_account(
+        "multi.group@corp.example",
+        name="多开发组管理员",
+        role="group_admin",
+        group_ids=["grp-frontend", "grp-data"],
+    )
+    _sign_in(guest_client, "multi.group", "multi.group@corp.example")
+
+    scope = guest_client.get("/api/profile").json()["data"]["adminScope"]
+    assert scope["role"] == "group_admin"
+    assert scope["roleLabel"] == "开发组管理员"
+    # ``users.group_ids`` is stored sorted, so the scope follows that order.
+    assert scope["groups"] == [
+        {
+            "id": "grp-data",
+            "name": "数据智能组",
+            "teamId": "team-voyage",
+            "teamName": "远航数据团队",
+        },
+        {
+            "id": "grp-frontend",
+            "name": "前端体验组",
+            "teamId": "team-aurora",
+            "teamName": "星港产品团队",
+        },
+    ]
+    assert scope["teams"] == []
+    assert scope["summary"] == "数据智能组 开发组管理员、前端体验组 开发组管理员"
+
+
+def test_profile_admin_scope_stored_super_is_summary_only(guest_client):
+    _create_account(
+        "stored.super@corp.example",
+        name="存储超管",
+        role="super",
+        team_ids=["team-aurora"],
+    )
+    _sign_in(guest_client, "stored.super", "stored.super@corp.example")
+
+    scope = guest_client.get("/api/profile").json()["data"]["adminScope"]
+    assert scope == {
+        "role": "super",
+        "roleLabel": "超级管理员",
+        "summary": "超级管理员",
+        "teams": [],
+        "groups": [],
+        "isDeviceAdmin": False,
+    }
+
+
+def test_profile_admin_scope_ignores_deleted_team_and_group_ids(guest_client):
+    _create_account(
+        "stale.scope@corp.example",
+        name="失效范围",
+        role="group_admin",
+        group_ids=["grp-frontend"],
+    )
+    with db() as conn:
+        accounts.update_user(
+            conn, "stale.scope", group_ids=["grp-frontend", "grp-deleted"]
+        )
+    _sign_in(guest_client, "stale.scope", "stale.scope@corp.example")
+
+    scope = guest_client.get("/api/profile").json()["data"]["adminScope"]
+    assert [group["id"] for group in scope["groups"]] == ["grp-frontend"]
+    assert scope["summary"] == "前端体验组 开发组管理员"
+
+    # A stale team id leaves the team list (and summary) empty instead of failing.
+    with db() as conn:
+        accounts.update_user(
+            conn,
+            "stale.scope",
+            role="team_admin",
+            team_ids=["team-deleted"],
+            group_ids=[],
+        )
+    stale = guest_client.get("/api/profile").json()["data"]["adminScope"]
+    assert stale["role"] == "team_admin"
+    assert stale["teams"] == []
+    assert stale["summary"] == ""
+
+
+def test_profile_admin_scope_is_public(guest_client):
+    _create_account(
+        "public.team.admin@corp.example",
+        name="公开团队管理员",
+        role="team_admin",
+        team_ids=["team-aurora"],
+    )
+    guest_client.cookies.clear()
+    response = guest_client.get("/api/users/public.team.admin/profile")
+    assert response.status_code == 200
+    assert response.json()["data"]["adminScope"]["summary"] == "星港产品团队 团队管理员"
+
+
+def test_profile_admin_scope_for_ip_whitelist_identity(client):
+    from backend.app.config import DEFAULT_SETTINGS, settings_service
+
+    payload = DEFAULT_SETTINGS.model_dump(mode="json")
+    payload["auth"]["adminWhitelist"]["ips"] = [
+        {
+            "ip": "10.20.30.0/24",
+            "name": "楼层管理员",
+            "role": "team_admin",
+            "teamId": "team-aurora",
+            "groupIds": [],
+        }
+    ]
+    settings_service.save(payload)
+
+    with TestClient(app, client=("10.20.30.41", 51041), raise_server_exceptions=False) as remote:
+        response = remote.get("/api/profile")
+        assert response.status_code == 200
+        scope = response.json()["data"]["adminScope"]
+        assert scope["role"] == "team_admin"
+        assert scope["roleLabel"] == "团队管理员"
+        assert scope["teams"] == [{"id": "team-aurora", "name": "星港产品团队"}]
+        assert scope["summary"] == "星港产品团队 团队管理员"
+        assert scope["isDeviceAdmin"] is False
+
+
+# --------------------------------------------------------------------------- device-admin visibility
+
+
+def test_user_list_shows_device_admin_row_only_to_device_admin(client):
+    _create_account("stored.super@corp.example", name="存储超管", role="super")
+
+    own = client.get("/api/users").json()["data"]
+    assert own["users"][0]["id"] == "device-admin"
+    assert own["users"][0]["isDeviceAdmin"] is True
+    assert own["users"][0]["isSelf"] is True
+    assert [item["id"] for item in own["users"]].count("device-admin") == 1
+
+    with TestClient(app, client=("10.20.30.88", 51030), raise_server_exceptions=False) as remote:
+        _sign_in(remote, "stored.super", "stored.super@corp.example")
+        listed = remote.get("/api/users")
+        assert listed.status_code == 200
+        data = listed.json()["data"]
+        ids = [item["id"] for item in data["users"]]
+        assert "device-admin" not in ids
+        assert "stored.super" in ids
+        assert all(item["isDeviceAdmin"] is False for item in data["users"])
+        assert data["deviceAdminName"] == "Admin"
+
+        # The device Admin's own profile stays hidden from everybody else.
+        hidden = remote.get("/api/users/device-admin/profile")
+        assert hidden.status_code == 404
+        assert hidden.json()["error"]["code"] == "user_not_found"

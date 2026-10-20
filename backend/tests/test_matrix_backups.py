@@ -33,6 +33,23 @@ def _data(response):
     return body["data"]
 
 
+def _create_account(
+    email: str, *, name: str = "", avatar: str = "", color: str = "#5865f2"
+) -> dict:
+    """Register an account so members can be created from it by ``userId``."""
+    from backend.app.services import accounts
+
+    with db() as conn:
+        account = accounts.create_user(
+            conn, email=email, name=name, email_verified=True, created_by="test"
+        )
+        if avatar or color != "#5865f2":
+            account = accounts.update_user(
+                conn, account["id"], avatar=avatar, avatar_color=color
+            )
+        return account
+
+
 def _create_area(client, **payload) -> dict:
     return _data(client.post(MATRIX_URL, json=payload))["area"]
 
@@ -178,8 +195,11 @@ def test_backup_ids_are_deduped(client):
 def _create_members(client, count: int) -> list[str]:
     ids = []
     for index in range(count):
+        account = _create_account(
+            f"backup.candidate{index}@corp.example", name=f"备份候选{index}"
+        )
         member = _data(
-            client.post(MEMBERS_URL, json={"name": f"备份候选{index}", "title": "成员"})
+            client.post(MEMBERS_URL, json={"userId": account["id"], "title": "成员"})
         )["member"]
         ids.append(member["id"])
     return ids
@@ -316,17 +336,16 @@ def test_member_deletion_prunes_every_backup_array(client):
 
 def test_backup_candidate_avatar_payload_and_personal_permissions(client) -> None:
     """Backup candidates are regular members: avatar payload + round-5 edit rules."""
+    account = _create_account(
+        "backup.candidate@corp.example",
+        name="备份候选人",
+        avatar="/uploads/avatars/candidate.png",
+    )
     created = _data(
-        client.post(
-            MEMBERS_URL,
-            json={
-                "name": "备份候选人",
-                "email": "backup.candidate@corp.example",
-                "avatar": "/uploads/avatars/candidate.png",
-            },
-        )
+        client.post(MEMBERS_URL, json={"userId": account["id"]})
     )["member"]
     assert created["avatar"] == "/uploads/avatars/candidate.png"
+    assert created["name"] == "备份候选人"
 
     area = _create_area(
         client, area="头像备份职责", ownerMemberId=LIN["id"], backupMemberIds=[created["id"]]

@@ -160,6 +160,22 @@ def url(path: str = "") -> str:
     return f"/api/teams/{TEAM_ID}/groups/{GROUP_ID}{path}"
 
 
+def _create_account(email: str, *, name: str = "", role: str = "member") -> dict:
+    """Register an account directly so member creation can select it by ``userId``."""
+    from backend.app.db import db as database
+    from backend.app.services import accounts
+
+    with database() as conn:
+        return accounts.create_user(
+            conn,
+            email=email,
+            name=name,
+            role=role,
+            email_verified=True,
+            created_by="test",
+        )
+
+
 def _iso(days: int) -> str:
     return (date.today() + timedelta(days=days)).isoformat()
 
@@ -235,14 +251,19 @@ def test_member_self_edit_only_linked_member(api: TestApi) -> None:
 
 
 def test_admin_creates_updates_and_deletes_member(api: TestApi) -> None:
+    account = _create_account("tester@corp.example", name="测试成员")
     api.as_admin()
     response = api.client.post(
         url("/members"),
         json={
-            "name": "测试成员",
-            "email": "tester@corp.example",
-            "title": "测试工程师",
+            "userId": account["id"],
+            # Custom identity fields are ignored: the account is the source of truth.
+            "name": "自定义姓名",
+            "email": "hijack@corp.example",
+            "id": "m-hijack",
+            "avatar": "/uploads/avatars/hijack.png",
             "tags": ["测试", "质量"],
+            "title": "测试工程师",
             "status": "available",
         },
     )
@@ -250,15 +271,20 @@ def test_admin_creates_updates_and_deletes_member(api: TestApi) -> None:
     member = response.json()["data"]["member"]
     member_id = member["id"]
     assert member_id.startswith("member-")
-    assert member["tags"] == ["测试", "质量"]
+    assert member_id != "m-hijack"
+    assert member["name"] == "测试成员"
+    assert member["email"] == "tester@corp.example"
+    assert member["title"] == "测试工程师"
+    assert member["tags"] == []
 
     response = api.client.patch(url(f"/members/{member_id}"), json={"role": "核心成员"})
     assert response.status_code == 200
     assert response.json()["data"]["member"]["role"] == "核心成员"
 
-    # Duplicate id is a conflict.
-    response = api.client.post(url("/members"), json={"id": member_id, "name": "重复"})
-    assert response.status_code == 409
+    # The same account cannot be added twice; an e-mail resolves the same account.
+    duplicate = api.client.post(url("/members"), json={"userId": "tester@corp.example"})
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["code"] == "member_exists"
 
     response = api.client.delete(url(f"/members/{member_id}"))
     assert response.status_code == 200
@@ -720,7 +746,7 @@ def test_guest_writes_are_unauthorized(api: TestApi) -> None:
     api.as_guest()
     tomorrow = _iso(1)
     requests = [
-        ("post", url("/members"), {"name": "访客成员"}),
+        ("post", url("/members"), {"userId": "lin.zhixia"}),
         ("patch", url("/members/m-chen"), {"title": "访客修改"}),
         ("delete", url("/members/m-chen"), None),
         ("post", url(f"/members/m-chen/works"), {"title": "访客工作"}),
@@ -751,7 +777,7 @@ def test_guest_writes_are_unauthorized(api: TestApi) -> None:
 def test_member_cannot_write_admin_boards(api: TestApi) -> None:
     api.as_member(MEMBER_ID)
     checks = [
-        ("post", url("/members"), {"name": "越权成员"}),
+        ("post", url("/members"), {"userId": "lin.zhixia"}),
         ("post", url("/links"), {"title": "越权链接", "url": "https://example.com"}),
         ("post", url("/matrix"), {"area": "越权领域"}),
         ("post", url("/announcements"), {"title": "越权公告"}),

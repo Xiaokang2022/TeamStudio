@@ -256,6 +256,96 @@ def _synthetic_account(user: CurrentUser) -> dict[str, Any]:
     }
 
 
+def _id_list(value: Any) -> list[str]:
+    """Parse a JSON / list column into an ordered, deduplicated id list."""
+    parsed = json_loads(value, []) if isinstance(value, str) else value
+    if not isinstance(parsed, list):
+        return []
+    result: list[str] = []
+    for item in parsed:
+        cleaned = str(item).strip()
+        if cleaned and cleaned not in result:
+            result.append(cleaned)
+    return result
+
+
+def _admin_scope(conn: sqlite3.Connection, account: dict[str, Any]) -> dict[str, Any]:
+    """Describe what an account administers (round 6 §2.2).
+
+    Super administrators only summarise their role; team / group administrators get the
+    names of the teams / development groups they manage. Membership never expands the
+    arrays. Stale ids (team or group already deleted) are silently dropped.
+    """
+    is_device_admin = bool(account.get("isDeviceAdmin"))
+    role = str(account.get("role") or "member")
+    if is_device_admin or role == "super":
+        role = "super"
+    elif role not in {"team_admin", "group_admin"}:
+        role = "member"
+    payload: dict[str, Any] = {
+        "role": role,
+        "roleLabel": accounts.role_label(role),
+        "summary": "",
+        "teams": [],
+        "groups": [],
+        "isDeviceAdmin": is_device_admin,
+    }
+    if role == "super":
+        payload["summary"] = "超级管理员"
+        return payload
+    if role == "team_admin":
+        team_ids = _id_list(account.get("team_ids"))
+        if not team_ids:
+            return payload
+        placeholders = ",".join("?" for _ in team_ids)
+        found = {
+            str(item["id"]): str(item["name"])
+            for item in rows(
+                conn,
+                f"SELECT id, name FROM teams WHERE id IN ({placeholders})",
+                tuple(team_ids),
+            )
+        }
+        payload["teams"] = [
+            {"id": team_id, "name": found[team_id]}
+            for team_id in team_ids
+            if team_id in found
+        ]
+        payload["summary"] = "、".join(
+            f"{team['name']} 团队管理员" for team in payload["teams"]
+        )
+        return payload
+    if role == "group_admin":
+        group_ids = _id_list(account.get("group_ids"))
+        if not group_ids:
+            return payload
+        placeholders = ",".join("?" for _ in group_ids)
+        found = {
+            str(item["id"]): item
+            for item in rows(
+                conn,
+                "SELECT g.id, g.name, g.team_id, tm.name AS team_name FROM groups g "
+                "JOIN teams tm ON tm.id=g.team_id "
+                f"WHERE g.id IN ({placeholders})",
+                tuple(group_ids),
+            )
+        }
+        payload["groups"] = [
+            {
+                "id": group_id,
+                "name": str(found[group_id]["name"]),
+                "teamId": str(found[group_id]["team_id"]),
+                "teamName": str(found[group_id]["team_name"]),
+            }
+            for group_id in group_ids
+            if group_id in found
+        ]
+        payload["summary"] = "、".join(
+            f"{group['name']} 开发组管理员" for group in payload["groups"]
+        )
+    return payload
+
+
 def build_profile(
     conn: sqlite3.Connection,
     user: CurrentUser,
@@ -281,6 +371,7 @@ def build_profile(
     payload_user["roleLabel"] = account.get("roleLabel") or payload_user.get("roleLabel")
     return {
         "user": payload_user,
+        "adminScope": _admin_scope(conn, account),
         "members": [_member_brief(member) for member in members],
         "duties": duties,
         "currentTasks": current_tasks,

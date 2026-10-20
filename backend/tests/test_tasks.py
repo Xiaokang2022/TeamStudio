@@ -66,9 +66,15 @@ def _tasks_url(team_id: str = TEAM_ID, group_id: str = GROUP_ID) -> str:
 
 
 def _create_member(client, name: str = "测试负载", email: str = "loadtest@corp.example") -> str:
+    from backend.app.services import accounts
+
+    with db() as conn:
+        account = accounts.create_user(
+            conn, email=email, name=name, email_verified=True, created_by="test"
+        )
     response = client.post(
         MEMBERS_URL,
-        json={"name": name, "email": email, "title": "测试工程师"},
+        json={"userId": account["id"], "title": "测试工程师"},
     )
     assert response.status_code == 200, response.text
     return response.json()["data"]["member"]["id"]

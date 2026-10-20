@@ -74,6 +74,51 @@
   color: var(--text-3);
 }
 
+/* ---------- Administrator management scope (public info) ---------- */
+.profile-admin-scope {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 6px 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface));
+}
+
+.profile-admin-scope-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+}
+
+.profile-admin-scope-label svg {
+  flex: none;
+}
+
+.profile-admin-scope-chip {
+  gap: 5px;
+  background: var(--surface);
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
+  color: var(--text-2);
+}
+
+.profile-admin-scope-chip > svg {
+  flex: none;
+  color: var(--accent);
+}
+
+.profile-admin-scope-role {
+  font-weight: 500;
+  color: var(--text-3);
+}
+
 .profile-joined {
   font-size: 10.5px;
   color: var(--text-3);

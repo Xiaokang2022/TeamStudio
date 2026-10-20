@@ -2,8 +2,8 @@
 
 Only super administrators (the deployment device Admin or a stored ``super`` role)
 may list, pre-create, promote, re-scope or delete accounts. The deployment device's
-built-in ``Admin`` is shown as a non-editable row and can never be managed or
-deleted.
+built-in ``Admin`` is shown as a non-editable row to that device Admin only; stored
+super administrators never see it and none of its endpoints can manage or delete it.
 """
 
 from __future__ import annotations
@@ -65,28 +65,35 @@ def _validate_scope(
 
 
 def _user_list(conn: sqlite3.Connection, user: CurrentUser) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = [
-        {
-            "id": "device-admin",
-            "email": "",
-            "name": "Admin",
-            "avatar": "",
-            "avatarColor": "#0ea5e9",
-            "bio": "部署设备内置管理员",
-            "skills": [],
-            "role": "super",
-            "roleLabel": "超级管理员",
-            "teamIds": [],
-            "groupIds": [],
-            "emailVerified": True,
-            "createdBy": "system",
-            "createdAt": "",
-            "updatedAt": "",
-            "isDeviceAdmin": True,
-            "canManage": False,
-            "isSelf": user.is_device_admin,
-        }
-    ]
+    """List accounts visible to the caller.
+
+    The synthetic device Admin row is only rendered for the deployment device's own
+    Admin identity (round 6 §2.3); stored super administrators never see it.
+    """
+    items: list[dict[str, Any]] = []
+    if user.is_device_admin:
+        items.append(
+            {
+                "id": "device-admin",
+                "email": "",
+                "name": "Admin",
+                "avatar": "",
+                "avatarColor": "#0ea5e9",
+                "bio": "部署设备内置管理员",
+                "skills": [],
+                "role": "super",
+                "roleLabel": "超级管理员",
+                "teamIds": [],
+                "groupIds": [],
+                "emailVerified": True,
+                "createdBy": "system",
+                "createdAt": "",
+                "updatedAt": "",
+                "isDeviceAdmin": True,
+                "canManage": False,
+                "isSelf": True,
+            }
+        )
     for account in rows(conn, "SELECT * FROM users ORDER BY role, created_at, id"):
         payload = accounts.user_payload(account)
         payload["isDeviceAdmin"] = False

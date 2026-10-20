@@ -24,6 +24,7 @@ Thumbs.db
 
 # Local verification artifacts
 artifacts/
+.pytest-tmp/
 screenshots/
 
 # Documentation screenshots are source assets used by the README

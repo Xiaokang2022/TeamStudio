@@ -15,7 +15,8 @@ from typing import Any, Iterator
 import pytest
 
 from backend.app.auth import CurrentUser, get_current_user
-from backend.app.db import DB_PATH
+from backend.app.db import DB_PATH, db
+from backend.app.services import accounts
 
 TEAM_ID = "team-aurora"
 OTHER_TEAM_ID = "team-voyage"
@@ -129,6 +130,17 @@ def _error(response) -> dict[str, Any]:
     body = response.json()
     assert body["ok"] is False, body
     return body["error"]
+
+
+def _create_account(email: str, *, name: str = "", avatar: str = "") -> dict[str, Any]:
+    """Register an account so a member profile can be created from it by ``userId``."""
+    with db() as conn:
+        account = accounts.create_user(
+            conn, email=email, name=name, email_verified=True, created_by="test"
+        )
+        if avatar:
+            account = accounts.update_user(conn, account["id"], avatar=avatar)
+        return account
 
 
 def _delete(client, path: str, confirm_name: str | None = None):
@@ -566,15 +578,17 @@ def test_member_payload_exposes_avatar(client, as_user) -> None:
     seeded = next(member for member in overview["members"] if member["id"] == MEMBER_ID)
     assert seeded["avatar"] == ""
 
+    account = _create_account(
+        "avatar.member@corp.example",
+        name="头像成员",
+        avatar="/uploads/avatars/member.png",
+    )
     created = client.post(
         MEMBERS_BASE,
-        json={
-            "name": "头像成员",
-            "email": "avatar.member@corp.example",
-            "avatar": "/uploads/avatars/member.png",
-        },
+        json={"userId": account["id"]},
     ).json()["data"]["member"]
     assert created["avatar"] == "/uploads/avatars/member.png"
+    assert created["name"] == "头像成员"
     assert (
         _scalar("SELECT avatar_url FROM members WHERE id=?", (created["id"],))
         == "/uploads/avatars/member.png"

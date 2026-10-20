@@ -184,8 +184,11 @@ def test_precreated_account_activation_and_super_admin(guest_client, monkeypatch
     activation_path = _activation_path(activation["url"])
 
     listed = guest_client.get("/api/users").json()["data"]
-    assert listed["users"][0]["isDeviceAdmin"] is True
-    assert listed["users"][0]["canManage"] is False
+    # Round 6 §2.3: only the device Admin itself sees the synthetic device-admin row.
+    assert all(item["isDeviceAdmin"] is False for item in listed["users"])
+    ids = {item["id"] for item in listed["users"]}
+    assert "device-admin" not in ids
+    assert "future.super" in ids
     emails = {item["email"] for item in listed["users"]}
     assert "future.super@corp.example" in emails
 

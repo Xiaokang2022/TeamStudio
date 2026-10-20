@@ -32,7 +32,6 @@ router = APIRouter(
 )
 
 HEX_PATTERN = re.compile(r"^#[0-9a-fA-F]{6}$")
-MEMBER_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
 WORK_STATUSES = {"current", "done", "planned"}
 # Member fields that describe the person rather than their place in the team: only a
 # super administrator or the linked account owner may edit them (round-5 contract §6).
@@ -424,6 +423,73 @@ def group_overview(
 # --------------------------------------------------------------------------- members
 
 
+@router.get("/member-candidates")
+def list_member_candidates(
+    team_id: str,
+    group_id: str,
+    search: str = Query(default=""),
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Registered accounts that can still join this development group's member list.
+
+    Round 6 §1.2: candidates are ``users`` rows (pre-created but unverified accounts
+    included) that have no member profile in this group yet. Accounts are matched to
+    existing member rows by e-mail *or* immutable account id, so both link styles are
+    recognised. The built-in device Admin is not a ``users`` row and can never appear.
+    """
+    with db() as conn:
+        get_group(conn, team_id, group_id)
+        require_admin(user, team_id, group_id)
+
+        taken_emails: set[str] = set()
+        taken_ids: set[str] = set()
+        for existing in rows(
+            conn,
+            "SELECT lower(email) AS email, lower(external_id) AS external_id "
+            "FROM members WHERE group_id=?",
+            (group_id,),
+        ):
+            if existing.get("email"):
+                taken_emails.add(str(existing["email"]))
+            if existing.get("external_id"):
+                taken_ids.add(str(existing["external_id"]))
+
+        needle = text(search, "搜索关键词", 120).lower()
+        candidates: list[dict[str, Any]] = []
+        for account in rows(
+            conn, "SELECT * FROM users ORDER BY name COLLATE NOCASE, id"
+        ):
+            account_id = str(account.get("id") or "")
+            email = str(account.get("email") or "")
+            if email.strip().lower() in taken_emails:
+                continue
+            if account_id.strip().lower() in taken_ids:
+                continue
+            if needle:
+                haystacks = (
+                    str(account.get("name") or "").lower(),
+                    email.lower(),
+                    account_id.lower(),
+                )
+                if not any(needle in value for value in haystacks):
+                    continue
+            role = str(account.get("role") or "member")
+            candidates.append(
+                {
+                    "id": account_id,
+                    "name": account.get("name") or account_id,
+                    "email": email,
+                    "avatar": account.get("avatar") or "",
+                    "avatarColor": account.get("avatar_color") or "#5865f2",
+                    "role": role,
+                    "roleLabel": accounts.role_label(role),
+                    "emailVerified": bool(account.get("email_verified")),
+                    "skills": _parsed_list(account.get("skills")),
+                }
+            )
+    return ok({"candidates": candidates, "total": len(candidates)})
+
+
 @router.patch("/members/{member_id}")
 def update_member(
     team_id: str,
@@ -500,28 +566,40 @@ def create_member(
     payload: dict[str, Any] = Body(...),
     user: CurrentUser = Depends(get_current_user),
 ):
+    """Add a registered account to this development group's member profiles.
+
+    Round 6 §1.3: the request only selects a person via ``userId`` (account id, or an
+    e-mail for manual callers). Every identity field is derived from the ``users`` row;
+    custom ``name`` / ``email`` / ``id`` / ``avatar`` values are deliberately ignored so
+    a member profile can never disagree with the account it represents.
+    """
     with db() as conn:
         group = get_group(conn, team_id, group_id)
         require_admin(user, team_id, group_id)
 
-        raw_id = text(payload.get("id"), "成员 ID", 80)
-        member_id = raw_id or new_id("member")
-        if not MEMBER_ID_PATTERN.fullmatch(member_id):
-            raise fail(422, "成员 ID 只能包含字母、数字、下划线和连字符", "validation_error")
-        if row(conn, "SELECT 1 FROM members WHERE id=?", (member_id,)):
-            raise fail(409, "成员 ID 已存在", "member_exists")
-
-        name = text(payload.get("name"), "姓名", 60, required=True)
-        email = _email(payload.get("email"))
-        avatar_url = _avatar_url(
-            payload["avatar"] if "avatar" in payload else payload.get("avatarUrl")
+        raw_user_id = text(payload.get("userId"), "账号 ID", 190, required=True)
+        account = accounts.get_user(conn, raw_user_id)
+        if not account and "@" in raw_user_id:
+            account = accounts.get_user_by_email(conn, raw_user_id)
+        if not account:
+            # Internal identities (device Admin) are not stored in ``users`` either, so
+            # they are rejected by the same lookup.
+            raise fail(404, "账号不存在，请先在「系统设置 → 账号与角色」中创建账号", "user_not_found")
+        account_id = str(account.get("id") or "")
+        account_email = str(account.get("email") or "")
+        existing = row(
+            conn,
+            "SELECT id FROM members WHERE group_id=? AND (lower(email)=? OR lower(external_id)=?) "
+            "LIMIT 1",
+            (group_id, account_email.lower(), account_id.lower()),
         )
+        if existing:
+            raise fail(409, "该账号已在当前开发组的成员档案中", "member_exists")
+
+        member_id = new_id("member")
+        name = str(account.get("name") or "").strip() or account_id
         title = text(payload.get("title"), "职位", 60)
         role = text(payload.get("role"), "角色", 40)
-        avatar_color = _hex_color(payload.get("avatarColor"), "头像颜色")
-        bio = text(payload.get("bio"), "个人简介", 2000)
-        tags = json_dumps(_string_list(payload.get("tags"), "标签"))
-        skills = json_dumps(_string_list(payload.get("skills"), "技能"))
         status = text(payload.get("status"), "状态", 20) or "available"
         sort_order = (
             int_value(payload.get("sortOrder"), "排序", 0, 100_000)
@@ -545,16 +623,16 @@ def create_member(
                 member_id,
                 group["team_id"],
                 group_id,
-                "",
+                account_id,
                 name,
-                email,
-                avatar_url,
+                account_email,
+                account.get("avatar") or "",
                 title,
                 role,
-                avatar_color,
-                bio,
-                tags,
-                skills,
+                account.get("avatar_color") or "#5865f2",
+                account.get("bio") or "",
+                "[]",
+                json_dumps(_parsed_list(account.get("skills"))),
                 status,
                 now,
                 sort_order,
@@ -562,7 +640,7 @@ def create_member(
                 now,
             ),
         )
-        audit(conn, user, "member.create", "member", member_id, {"name": name})
+        audit(conn, user, "member.create", "member", member_id, {"userId": account_id, "name": name})
         member = _member_detail(conn, get_member(conn, member_id, group_id))
     return ok({"member": member})
 
