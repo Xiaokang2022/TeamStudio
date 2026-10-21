@@ -52,7 +52,7 @@ const MAX_SKILLS = 20;
 const MAX_SKILL_LENGTH = 30;
 const MAX_BIO_LENGTH = 2000;
 /** Left-rail panes of the personal home page (more can be added later). */
-type ProfilePane = "info" | "personalization" | "duties" | "tasks" | "history" | "todos" | "redblack";
+type ProfilePane = "info" | "personalization" | "work" | "redblack";
 /** Theme choices shown in the 个性化设置 card (defaults to follow-system). */
 const THEME_PREFERENCES: { value: ThemePreference; label: string }[] = [
   { value: "auto", label: "跟随系统" },
@@ -203,27 +203,46 @@ function MembershipSummary({ teams }: { teams: string[] }) {
   );
 }
 
-/** Every member archive of this account, one row per team. */
-function MemberArchiveList({ members }: { members: ProfileMember[] }) {
+/**
+ * Every member archive of this account, one row per team. Round 9 also folds the
+ * responsibility-matrix entries into the matching team's archive row.
+ */
+function MemberArchiveList({ members, duties }: { members: ProfileMember[]; duties: ProfileDuty[] }) {
   if (!members.length) {
     return <div className="profile-empty">暂未关联成员档案</div>;
   }
   return (
     <div className="profile-member-list">
-      {members.map((member) => (
-        <div className="profile-member-row" key={member.id}>
-          <Avatar name={member.name} src={member.avatar} color={member.avatarColor} size="sm" />
-          <div className="profile-member-main">
-            <div className="profile-member-head">
-              <strong>{member.name}</strong>
-              <TeamBadge teamName={member.teamName} />
+      {members.map((member) => {
+        const teamDuties = duties.filter((duty) => duty.teamId === member.teamId);
+        return (
+          <div className="profile-member-row" key={member.id}>
+            <Avatar name={member.name} src={member.avatar} color={member.avatarColor} size="sm" />
+            <div className="profile-member-main">
+              <div className="profile-member-head">
+                <strong>{member.name}</strong>
+                <TeamBadge teamName={member.teamName} />
+              </div>
+              <span className="profile-member-meta">
+                {[member.title || "未填写职位", member.role || "成员"].filter(Boolean).join(" · ")}
+              </span>
+              {teamDuties.length ? (
+                <div className="profile-member-duties" aria-label={`${member.teamName} 责任田`}>
+                  {teamDuties.map((duty) => (
+                    <span className="chip profile-member-duty" key={duty.id} title={duty.description || duty.area}>
+                      <Waypoints size={11} />
+                      {duty.area}
+                      <span className="profile-member-duty-role">
+                        {duty.role === "owner" ? "主责" : "备份"}
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
             </div>
-            <span className="profile-member-meta">
-              {[member.title || "未填写职位", member.role || "成员"].filter(Boolean).join(" · ")}
-            </span>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -469,10 +488,13 @@ export default function ProfilePage() {
   }[] = [
     { key: "info", label: "个人信息", hint: "头像、用户名、简介与技能", icon: UserRound, personalOnly: true },
     { key: "personalization", label: "个性化设置", hint: "主题偏好与展示", icon: Palette, personalOnly: true },
-    { key: "duties", label: "责任田", hint: "主责与备份板块", icon: Waypoints, count: profile.duties.length },
-    { key: "tasks", label: "当前任务", hint: "进行中的任务", icon: ListTodo, count: profile.currentTasks.length },
-    { key: "history", label: "历史任务", hint: "已完成的任务", icon: History, count: profile.historyTasks.length },
-    { key: "todos", label: "待办", hint: "日历待办事项", icon: CalendarClock, count: profile.todos.length },
+    {
+      key: "work",
+      label: "任务与待办",
+      hint: "当前 / 历史任务与待办",
+      icon: ListTodo,
+      count: profile.currentTasks.length + profile.historyTasks.length + profile.todos.length,
+    },
     {
       key: "redblack",
       label: "红黑榜记录",
@@ -483,7 +505,7 @@ export default function ProfilePage() {
   ];
   const visiblePanes = panes.filter((pane) => !pane.personalOnly || isSelf);
   const activePaneSafe: ProfilePane =
-    isSelf || !["info", "personalization"].includes(activePane) ? activePane : "duties";
+    isSelf || !["info", "personalization"].includes(activePane) ? activePane : "work";
 
   return (
     <div className="profile-page fade-up">
@@ -495,7 +517,7 @@ export default function ProfilePage() {
           <h1 className="page-title">{isSelf ? "个人主页" : `${displayName} 的主页`}</h1>
           <p className="page-subtitle">
             {isSelf
-              ? "维护个人信息，并查看你关联的责任田、任务、待办与红黑榜记录。"
+              ? "维护个人信息，并查看关联的成员档案（含责任田）、任务与待办、红黑榜记录。"
               : "查看成员的基础信息与协作记录。他人的个人资料仅本人或超级管理员可修改。"}
           </p>
         </div>
@@ -570,10 +592,10 @@ export default function ProfilePage() {
             <h2>成员档案</h2>
             <span className="badge badge-gray">{memberArchives.length}</span>
             <span className="profile-members-note">
-              同一账号在不同团队的档案，每个团队只展示一次，并按姓名排序
+              同一账号在不同团队的档案与责任田，每个团队只展示一次，并按姓名排序
             </span>
           </div>
-          <MemberArchiveList members={memberArchives} />
+          <MemberArchiveList members={memberArchives} duties={profile.duties} />
         </div>
       </section>
 
@@ -848,144 +870,128 @@ export default function ProfilePage() {
             </section>
           ) : null}
 
-          <div className="profile-record-pane" hidden={activePaneSafe !== "duties"}>
-            <SectionCard icon={<Waypoints size={16} />} title="责任田" count={profile.duties.length}>
-              {profile.duties.length ? (
-                <div className="profile-list">
-                  {profile.duties.map((duty: ProfileDuty) => (
-                    <div className="profile-row" key={duty.id}>
-                      <div className="profile-row-main">
-                        <div className="profile-row-title">
-                          <strong>{duty.area}</strong>
-                          <span className={cn("badge", duty.role === "owner" ? "badge-green" : "badge-blue")}>
-                            {duty.role === "owner" ? "负责人" : "备份"}
-                          </span>
-                        </div>
-                        <span className="profile-row-desc">{duty.description || "暂无职责说明"}</span>
-                        {duty.channel || duty.contact ? (
-                          <span className="profile-row-meta">
-                            {[duty.channel, duty.contact].filter(Boolean).join(" · ")}
-                          </span>
-                        ) : null}
-                      </div>
-                      <TeamBadge teamName={duty.teamName} />
-                    </div>
-                  ))}
+          <div className="profile-record-pane" hidden={activePaneSafe !== "work"}>
+            <SectionCard
+              icon={<ListTodo size={16} />}
+              title="任务与待办"
+              count={profile.currentTasks.length + profile.historyTasks.length + profile.todos.length}
+            >
+              <div className="profile-work-group">
+                <div className="profile-work-heading">
+                  <ListTodo size={14} /> 当前任务
+                  <span className="badge badge-gray">{profile.currentTasks.length}</span>
                 </div>
-              ) : (
-                <div className="profile-empty">暂无责任田记录</div>
-              )}
-            </SectionCard>
-          </div>
-
-          <div className="profile-record-pane" hidden={activePaneSafe !== "tasks"}>
-            <SectionCard icon={<ListTodo size={16} />} title="当前任务" count={profile.currentTasks.length}>
-              {profile.currentTasks.length ? (
-                <div className="profile-list">
-                  {profile.currentTasks.map((task) => (
-                    <div className="profile-row" key={task.id}>
-                      <div className="profile-row-main">
-                        <div className="profile-row-title">
-                          <strong>{task.title}</strong>
-                          <span className={cn("badge", TASK_PROGRESS_META[task.progressStatus].badge)}>
-                            {TASK_PROGRESS_META[task.progressStatus].label}
-                          </span>
-                        </div>
-                        <span className="profile-row-desc">{task.description || "暂无任务描述"}</span>
-                        <div className="profile-row-meta">
-                          <span className={cn("badge", TASK_PRIORITY_META[task.priority].badge)}>
-                            {TASK_PRIORITY_META[task.priority].label}优先级
-                          </span>
-                          <span>预计 {formatDate(task.expectedDate)}</span>
-                          {task.overdue ? <span className="badge badge-red">已逾期</span> : null}
-                          {memberTaskCount > 1 ? <span>{task.memberName}</span> : null}
-                        </div>
-                      </div>
-                      <TeamBadge teamName={task.teamName} />
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="profile-empty">暂无进行中的任务</div>
-              )}
-            </SectionCard>
-          </div>
-
-          <div className="profile-record-pane" hidden={activePaneSafe !== "history"}>
-            <SectionCard icon={<History size={16} />} title="历史任务" count={profile.historyTasks.length}>
-              {profile.historyTasks.length ? (
-                <div className="profile-list">
-                  {profile.historyTasks.map((task) => (
-                    <div className="profile-row" key={task.id}>
-                      <div className="profile-row-main">
-                        <div className="profile-row-title">
-                          <strong>{task.title}</strong>
-                          <span className="badge badge-green">已完成</span>
-                        </div>
-                        <span className="profile-row-desc">{task.description || "暂无任务描述"}</span>
-                        <div className="profile-row-meta">
-                          <span>
-                            {task.completedAt ? `完成于 ${formatDate(task.completedAt)}` : `预计 ${formatDate(task.expectedDate)}`}
-                          </span>
-                          {task.tags?.length ? (
-                            <span className="tag-list">
-                              {task.tags.map((tag) => (
-                                <span className="chip" key={tag.id}>
-                                  {tag.name}
-                                </span>
-                              ))}
-                            </span>
-                          ) : null}
-                          {memberTaskCount > 1 ? <span>{task.memberName}</span> : null}
-                        </div>
-                      </div>
-                      <TeamBadge teamName={task.teamName} />
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="profile-empty">暂无历史任务</div>
-              )}
-            </SectionCard>
-          </div>
-
-          <div className="profile-record-pane" hidden={activePaneSafe !== "todos"}>
-            <SectionCard icon={<CalendarClock size={16} />} title="待办" count={profile.todos.length}>
-              {profile.todos.length ? (
-                <div className="profile-list">
-                  {profile.todos.map((todo: ProfileTodo) => {
-                    const due = dueLabel(todo);
-                    const dueTone =
-                      due.tone === "danger"
-                        ? "badge-red"
-                        : due.tone === "warning"
-                          ? "badge-orange"
-                          : due.tone === "muted"
-                            ? "badge-gray"
-                            : "badge-blue";
-                    return (
-                      <div className="profile-row" key={todo.id}>
+                {profile.currentTasks.length ? (
+                  <div className="profile-list">
+                    {profile.currentTasks.map((task) => (
+                      <div className="profile-row" key={task.id}>
                         <div className="profile-row-main">
                           <div className="profile-row-title">
-                            <strong className={cn(todo.status === "done" && "profile-done-text")}>{todo.title}</strong>
-                            <span className={cn("badge", todoPriorityBadge(todo.priority))}>
-                              {TODO_PRIORITY_META[todo.priority].label}
+                            <strong>{task.title}</strong>
+                            <span className={cn("badge", TASK_PROGRESS_META[task.progressStatus].badge)}>
+                              {TASK_PROGRESS_META[task.progressStatus].label}
                             </span>
                           </div>
+                          <span className="profile-row-desc">{task.description || "暂无任务描述"}</span>
                           <div className="profile-row-meta">
-                            <span className={cn("badge", dueTone)}>{due.label}</span>
-                            <span>截止 {formatDate(todo.dueDate)}</span>
-                            {todo.status === "done" ? <span className="badge badge-green">已完成</span> : null}
+                            <span className={cn("badge", TASK_PRIORITY_META[task.priority].badge)}>
+                              {TASK_PRIORITY_META[task.priority].label}优先级
+                            </span>
+                            <span>预计 {formatDate(task.expectedDate)}</span>
+                            {task.overdue ? <span className="badge badge-red">已逾期</span> : null}
+                            {memberTaskCount > 1 ? <span>{task.memberName}</span> : null}
                           </div>
                         </div>
-                        <TeamBadge teamName={todo.teamName} />
+                        <TeamBadge teamName={task.teamName} />
                       </div>
-                    );
-                  })}
+                    ))}
+                  </div>
+                ) : (
+                  <div className="profile-empty">暂无进行中的任务</div>
+                )}
+              </div>
+
+              <div className="profile-work-group">
+                <div className="profile-work-heading">
+                  <History size={14} /> 历史任务
+                  <span className="badge badge-gray">{profile.historyTasks.length}</span>
                 </div>
-              ) : (
-                <div className="profile-empty">暂无待办事项</div>
-              )}
+                {profile.historyTasks.length ? (
+                  <div className="profile-list">
+                    {profile.historyTasks.map((task) => (
+                      <div className="profile-row" key={task.id}>
+                        <div className="profile-row-main">
+                          <div className="profile-row-title">
+                            <strong>{task.title}</strong>
+                            <span className="badge badge-green">已完成</span>
+                          </div>
+                          <span className="profile-row-desc">{task.description || "暂无任务描述"}</span>
+                          <div className="profile-row-meta">
+                            <span>
+                              {task.completedAt ? `完成于 ${formatDate(task.completedAt)}` : `预计 ${formatDate(task.expectedDate)}`}
+                            </span>
+                            {task.tags?.length ? (
+                              <span className="tag-list">
+                                {task.tags.map((tag) => (
+                                  <span className="chip" key={tag.id}>
+                                    {tag.name}
+                                  </span>
+                                ))}
+                              </span>
+                            ) : null}
+                            {memberTaskCount > 1 ? <span>{task.memberName}</span> : null}
+                          </div>
+                        </div>
+                        <TeamBadge teamName={task.teamName} />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="profile-empty">暂无历史任务</div>
+                )}
+              </div>
+
+              <div className="profile-work-group">
+                <div className="profile-work-heading">
+                  <CalendarClock size={14} /> 待办
+                  <span className="badge badge-gray">{profile.todos.length}</span>
+                </div>
+                {profile.todos.length ? (
+                  <div className="profile-list">
+                    {profile.todos.map((todo: ProfileTodo) => {
+                      const due = dueLabel(todo);
+                      const dueTone =
+                        due.tone === "danger"
+                          ? "badge-red"
+                          : due.tone === "warning"
+                            ? "badge-orange"
+                            : due.tone === "muted"
+                              ? "badge-gray"
+                              : "badge-blue";
+                      return (
+                        <div className="profile-row" key={todo.id}>
+                          <div className="profile-row-main">
+                            <div className="profile-row-title">
+                              <strong className={cn(todo.status === "done" && "profile-done-text")}>{todo.title}</strong>
+                              <span className={cn("badge", todoPriorityBadge(todo.priority))}>
+                                {TODO_PRIORITY_META[todo.priority].label}
+                              </span>
+                            </div>
+                            <div className="profile-row-meta">
+                              <span className={cn("badge", dueTone)}>{due.label}</span>
+                              <span>截止 {formatDate(todo.dueDate)}</span>
+                              {todo.status === "done" ? <span className="badge badge-green">已完成</span> : null}
+                            </div>
+                          </div>
+                          <TeamBadge teamName={todo.teamName} />
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="profile-empty">暂无待办事项</div>
+                )}
+              </div>
             </SectionCard>
           </div>
 

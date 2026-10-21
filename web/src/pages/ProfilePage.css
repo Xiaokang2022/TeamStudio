@@ -216,6 +216,26 @@
   overflow-wrap: anywhere;
 }
 
+/* Responsibility-matrix entries folded into the member archive rows. */
+.profile-member-duties {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 2px;
+}
+
+.profile-member-duty {
+  gap: 4px;
+  font-size: 10px;
+  padding: 2px 8px;
+}
+
+.profile-member-duty-role {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
 /* ---------- Personal settings ---------- */
 .profile-settings {
   padding: 20px 22px 22px;
@@ -576,6 +596,31 @@
 
 .profile-record-pane {
   min-width: 0;
+}
+
+/* Merged 任务与待办 pane: current tasks + history + todos in one card. */
+.profile-work-group + .profile-work-group {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.profile-work-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text-2);
+}
+
+.profile-work-heading svg {
+  color: var(--text-3);
+}
+
+.profile-work-heading .badge {
+  margin-left: 2px;
 }
 
 /* Member archives live inside the top hero card (round 9). */

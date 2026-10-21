@@ -309,16 +309,17 @@ try {
   const heroArchives = page.locator(".profile-hero .profile-hero-archives");
   assert.equal(await heroArchives.count(), 1, "成员档案 is integrated into the top hero card");
   assert.ok((await heroArchives.innerText()).includes("成员档案"), "hero archives block is labelled");
-  // Personal settings use a settings-style left rail: 个人信息, 个性化设置, then the records.
+  // Round 9: personal settings use a settings-style left rail. Current tasks, history tasks
+  // and todos are merged into one pane; responsibility areas now live in the member archives.
   const profileTabs = (await page.locator(".profile-settings-tab").allInnerTexts()).map((value) =>
     value.trim(),
   );
-  assert.ok(profileTabs.length >= 7, `profile rail exposes personal + record panes, got ${profileTabs.length}`);
+  assert.equal(profileTabs.length, 4, `profile rail exposes 4 panes, got ${profileTabs.join(" | ")}`);
   assert.ok(profileTabs[0].includes("个人信息"), "first pane is 个人信息");
   assert.ok(profileTabs[1].includes("个性化设置"), "second pane is 个性化设置");
-  for (const label of ["责任田", "当前任务", "历史任务", "待办", "红黑榜记录"]) {
-    assert.ok(profileTabs.some((tab) => tab.includes(label)), `profile rail contains ${label}`);
-  }
+  assert.ok(profileTabs[2].includes("任务与待办"), "third pane merges tasks and todos");
+  assert.ok(profileTabs[3].includes("红黑榜记录"), "fourth pane is 红黑榜记录");
+  assert.ok(!profileTabs.some((tab) => tab.includes("责任田")), "责任田 is no longer its own pane");
   assert.ok(await page.locator("#profile-name").isVisible(), "个人信息 pane shows the profile fields");
   assert.equal(
     await page.locator(".profile-settings-main > .card.profile-section").count(),
@@ -344,13 +345,21 @@ try {
   await page.waitForFunction(
     () => localStorage.getItem("teamstudio.theme.preference") === "auto",
   );
-  // Record panes switch in the same left rail.
-  await page.locator(".profile-settings-tab").filter({ hasText: "责任田" }).click();
-  await page.locator(".profile-record-pane:not([hidden]) .profile-section").first().waitFor();
-  assert.ok(
-    (await page.locator(".profile-record-pane:not([hidden])").innerText()).includes("责任田"),
-    "record pane switches to 责任田",
-  );
+  // The merged task pane shows its three groups in one card.
+  await page.locator(".profile-settings-tab").filter({ hasText: "任务与待办" }).click();
+  const workPane = page.locator(".profile-record-pane:not([hidden])");
+  await workPane.locator(".profile-work-heading").first().waitFor();
+  const workPaneText = await workPane.innerText();
+  for (const label of ["当前任务", "历史任务", "待办"]) {
+    assert.ok(workPaneText.includes(label), `任务与待办 pane contains ${label}`);
+  }
+  // Responsibility areas are folded into the member archive rows (check another profile).
+  await goto("profile?userId=lin.zhixia");
+  await page.locator(".profile-hero-archives").waitFor();
+  const dutyChips = page.locator(".profile-hero-archives .profile-member-duty");
+  await dutyChips.first().waitFor();
+  assert.ok((await dutyChips.first().innerText()).includes("主责") || (await dutyChips.first().innerText()).includes("备份"),
+    "member archive row lists its responsibility area");
 
   // ---------------------------------------------------------------- 7. login page copy
   // Sign the browser context out (node-side fetch has its own cookie jar, so the logout
