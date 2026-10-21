@@ -196,9 +196,12 @@ export default function App() {
 
   const normalizedRoute = PAGES[route] ? route : "overview";
   const module = PAGE_MODULES[normalizedRoute];
-  const moduleEnabled = module ? Boolean(config.modules[module]) : true;
-  const visible = module ? moduleVisible(module) : true;
-  const requiresAdmin = normalizedRoute === "settings" && !isAdmin;
+  const isSettingsRoute = normalizedRoute === "settings";
+  const moduleEnabled = !isSettingsRoute && module ? Boolean(config.modules[module]) : true;
+  // Round 9: the settings entry is permission-based (super / team admins) and can never be
+  // hidden by a module switch — the backend also pins `modules.settings` to true.
+  const visible = isSettingsRoute ? true : module ? moduleVisible(module) : true;
+  const requiresAdmin = isSettingsRoute && !isAdmin;
   const isGuest = !data.me.authenticated || data.me.source === "guest";
 
   let content: React.ReactNode;

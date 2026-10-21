@@ -11,6 +11,7 @@ import {
   Palette,
   RotateCcw,
   Save,
+  Settings2,
   ShieldCheck,
   Sparkles,
   Trash2,
@@ -51,6 +52,8 @@ const AVATAR_SNIFF_BYTES = 16;
 const MAX_SKILLS = 20;
 const MAX_SKILL_LENGTH = 30;
 const MAX_BIO_LENGTH = 2000;
+/** Left-rail tabs of the personal settings panel (more can be added later). */
+type ProfileSettingsTab = "info" | "personalization";
 /** Theme choices shown in the 个性化设置 card (defaults to follow-system). */
 const THEME_PREFERENCES: { value: ThemePreference; label: string }[] = [
   { value: "auto", label: "跟随系统" },
@@ -227,10 +230,12 @@ function MemberArchiveList({ members }: { members: ProfileMember[] }) {
 }
 
 export default function ProfilePage() {
-  const { data, navigate, reload, theme, themePreference, setThemePreference } = useApp();
+  const { navigate, reload, theme, themePreference, setThemePreference } = useApp();
   const { toast } = useToast();
   const [params, setParams] = useState<URLSearchParams>(() => hashRoute().params);
   const targetUserId = (params.get("userId") || "").trim();
+  /** Which personal-settings tab is open: 个人信息 / 个性化设置. */
+  const [settingsTab, setSettingsTab] = useState<ProfileSettingsTab>("info");
 
   const [profile, setProfile] = useState<ProfileData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -286,7 +291,6 @@ export default function ProfilePage() {
   const isSelf = Boolean(profile?.isSelf);
   const canEdit = Boolean(profile?.isSelf && profile?.canEdit);
   const readOnlySuperView = Boolean(profile && !profile.isSelf && profile.canEdit);
-  const me = data?.me;
 
   const dirty = Boolean(
     profile &&
@@ -483,7 +487,10 @@ export default function ProfilePage() {
           {canEdit ? (
             <button
               className="btn btn-primary btn-sm"
-              onClick={() => document.getElementById("profile-settings")?.scrollIntoView({ behavior: "smooth" })}
+              onClick={() => {
+                setSettingsTab("info");
+                document.getElementById("profile-settings")?.scrollIntoView({ behavior: "smooth" });
+              }}
             >
               编辑个人资料
             </button>
@@ -549,214 +556,257 @@ export default function ProfilePage() {
         <MemberArchiveList members={memberArchives} />
       </section>
 
-      {canEdit ? (
-        <section className="card profile-settings" id="profile-settings">
+      {isSelf ? (
+        <section className="card profile-settings profile-settings-panel" id="profile-settings">
           <div className="profile-section-head">
             <div className="profile-section-title">
               <span className="profile-section-icon">
-                <UserRound size={16} />
+                <Settings2 size={16} />
               </span>
               <h2>个人设置</h2>
-              <span className="badge badge-gray">仅本人与超级管理员可编辑</span>
+              <span className="badge badge-gray">仅本人可见</span>
             </div>
-            <div className="profile-settings-actions">
-              <button className="btn btn-ghost btn-sm" onClick={resetForm} disabled={saving || !dirty}>
-                <RotateCcw size={14} /> 重置
-              </button>
-              <button className="btn btn-primary btn-sm" onClick={() => void handleSave()} disabled={saving || !dirty}>
-                {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
-                {saving ? "保存中…" : "保存修改"}
-              </button>
-            </div>
+            {settingsTab === "info" && canEdit ? (
+              <div className="profile-settings-actions">
+                <button className="btn btn-ghost btn-sm" onClick={resetForm} disabled={saving || !dirty}>
+                  <RotateCcw size={14} /> 重置
+                </button>
+                <button className="btn btn-primary btn-sm" onClick={() => void handleSave()} disabled={saving || !dirty}>
+                  {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
+                  {saving ? "保存中…" : "保存修改"}
+                </button>
+              </div>
+            ) : null}
+            {settingsTab === "personalization" ? (
+              <span className="profile-members-note">
+                当前生效：{theme === "dark" ? "深色" : "浅色"}
+              </span>
+            ) : null}
           </div>
 
-          <div className="profile-settings-body">
-            <div className="profile-avatar-editor">
-              <Avatar
-                name={form.name || displayName}
-                src={user.avatar}
-                color={form.avatarColor}
-                size="xl"
-              />
-              <div className="profile-avatar-actions">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp,image/gif"
-                  hidden
-                  onChange={(event) => void handleAvatarFile(event)}
-                />
-                <button
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={uploading}
-                >
-                  {uploading ? <Loader2 size={14} className="spin" /> : <Camera size={14} />} 上传头像
-                </button>
-                <button
-                  className="btn btn-ghost btn-sm"
-                  onClick={() => void handleDeleteAvatar()}
-                  disabled={uploading || !user.avatar}
-                >
-                  <Trash2 size={14} /> 恢复默认头像
-                </button>
-                <span className="field-hint">支持 PNG / JPEG / WebP / GIF，单张不超过 2MB。</span>
-              </div>
-            </div>
-
-            <div className="profile-settings-grid">
-              <div className="field">
-                <label htmlFor="profile-name">用户名</label>
-                <input
-                  id="profile-name"
-                  className="input"
-                  value={form.name}
-                  maxLength={60}
-                  placeholder="请输入用户名"
-                  onChange={(event) => setField("name", event.target.value)}
-                />
-                <span className="field-hint">用户名会同步展示在关联的成员档案中。</span>
-              </div>
-              <div className="field">
-                <label htmlFor="profile-email">登录邮箱</label>
-                <input id="profile-email" className="input" value={user.email || "未绑定邮箱"} disabled readOnly />
-                <span className="field-hint">登录邮箱由账号体系管理，如需变更请联系超级管理员。</span>
-              </div>
-
-              <div className="field profile-field-full">
-                <span className="field-label">头像颜色</span>
-                <div className="profile-color-row">
-                  <div className="profile-color-swatches" role="group" aria-label="选择头像颜色">
-                    {AVATAR_COLORS.map((color) => (
-                      <button
-                        key={color}
-                        type="button"
-                        className={cn("profile-color-swatch", form.avatarColor === color && "active")}
-                        style={{ background: color }}
-                        onClick={() => setField("avatarColor", color)}
-                        aria-label={`头像颜色 ${color}`}
-                        aria-pressed={form.avatarColor === color}
-                      >
-                        {form.avatarColor === color ? <Check size={12} /> : null}
-                      </button>
-                    ))}
-                  </div>
-                  <input
-                    type="color"
-                    className="profile-color-input"
-                    value={form.avatarColor}
-                    aria-label="自定义头像颜色"
-                    onChange={(event) => setField("avatarColor", event.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div className="field profile-field-full">
-                <span className="field-label">
-                  技能标签 <span className="profile-field-count">{form.skills.length}/{MAX_SKILLS}</span>
+          <div className="profile-settings-layout">
+            <nav className="profile-settings-tabs" aria-label="个人设置分组">
+              <button
+                type="button"
+                className={cn("profile-settings-tab", settingsTab === "info" && "active")}
+                aria-pressed={settingsTab === "info"}
+                onClick={() => setSettingsTab("info")}
+              >
+                <span className="profile-settings-tab-icon">
+                  <UserRound size={16} />
                 </span>
-                <div className="profile-skill-editor">
-                  <div className="tag-list">
-                    {form.skills.length ? (
-                      form.skills.map((skill) => (
-                        <span className="chip profile-skill-chip" key={skill}>
-                          {skill}
-                          <button
-                            type="button"
-                            className="profile-skill-remove"
-                            onClick={() => removeSkill(skill)}
-                            aria-label={`移除技能 ${skill}`}
-                          >
-                            <X size={11} />
-                          </button>
+                <span className="profile-settings-tab-copy">
+                  <strong>个人信息</strong>
+                  <small>头像、用户名、简介与技能</small>
+                </span>
+              </button>
+              <button
+                type="button"
+                className={cn("profile-settings-tab", settingsTab === "personalization" && "active")}
+                aria-pressed={settingsTab === "personalization"}
+                onClick={() => setSettingsTab("personalization")}
+              >
+                <span className="profile-settings-tab-icon">
+                  <Palette size={16} />
+                </span>
+                <span className="profile-settings-tab-copy">
+                  <strong>个性化设置</strong>
+                  <small>主题偏好与展示</small>
+                </span>
+              </button>
+              <p className="profile-settings-tabs-note">更多个人设置将在后续版本加入</p>
+            </nav>
+
+            <div className="profile-settings-main">
+              {settingsTab === "info" ? (
+                <>
+                  {!canEdit ? (
+                    <div className="profile-readonly-hint">
+                      <ShieldCheck size={14} />
+                      当前身份不支持在此修改个人资料（例如系统内置管理员），如有需要请联系超级管理员。
+                    </div>
+                  ) : null}
+                  <div className="profile-settings-body">
+                    <div className="profile-avatar-editor">
+                      <Avatar
+                        name={form.name || displayName}
+                        src={user.avatar}
+                        color={form.avatarColor}
+                        size="xl"
+                      />
+                      <div className="profile-avatar-actions">
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/gif"
+                          hidden
+                          onChange={(event) => void handleAvatarFile(event)}
+                        />
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => fileInputRef.current?.click()}
+                          disabled={!canEdit || uploading}
+                        >
+                          {uploading ? <Loader2 size={14} className="spin" /> : <Camera size={14} />} 上传头像
+                        </button>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => void handleDeleteAvatar()}
+                          disabled={!canEdit || uploading || !user.avatar}
+                        >
+                          <Trash2 size={14} /> 恢复默认头像
+                        </button>
+                        <span className="field-hint">支持 PNG / JPEG / WebP / GIF，单张不超过 2MB。</span>
+                      </div>
+                    </div>
+
+                    <div className="profile-settings-grid">
+                      <div className="field">
+                        <label htmlFor="profile-name">用户名</label>
+                        <input
+                          id="profile-name"
+                          className="input"
+                          value={form.name}
+                          maxLength={60}
+                          placeholder="请输入用户名"
+                          disabled={!canEdit}
+                          onChange={(event) => setField("name", event.target.value)}
+                        />
+                        <span className="field-hint">用户名会同步展示在关联的成员档案中。</span>
+                      </div>
+                      <div className="field">
+                        <label htmlFor="profile-email">登录邮箱</label>
+                        <input id="profile-email" className="input" value={user.email || "未绑定邮箱"} disabled readOnly />
+                        <span className="field-hint">登录邮箱由账号体系管理，如需变更请联系超级管理员。</span>
+                      </div>
+
+                      <div className="field profile-field-full">
+                        <span className="field-label">头像颜色</span>
+                        <div className="profile-color-row">
+                          <div className="profile-color-swatches" role="group" aria-label="选择头像颜色">
+                            {AVATAR_COLORS.map((color) => (
+                              <button
+                                key={color}
+                                type="button"
+                                className={cn("profile-color-swatch", form.avatarColor === color && "active")}
+                                style={{ background: color }}
+                                onClick={() => setField("avatarColor", color)}
+                                disabled={!canEdit}
+                                aria-label={`头像颜色 ${color}`}
+                                aria-pressed={form.avatarColor === color}
+                              >
+                                {form.avatarColor === color ? <Check size={12} /> : null}
+                              </button>
+                            ))}
+                          </div>
+                          <input
+                            type="color"
+                            className="profile-color-input"
+                            value={form.avatarColor}
+                            aria-label="自定义头像颜色"
+                            disabled={!canEdit}
+                            onChange={(event) => setField("avatarColor", event.target.value)}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="field profile-field-full">
+                        <span className="field-label">
+                          技能标签 <span className="profile-field-count">{form.skills.length}/{MAX_SKILLS}</span>
                         </span>
-                      ))
-                    ) : (
-                      <span className="profile-field-empty">还没有技能标签，添加后展示在你的个人主页。</span>
-                    )}
+                        <div className="profile-skill-editor">
+                          <div className="tag-list">
+                            {form.skills.length ? (
+                              form.skills.map((skill) => (
+                                <span className="chip profile-skill-chip" key={skill}>
+                                  {skill}
+                                  <button
+                                    type="button"
+                                    className="profile-skill-remove"
+                                    onClick={() => removeSkill(skill)}
+                                    disabled={!canEdit}
+                                    aria-label={`移除技能 ${skill}`}
+                                  >
+                                    <X size={11} />
+                                  </button>
+                                </span>
+                              ))
+                            ) : (
+                              <span className="profile-field-empty">还没有技能标签，添加后展示在你的个人主页。</span>
+                            )}
+                          </div>
+                          <div className="profile-skill-input">
+                            <input
+                              className="input"
+                              value={skillDraft}
+                              maxLength={MAX_SKILL_LENGTH}
+                              placeholder="例如：前端开发、数据分析"
+                              disabled={!canEdit}
+                              onChange={(event) => setSkillDraft(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.preventDefault();
+                                  addSkill();
+                                }
+                              }}
+                            />
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              type="button"
+                              onClick={addSkill}
+                              disabled={!canEdit || !skillDraft.trim() || form.skills.length >= MAX_SKILLS}
+                            >
+                              添加
+                            </button>
+                          </div>
+                          <span className="field-hint">
+                            最多 {MAX_SKILLS} 个标签，单个标签不超过 {MAX_SKILL_LENGTH} 个字符。
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="field profile-field-full">
+                        <label htmlFor="profile-bio">
+                          个人简介 <span className="profile-field-count">{form.bio.length}/{MAX_BIO_LENGTH}</span>
+                        </label>
+                        <textarea
+                          id="profile-bio"
+                          className="textarea"
+                          rows={4}
+                          maxLength={MAX_BIO_LENGTH}
+                          placeholder="介绍一下你的职责、专长与协作方式…"
+                          value={form.bio}
+                          disabled={!canEdit}
+                          onChange={(event) => setField("bio", event.target.value)}
+                        />
+                      </div>
+                    </div>
                   </div>
-                  <div className="profile-skill-input">
-                    <input
-                      className="input"
-                      value={skillDraft}
-                      maxLength={MAX_SKILL_LENGTH}
-                      placeholder="例如：前端开发、数据分析"
-                      onChange={(event) => setSkillDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          addSkill();
-                        }
-                      }}
-                    />
-                    <button
-                      className="btn btn-secondary btn-sm"
-                      type="button"
-                      onClick={addSkill}
-                      disabled={!skillDraft.trim() || form.skills.length >= MAX_SKILLS}
-                    >
-                      添加
-                    </button>
+                </>
+              ) : (
+                <div className="profile-personalization-body">
+                  <div className="field">
+                    <span className="field-label">主题偏好</span>
+                    <div className="segmented profile-theme-switch" role="group" aria-label="主题偏好">
+                      {THEME_PREFERENCES.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={themePreference === option.value ? "active" : undefined}
+                          aria-pressed={themePreference === option.value}
+                          onClick={() => setThemePreference(option.value)}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="field-hint">
+                      默认「跟随系统」会实时响应操作系统 / 浏览器的明暗切换；选择「浅色」或「深色」后固定使用该主题。
+                      主题偏好仅保存在当前浏览器，不影响其他成员。
+                    </span>
                   </div>
-                  <span className="field-hint">
-                    最多 {MAX_SKILLS} 个标签，单个标签不超过 {MAX_SKILL_LENGTH} 个字符。
-                  </span>
                 </div>
-              </div>
-
-              <div className="field profile-field-full">
-                <label htmlFor="profile-bio">
-                  个人简介 <span className="profile-field-count">{form.bio.length}/{MAX_BIO_LENGTH}</span>
-                </label>
-                <textarea
-                  id="profile-bio"
-                  className="textarea"
-                  rows={4}
-                  maxLength={MAX_BIO_LENGTH}
-                  placeholder="介绍一下你的职责、专长与协作方式…"
-                  value={form.bio}
-                  onChange={(event) => setField("bio", event.target.value)}
-                />
-              </div>
-            </div>
-          </div>
-        </section>
-      ) : null}
-
-      {isSelf ? (
-        <section className="card profile-personalization" id="profile-personalization">
-          <div className="profile-section-head">
-            <div className="profile-section-title">
-              <span className="profile-section-icon">
-                <Palette size={16} />
-              </span>
-              <h2>个性化设置</h2>
-              <span className="badge badge-gray">仅保存在当前浏览器</span>
-            </div>
-            <span className="profile-members-note">
-              当前生效：{theme === "dark" ? "深色" : "浅色"}
-            </span>
-          </div>
-          <div className="profile-personalization-body">
-            <div className="field">
-              <span className="field-label">主题偏好</span>
-              <div className="segmented profile-theme-switch" role="group" aria-label="主题偏好">
-                {THEME_PREFERENCES.map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    className={themePreference === option.value ? "active" : undefined}
-                    aria-pressed={themePreference === option.value}
-                    onClick={() => setThemePreference(option.value)}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-              <span className="field-hint">
-                默认「跟随系统」会实时响应操作系统 / 浏览器的明暗切换；选择「浅色」或「深色」后固定使用该主题。
-                主题偏好仅保存在当前浏览器，不影响其他成员。
-              </span>
+              )}
             </div>
           </div>
         </section>
@@ -947,13 +997,6 @@ export default function ProfilePage() {
           )}
         </SectionCard>
       </div>
-
-      {me && isSelf && !canEdit ? (
-        <div className="profile-readonly-hint">
-          <ShieldCheck size={14} />
-          当前身份不支持在此修改个人资料（例如系统内置管理员），如有需要请联系超级管理员。
-        </div>
-      ) : null}
     </div>
   );
 }

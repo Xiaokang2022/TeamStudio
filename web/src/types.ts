@@ -67,6 +67,11 @@ export interface ModuleFlags {
   links: boolean;
   matrix: boolean;
   announcements: boolean;
+  /**
+   * Round 9: the settings entry is permission-based (super / team admins) and is never
+   * hidden by a module switch. The server pins this to `true`; it is only kept for
+   * configuration compatibility.
+   */
   settings: boolean;
   insights: boolean;
 }

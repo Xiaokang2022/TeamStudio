@@ -65,6 +65,31 @@ const shot = (page, name, fullPage = false) =>
   await page.waitForTimeout(500);
   await shot(page, "about-dialog");
   await page.keyboard.press("Escape").catch(() => {});
+  await page.locator(".about-dialog").waitFor({ state: "detached" });
+  await page.waitForTimeout(300);
+
+  // Round 9: personal settings live on the personal home page as a tabbed panel
+  // (个人信息 / 个性化设置); the studio/team settings entry is back in the sidebar.
+  await page.goto(`${BASE}/#/profile`, { waitUntil: "networkidle" });
+  await page.waitForTimeout(900);
+  await page.locator(".profile-settings-tabs").waitFor();
+  const sidebarText = await page.locator(".sidebar").innerText();
+  if (!sidebarText.includes("工作室设置")) {
+    throw new Error("sidebar is missing the permission-gated settings entry");
+  }
+  const personalTabs = (
+    await page.locator(".profile-settings-tab").allInnerTexts()
+  ).map((value) => value.trim());
+  if (
+    !personalTabs.some((value) => value.includes("个人信息")) ||
+    !personalTabs.some((value) => value.includes("个性化设置"))
+  ) {
+    throw new Error(`profile personal settings tabs missing: ${personalTabs.join(" | ")}`);
+  }
+  await page.locator("#profile-settings").scrollIntoViewIfNeeded();
+  await page.waitForTimeout(400);
+  await shot(page, "profile-settings");
+  await page.waitForTimeout(250);
 
   await page.goto(`${BASE}/#/login`, { waitUntil: "networkidle" });
   await page.waitForTimeout(700);
@@ -72,7 +97,7 @@ const shot = (page, name, fullPage = false) =>
 
   await page.goto(`${BASE}/#/overview`, { waitUntil: "networkidle" });
   await page.waitForTimeout(800);
-  await page.locator(".team-switcher-button").click();
+  await page.locator(".sidebar-team-switcher .team-switcher-button").click();
   await page.waitForTimeout(350);
   await shot(page, "sidebar-team-switch");
   await page.keyboard.press("Escape").catch(() => {});

@@ -206,7 +206,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const isGuest = !me.authenticated || me.source === "guest";
   const canManageWorkspace = Boolean(permissions?.canManageWorkspace);
   const showGuestBanner = isGuest && config.features.showGuestBanner;
-  const settingsVisible = isAdmin && moduleVisible("settings");
+  // Round 9: the settings entry is permission-based and lives in the sidebar's 管理 group
+  // (not in the avatar dropdown, not hideable by a module switch).
+  const settingsNavLabel = isSuperAdmin ? "工作室设置" : "团队设置";
   const todayLabel = formatFullDate(data.serverTime || new Date().toISOString());
   const role = roleLabel(me.admin.role, me.isDeviceAdmin, isGuest, me.isSuperAdmin);
   const avatarColor = me.isDeviceAdmin ? "#0ea5e9" : me.avatarColor || "#7c3aed";
@@ -314,17 +316,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </div>
             );
           })}
-          {settingsVisible ? (
+          {isAdmin ? (
             <div className="nav-group">
               <div className="sidebar-label">管理</div>
               <button
                 className={cn("nav-item", route === "settings" && "active")}
                 onClick={() => navigate("settings")}
-                title={effectiveCollapsed ? "系统设置" : undefined}
-                aria-label="系统设置"
+                title={effectiveCollapsed ? settingsNavLabel : undefined}
+                aria-label={settingsNavLabel}
               >
                 <Settings2 size={18} />
-                <span>系统设置</span>
+                <span>{settingsNavLabel}</span>
                 {isSuperAdmin ? <ShieldCheck size={14} className="nav-shield" /> : null}
               </button>
             </div>
@@ -416,7 +418,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <div className="breadcrumb">
               <span>{currentTeam?.name ?? "团队工作室"}</span>
               <i>/</i>
-              <span className="breadcrumb-page">{PAGE_LABELS[route] ?? "团队工作室"}</span>
+              <span className="breadcrumb-page">
+                {route === "settings" ? settingsNavLabel : (PAGE_LABELS[route] ?? "团队工作室")}
+              </span>
             </div>
           </div>
           <div className="topbar-right">
@@ -556,17 +560,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                         }}
                       >
                         <FolderCog size={16} /> 工作区管理
-                      </button>
-                    ) : null}
-                    {isAdmin ? (
-                      <button
-                        className="menu-row"
-                        onClick={() => {
-                          setUserMenuOpen(false);
-                          navigate("settings");
-                        }}
-                      >
-                        <Settings2 size={16} /> 系统设置
                       </button>
                     ) : null}
                     <button

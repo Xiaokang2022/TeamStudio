@@ -106,6 +106,9 @@ def test_bootstrap_team_only_shape(client):
     for module in ("overview", "tasks", "calendar", "redblack", "links", "matrix", "announcements", "insights"):
         assert guest_modules[module] is True, module
 
+    # Round 9: the settings entry is permission-based, never hidden by a module flag.
+    assert payload["config"]["modules"]["settings"] is True
+
 
 def test_bootstrap_resolves_requested_team_and_falls_back(client):
     voyage = bootstrap(client, TEAM_VOYAGE)
@@ -263,6 +266,24 @@ def test_settings_save_and_public_projection(client):
 
     invalid = client.post("/api/settings/validate", json={"announcements": {"maxPinned": 9}})
     assert invalid.status_code == 422
+
+
+def test_settings_module_cannot_be_hidden(client):
+    """Round 9: the settings entry is permission-based and cannot be switched off."""
+    payload = _settings(client)
+    payload["modules"]["settings"] = False
+    payload["guestModules"]["settings"] = True
+    saved = _save_settings(client, payload)
+    assert saved["modules"]["settings"] is True
+    assert saved["guestModules"]["settings"] is False
+
+    boot = bootstrap(client)
+    assert boot["config"]["modules"]["settings"] is True
+    assert boot["config"]["guestModules"]["settings"] is False
+
+    # The schema keeps the compatibility field but never lets the settings module be hidden.
+    schema = data(client.get("/api/settings/schema"))["schema"]
+    assert "settings" in schema["$defs"]["ModuleFlags"]["properties"]
 
 
 def test_site_theme_mode_is_kept_but_limited(client):

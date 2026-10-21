@@ -14,6 +14,7 @@ const routes = [
   "links",
   "matrix",
   "announcements",
+  "profile",
   "settings?tab=appearance",
   "settings?tab=modules",
   "settings?tab=email",

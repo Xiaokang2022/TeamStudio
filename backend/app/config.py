@@ -73,9 +73,21 @@ class ModuleFlags(StrictModel):
     links: bool = True
     matrix: bool = True
     announcements: bool = True
-    settings: bool = True
+    # Round 9: the settings entry is permission-based (super admins / team admins) and
+    # can never be hidden by a module switch. The field stays for settings-file and API
+    # compatibility but is normalised back to ``True`` on every load/save.
+    settings: bool = Field(
+        default=True,
+        description="系统设置入口由账号权限决定，恒为开启；保留该字段仅为配置兼容。",
+    )
     tasks: bool = True
     insights: bool = True
+
+    @field_validator("settings")
+    @classmethod
+    def settings_always_enabled(cls, _value: bool) -> bool:
+        """The settings module must never be switchable off (round-9 requirement)."""
+        return True
 
 
 class GuestModuleFlags(StrictModel):
@@ -93,7 +105,13 @@ class GuestModuleFlags(StrictModel):
     announcements: bool = True
     tasks: bool = True
     insights: bool = True
+    # Guests can never reach the settings module: the entry is permission-based.
     settings: bool = False
+
+    @field_validator("settings")
+    @classmethod
+    def settings_never_for_guests(cls, _value: bool) -> bool:
+        return False
 
 
 class AnnouncementSettings(StrictModel):
@@ -388,9 +406,17 @@ def migrate_legacy_settings(
                 )
                 for key, default in guest_defaults.items()
             }
+            # The settings module is permission-based and never guest-readable.
+            cleaned_flags["settings"] = False
             if cleaned_flags != guest_modules:
                 raw["guestModules"] = cleaned_flags
                 changed = True
+
+        # Round 9: ``modules.settings`` is a compatibility field only; the settings entry
+        # is permission-based and must never be hideable. Normalise old files back to true.
+        if isinstance(modules, dict) and modules.get("settings") is not True:
+            modules["settings"] = True
+            changed = True
 
         site = raw.get("site")
         if isinstance(site, dict):

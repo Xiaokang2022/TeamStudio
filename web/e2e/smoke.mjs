@@ -1,16 +1,23 @@
 /**
- * Round-8 acceptance smoke test (team-only UI).
+ * Round-9 acceptance smoke test (sidebar team switcher + permission-only settings entry).
  *
  * Covers:
  *   1. the shell has no 「浏览视角」/「开发组切换」 and no `.scope-*` / `.group-*` UI;
- *   2. the team switcher changes the whole workspace (overview members/team breadcrumb);
+ *   2. the sidebar team switcher changes the whole workspace (overview members/breadcrumb);
+ *      the topbar has no team switcher;
  *   3. member cards are name-sorted, have no member status, and the drawer opens;
  *   4. theme preference: follows system by default, 3-way menu, persisted in
  *      `teamstudio.theme.preference`, legacy `teamstudio.theme` migrated away;
  *   5. calendar todo CRUD and announcement CRUD still work on team-scoped APIs;
  *   6. the login page explains the deployment-device Admin and no longer restricts
  *      unactivated accounts to activation links;
- *   7. settings expose per-module guest switches (`guestModules`) and persist them.
+ *   7. the settings entry lives in the sidebar's 「管理」 group (permission-gated:
+ *      「工作室设置」 for super admins / 「团队设置」 for team admins), is absent from the
+ *      avatar menu, and cannot be hidden by module switches (「模块展示」only has the 8
+ *      regular module toggles);
+ *   8. the personal home page carries the tabbed personal settings panel
+ *      (个人信息 / 个性化设置);
+ *   9. settings expose per-module guest switches (`guestModules`) and persist them.
  *
  * Requirements: `npm run build --prefix web` and a running server
  * (`.\scripts\start.ps1 -NoBrowser`, backend serves web/dist), or a Vite dev server.
@@ -108,6 +115,31 @@ try {
   assert.ok(!sidebarText.includes("浏览视角"), "sidebar must not contain 浏览视角");
   assert.ok(!sidebarText.includes("开发组"), "sidebar must not contain 开发组");
   assert.equal(await page.locator(".scope-switcher, .group-switcher, .scope-option").count(), 0);
+  // Round 9: the settings entry is permission-gated and lives in the sidebar's 「管理」 group.
+  assert.ok(!sidebarText.includes("系统设置"), "sidebar must not use the legacy 系统设置 copy");
+  const sidebarLabels = (await page.locator(".sidebar .sidebar-label").allInnerTexts()).map((value) =>
+    value.trim(),
+  );
+  assert.ok(sidebarLabels.includes("管理"), `sidebar exposes the 管理 group, got ${sidebarLabels.join("/")}`);
+  const settingsNav = page.locator(".sidebar .nav-item").filter({ hasText: /工作室设置|团队设置/ });
+  assert.equal(await settingsNav.count(), 1, "sidebar exposes exactly one settings nav item for the admin");
+  assert.equal((await settingsNav.innerText()).trim(), "工作室设置", "device admin sees 工作室设置");
+  assert.equal(
+    await settingsNav.locator(".nav-shield").count(),
+    1,
+    "super-admin settings nav item carries the shield mark",
+  );
+  // The team switcher stays in the sidebar footer (bottom-left); the topbar has none.
+  assert.equal(
+    await page.locator(".topbar-team-switcher, .topbar-team-button").count(),
+    0,
+    "topbar no longer holds a team switcher",
+  );
+  assert.equal(
+    await page.locator(".sidebar-team-switcher .team-switcher-button").count(),
+    1,
+    "sidebar keeps the team switcher",
+  );
 
   // Legacy theme key was migrated: preference stored, old key deleted, dark applied.
   const initialPreference = await page.evaluate(() =>
@@ -121,24 +153,63 @@ try {
   );
   assert.equal(await page.locator("html").getAttribute("data-theme"), "dark");
 
-  await page.locator(".sidebar-team-switcher .team-switcher-button").click();
-  await page.locator(".team-popover").waitFor();
-  await page
-    .locator(".team-popover .team-option")
-    .filter({ hasText: "远航数据团队" })
-    .click();
-  await waitForText(".breadcrumb span", "远航数据团队");
+  // Team switching stays in the sidebar footer (bottom-left) and opens an upward popover;
+  // the breadcrumb keeps showing 「团队名 / 页面名」.
+  const teamButton = page.locator(".sidebar-team-switcher .team-switcher-button");
+  assert.equal(await teamButton.locator(".team-badge").count(), 1, "sidebar team button has a badge");
+  await teamButton.click();
+  const teamPopover = page.locator(".popover.team-popover.team-popover-up");
+  await teamPopover.waitFor();
+  const currentTeamName = (
+    await page.locator(".sidebar-team-switcher .team-copy strong").innerText()
+  ).trim();
+  assert.equal(
+    await teamPopover
+      .locator(".team-option")
+      .filter({ hasText: currentTeamName })
+      .locator(".team-current")
+      .count(),
+    1,
+    "the current team is marked in the sidebar popover",
+  );
+  assert.ok(
+    (await teamPopover.locator(".popover-note").innerText()).includes("数据按团队隔离"),
+    "sidebar team popover explains team data isolation",
+  );
+  await teamPopover.locator(".team-option").filter({ hasText: "远航数据团队" }).click();
+  await waitForText(".sidebar-team-switcher .team-copy strong", "远航数据团队");
   await waitForText(".team-member-count", "6 位成员");
+  const breadcrumbText = (await page.locator(".breadcrumb").innerText()).replace(/\s+/g, " ").trim();
+  assert.ok(breadcrumbText.includes("远航数据团队"), `breadcrumb shows the team name, got "${breadcrumbText}"`);
+  assert.ok(breadcrumbText.includes("团队概览"), `breadcrumb shows the page name, got "${breadcrumbText}"`);
   // The card list is pinyin-sorted (方觉/顾行/韩晓/贾宁/李沐/裴然), so wait for the count.
   await page.waitForFunction(() => document.querySelectorAll(".ov-member-card").length === 6);
   assert.equal(await page.locator(".ov-member-card").count(), 6, "voyage team has 6 members");
 
-  await page.locator(".sidebar-team-switcher .team-switcher-button").click();
-  await page.locator(".team-popover .team-option").filter({ hasText: "极光产品团队" }).click();
-  await waitForText(".breadcrumb span", "极光产品团队");
+  await teamButton.click();
+  await teamPopover.locator(".team-option").filter({ hasText: "极光产品团队" }).click();
+  await waitForText(".sidebar-team-switcher .team-copy strong", "极光产品团队");
   await waitForText(".team-member-count", "12 位成员");
   await page.waitForFunction(() => document.querySelectorAll(".ov-member-card").length === 12);
   assert.equal(await page.locator(".ov-member-card").count(), 12, "aurora team has 12 members");
+
+  // ---------------------------------------------------------------- 1b. settings entry
+  // Round 9: the settings entry is permission-gated, lives in the sidebar's 管理 group and is
+  // deliberately absent from the avatar dropdown (personal settings live on the profile page).
+  await page.locator(".user-chip").click();
+  await page.locator(".user-popover").waitFor();
+  assert.equal(
+    await page.locator(".user-popover .menu-row").filter({ hasText: /工作室设置|团队设置|系统设置/ }).count(),
+    0,
+    "avatar menu no longer exposes the studio/team settings entry",
+  );
+  await page.locator(".user-chip").click();
+  await page.locator(".user-popover").waitFor({ state: "detached" });
+  await settingsNav.click();
+  await page.locator(".settings-tabs").waitFor();
+  assert.equal(new URL(page.url()).hash, "#/settings", "sidebar settings entry opens the settings page");
+  await goto("overview");
+  await page.locator(".ov-hero").waitFor();
 
   // ---------------------------------------------------------------- 2. member cards / drawer
   const names = (await page.locator(".ov-member-card h3").allInnerTexts()).map((value) =>
@@ -226,27 +297,34 @@ try {
   await page.locator(".modal-panel").getByRole("button", { name: "删除公告", exact: true }).click();
   await page.getByText("公告已删除").waitFor();
 
-  // ---------------------------------------------------------------- 6. profile personalization
+  // ---------------------------------------------------------------- 6. profile personal settings
   await goto("profile");
-  await page.waitForTimeout(600);
+  await page.locator(".profile-settings-tabs").waitFor();
+  await page.waitForTimeout(300);
   const profileText = await page.locator(".profile-page").innerText();
   assert.ok(!profileText.includes("开发组"), "profile has no group concept");
-  if (await page.getByText("个性化设置").count()) {
-    // The personal theme control lives on the profile page (requirement #7).
-    await page.locator(".profile-page").getByRole("button", { name: "深色", exact: true }).click();
-    await page.waitForFunction(
-      () => localStorage.getItem("teamstudio.theme.preference") === "dark",
-    );
-    await page
-      .locator(".profile-page")
-      .getByRole("button", { name: "跟随系统", exact: true })
-      .click();
-    await page.waitForFunction(
-      () => localStorage.getItem("teamstudio.theme.preference") === "auto",
-    );
-  } else {
-    console.log("note: profile personalization card not found yet (frontend-pages pending)");
-  }
+  // Round 9: personal settings use a settings-style left rail: 个人信息 then 个性化设置.
+  const profileTabs = (await page.locator(".profile-settings-tab").allInnerTexts()).map((value) =>
+    value.trim(),
+  );
+  assert.equal(profileTabs.length, 2, `personal settings exposes two tabs, got ${profileTabs.join(" | ")}`);
+  assert.ok(profileTabs[0].includes("个人信息"), "first personal-settings tab is 个人信息");
+  assert.ok(profileTabs[1].includes("个性化设置"), "second personal-settings tab is 个性化设置");
+  assert.ok(await page.locator("#profile-name").isVisible(), "个人信息 tab shows the profile fields");
+  await page.locator(".profile-settings-tab").filter({ hasText: "个性化设置" }).click();
+  await page.locator(".profile-personalization-body .profile-theme-switch").waitFor();
+  // The personal theme control lives on the profile page (requirement #7).
+  await page.locator(".profile-page").getByRole("button", { name: "深色", exact: true }).click();
+  await page.waitForFunction(
+    () => localStorage.getItem("teamstudio.theme.preference") === "dark",
+  );
+  await page
+    .locator(".profile-page")
+    .getByRole("button", { name: "跟随系统", exact: true })
+    .click();
+  await page.waitForFunction(
+    () => localStorage.getItem("teamstudio.theme.preference") === "auto",
+  );
 
   // ---------------------------------------------------------------- 7. login page copy
   // Sign the browser context out (node-side fetch has its own cookie jar, so the logout
@@ -269,6 +347,15 @@ try {
   // Round 8 removes the "unactivated accounts can only use the activation link" hint.
   assert.ok(!loginText.includes("只能走激活链接"), "no unactivated-only activation hint");
   assert.ok(await page.locator(".login-device-entry").isVisible());
+
+  // Round 9: the settings route itself stays permission-gated — a guest gets AccessDenied and
+  // no module switch can open it.
+  await goto("settings");
+  await page.getByText("仅管理员可访问").first().waitFor();
+  assert.ok(
+    (await page.locator(".state-card").first().innerText()).includes("仅管理员可访问"),
+    "guests cannot open the settings route",
+  );
 
   // ---------------------------------------------------------------- 8. guest module switches
   await page.evaluate(async () => {
@@ -305,6 +392,13 @@ try {
     .locator("section.settings-card")
     .filter({ hasText: "模块展示" })
     .first();
+  // Round 9: settings can no longer be hidden by a module switch, so the card lists only the
+  // 8 regular modules and no 「工作室设置 / 系统设置」 toggle.
+  const moduleToggles = moduleCard.locator(".settings-module-toggle");
+  assert.equal(await moduleToggles.count(), 8, "模块展示 card lists exactly the 8 regular modules");
+  const moduleToggleCopy = (await moduleToggles.allInnerTexts()).join(" ");
+  assert.ok(!moduleToggleCopy.includes("工作室设置"), "模块展示 card has no 工作室设置 toggle");
+  assert.ok(!moduleToggleCopy.includes("系统设置"), "模块展示 card has no 系统设置 toggle");
   const moduleRow = moduleCard
     .locator(".settings-module-toggle")
     .filter({ hasText: "任务总览" })
@@ -319,6 +413,13 @@ try {
     .locator("section.settings-card")
     .filter({ hasText: "访客可访问模块" })
     .first();
+  // The guest card never offered the settings module; round 9 keeps that and the 8 regular
+  // modules stay individually switchable.
+  assert.equal(
+    await guestCard.locator(".settings-module-toggle").count(),
+    8,
+    "访客可访问模块 card keeps the 8 regular modules",
+  );
   const guestRow = guestCard
     .locator(".settings-module-toggle")
     .filter({ hasText: "任务总览" })
@@ -346,9 +447,10 @@ try {
   );
   console.log("E2E_SMOKE_PASS");
   console.log(
-    "checked: no scope/group UI, team switch, name-sorted members, avatar+no-status cards/drawer, " +
-      "theme preference (auto/light/dark + legacy migration), calendar todo CRUD, announcement CRUD, " +
-      "profile personalization, login device-admin copy, guestModules switch roundtrip",
+    "checked: no scope/group UI, sidebar team switch (breadcrumb keeps team/page names), name-sorted " +
+      "members, avatar+no-status cards/drawer, theme preference (auto/light/dark + legacy migration), " +
+      "calendar todo CRUD, announcement CRUD, tabbed profile personal settings, login device-admin copy, " +
+      "sidebar-only settings entry (not in the avatar menu, not a hideable module), guestModules roundtrip",
   );
 } finally {
   await cleanup();

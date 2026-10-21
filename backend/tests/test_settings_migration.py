@@ -137,6 +137,29 @@ def test_invalid_guest_module_values_fall_back_to_defaults():
     assert clean["guestModules"]["settings"] is False
 
 
+def test_settings_module_flag_is_forced_on():
+    """Round 9: the settings entry is permission-based and can never be hidden."""
+    raw = _legacy_v2_payload()
+    raw["modules"]["settings"] = False
+    raw["guestModules"] = {"settings": True, "tasks": False}
+    clean, changed = migrate_legacy_settings(raw)
+    assert changed is True
+    assert clean["modules"]["settings"] is True
+    assert clean["guestModules"]["settings"] is False
+    validated = Settings.model_validate(clean)
+    assert validated.modules.settings is True
+    assert validated.guestModules.settings is False
+
+    # API-style validation (no legacy sanitisation) normalises the same way.
+    api_clean, _ = migrate_legacy_settings(
+        {"modules": {"settings": False}, "guestModules": {"settings": True}},
+        sanitize_legacy=False,
+    )
+    api_validated = Settings.model_validate(api_clean)
+    assert api_validated.modules.settings is True
+    assert api_validated.guestModules.settings is False
+
+
 # --------------------------------------------------------------------------- file based service
 
 

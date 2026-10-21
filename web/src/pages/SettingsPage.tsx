@@ -169,7 +169,6 @@ const MODULE_META: {
   { key: "announcements", label: "公告栏", description: "团队公告与置顶消息。", icon: Megaphone },
   { key: "matrix", label: "责任田矩阵", description: "职责分工、负责人与联络方式。", icon: Waypoints },
   { key: "links", label: "常用链接", description: "团队常用工具与文档入口。", icon: Link2 },
-  { key: "settings", label: "工作室设置", description: "关闭后导航隐藏，超级管理员仍可直接访问本页。", icon: Settings2 },
 ];
 
 const FIELD_LABELS: Record<string, string> = {
@@ -237,6 +236,7 @@ const FIELD_LABELS: Record<string, string> = {
   "features.auditLog": "审计日志",
   "features.allowGuestTodoCreate": "访客创建待办",
   modules: "模块展示",
+  "modules.settings": "工作室设置入口（由权限决定，恒为开启）",
   guestModules: "访客可访问模块",
   "adminWhitelist.ip": "IP / CIDR",
   "adminWhitelist.id": "SSO 标识 / 邮箱",
@@ -835,7 +835,7 @@ function ModulesSection({
     <div className="settings-sections">
       <SettingsCard
         title="模块展示"
-        description="关闭的模块会从导航中隐藏；直接访问链接对管理员仍然可用，可随时重新开启。"
+        description="关闭的模块会从导航中隐藏；直接访问链接对管理员仍然可用，可随时重新开启。设置入口不在此列，由账号权限决定。"
         icon={<LayoutGrid size={18} />}
       >
         <div className="settings-toggle-grid">
@@ -860,6 +860,10 @@ function ModulesSection({
             );
           })}
         </div>
+        <p className="settings-note">
+          <Settings2 size={13} />
+          设置入口由账号权限决定：超级管理员在左侧「管理」分组看到「工作室设置」，团队管理员看到「团队设置」，普通成员与访客不可见。该入口不能被模块开关隐藏，服务端也会把「设置模块」恒定为开启。
+        </p>
       </SettingsCard>
 
       <SettingsCard
@@ -869,7 +873,7 @@ function ModulesSection({
         extra={<span className="badge badge-gray">仅访客生效</span>}
       >
         <div className="settings-toggle-grid">
-          {MODULE_META.filter((module) => module.key !== "settings").map((module) => {
+          {MODULE_META.map((module) => {
             const Icon = module.icon;
             const moduleEnabled = draft.modules[module.key];
             return (
@@ -4025,9 +4029,9 @@ function DomainSettingsPage() {
       <header className="page-header settings-header">
         <div className="page-heading">
           <span className="eyebrow">
-            <Building2 size={13} /> WORKSPACE SETTINGS
+            <Building2 size={13} /> TEAM SETTINGS
           </span>
-          <h1 className="page-title">工作区设置</h1>
+          <h1 className="page-title">团队设置</h1>
           <p className="page-subtitle">
             管理你被授权团队的团队信息，保存后立即生效。团队是唯一组织单位，数据按团队隔离；站点级设置仅超级管理员可访问。
           </p>
@@ -4130,6 +4134,8 @@ function SiteSettingsPage() {
       }
       // 系统设置模块永远不对访客开放：无论旧配置残留什么值都强制关闭。
       result.settings.guestModules.settings = false;
+      // 设置入口由权限决定，不允许被模块开关隐藏（服务端同样恒定为 true）。
+      result.settings.modules.settings = true;
       setSaved(result.settings);
       setDraft(cloneSettings(result.settings));
       setMeta(result.meta);
@@ -4365,6 +4371,7 @@ function SiteSettingsPage() {
         result.settings.guestModules = { ...result.settings.modules, settings: false };
       }
       result.settings.guestModules.settings = false;
+      result.settings.modules.settings = true;
       setSaved(result.settings);
       setDraft(cloneSettings(result.settings));
       setMeta(result.meta);
@@ -4810,7 +4817,7 @@ function SiteSettingsPage() {
             );
           })}
           <p className="settings-tabs-note">
-            <ShieldCheck size={13} /> 站点级设置仅超级管理员可修改；团队管理员只能在「工作区设置」中管理自己的团队范围。
+            <ShieldCheck size={13} /> 站点级设置仅超级管理员可修改；团队管理员只能在「团队设置」中管理自己的团队范围。
           </p>
         </nav>
 
