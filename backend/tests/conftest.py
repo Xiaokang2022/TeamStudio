@@ -55,7 +55,7 @@ def client():
     from backend.app.config import DEFAULT_SETTINGS, settings_service
     from backend.app.db import DB_PATH, init_db
     from backend.app.main import app
-    from backend.app.seed import seed_if_empty
+    from backend.app.seed import seed_demo_data
 
     if DB_PATH.exists():
         DB_PATH.unlink()
@@ -65,7 +65,7 @@ def client():
             sidecar.unlink()
     settings_service.save(DEFAULT_SETTINGS.model_dump(mode="json"))
     init_db()
-    seed_if_empty()
+    seed_demo_data()
     with TestClient(app, client=("127.0.0.1", 51000), raise_server_exceptions=False) as test_client:
         yield test_client
 
@@ -77,7 +77,7 @@ def guest_client():
     from backend.app.config import DEFAULT_SETTINGS, settings_service
     from backend.app.db import DB_PATH, init_db
     from backend.app.main import app
-    from backend.app.seed import seed_if_empty
+    from backend.app.seed import seed_demo_data
 
     if DB_PATH.exists():
         DB_PATH.unlink()
@@ -87,6 +87,6 @@ def guest_client():
             sidecar.unlink()
     settings_service.save(DEFAULT_SETTINGS.model_dump(mode="json"))
     init_db()
-    seed_if_empty()
+    seed_demo_data()
     with TestClient(app, client=("10.20.30.40", 51001), raise_server_exceptions=False) as test_client:
         yield test_client

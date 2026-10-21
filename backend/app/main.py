@@ -15,7 +15,6 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import FRONTEND_DIST, UPLOAD_DIR, settings_service
 from .db import init_db
-from .seed import seed_if_empty, seed_member_tasks_if_empty, seed_users_if_empty
 from .routers import auth as auth_router
 from .routers import bootstrap as bootstrap_router
 from .routers import email as email_router
@@ -43,17 +42,12 @@ logger = logging.getLogger("teamstudio")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Startup must never create demo data: a factory-reset deployment has to stay empty
+    # after a restart. Demo teams/members/accounts come exclusively from the explicit
+    # operator script ``scripts/seed-demo.ps1`` (``python -m backend.app.seed``).
     init_db()
-    seeded = seed_if_empty()
-    seeded_tasks = seed_member_tasks_if_empty()
-    seeded_accounts = seed_users_if_empty()
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    logger.info(
-        "TeamStudio started (seeded=%s, memberTasksSeeded=%s, accountsSeeded=%s)",
-        seeded,
-        seeded_tasks,
-        seeded_accounts,
-    )
+    logger.info("TeamStudio started (database ready; demo data is only created by the seed script)")
     yield
 
 

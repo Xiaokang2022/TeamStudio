@@ -27,5 +27,6 @@ if ($LASTEXITCODE -ne 0) { throw "前端构建失败" }
 
 Write-Host ""
 Write-Host "安装与构建完成。" -ForegroundColor Green
+Write-Host "演示数据（可选）： .\scripts\seed-demo.ps1" -ForegroundColor DarkGray
 Write-Host "启动命令： .\scripts\start.ps1" -ForegroundColor Cyan
 Write-Host "浏览器访问： http://127.0.0.1:8000" -ForegroundColor Cyan

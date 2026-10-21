@@ -424,29 +424,38 @@ def get_user_profile(user_id: str, user: CurrentUser = Depends(require_read_acce
         return ok(build_profile(conn, user, account))
 
 
-def _avatar_bytes(upload: UploadFile, content: bytes) -> str:
-    kind = (upload.content_type or "").lower()
-    signatures = {
-        "image/png": (b"\x89PNG\r\n\x1a\n", ".png"),
-        "image/jpeg": (b"\xff\xd8\xff", ".jpg"),
-        "image/webp": (b"RIFF", ".webp"),
-        "image/gif": (b"GIF8", ".gif"),
-    }
+def _detect_avatar_format(content: bytes) -> tuple[str, str] | None:
+    """Detect the avatar format from magic bytes only.
+
+    The browser-declared ``UploadFile.content_type`` and the filename are *not*
+    trustworthy: Windows / some browsers report genuine PNGs as ``image/x-png``,
+    ``application/octet-stream`` or with an empty type. File content is the single
+    source of truth, and the returned extension is derived from that detection.
+    """
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png", ".png"
+    if content.startswith(b"\xff\xd8\xff"):
+        return "jpeg", ".jpg"
+    if content.startswith(b"GIF87a") or content.startswith(b"GIF89a"):
+        return "gif", ".gif"
+    if len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "webp", ".webp"
+    return None
+
+
+def _avatar_bytes(content: bytes) -> str:
     if len(content) > MAX_AVATAR_BYTES:
         raise fail(413, "头像图片不能超过 2MB", "avatar_too_large")
     if not content:
         raise fail(422, "头像文件为空", "avatar_empty")
-    if kind not in signatures:
+    detected = _detect_avatar_format(content)
+    if detected is None:
         raise fail(
             422,
             "头像仅支持 PNG / JPEG / WebP / GIF 格式",
             "avatar_type_unsupported",
         )
-    signature, extension = signatures[kind]
-    if not content.startswith(signature):
-        raise fail(422, "头像文件内容与格式不匹配", "avatar_type_unsupported")
-    if kind == "image/webp" and content[8:12] != b"WEBP":
-        raise fail(422, "头像文件内容与格式不匹配", "avatar_type_unsupported")
+    _kind, extension = detected
     AVATAR_DIR.mkdir(parents=True, exist_ok=True)
     filename = f"{secrets.token_hex(12)}{extension}"
     (AVATAR_DIR / filename).write_bytes(content)
@@ -472,7 +481,7 @@ def upload_my_avatar(
     if user.is_device_admin:
         raise fail(403, "系统内置管理员没有个人账号头像", "device_admin_profile")
     content = file.file.read()
-    avatar_url = _avatar_bytes(file, content)
+    avatar_url = _avatar_bytes(content)
     with db() as conn:
         account = _load_account(conn, user.id)
         if not account:

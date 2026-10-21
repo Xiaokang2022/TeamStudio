@@ -1,11 +1,19 @@
-"""Idempotent demo seed data for TeamStudio."""
+"""Idempotent demo seed data for TeamStudio.
+
+The FastAPI application never creates demo data on startup: a fresh or factory-reset
+deployment stays empty until an operator explicitly runs
+``scripts/seed-demo.ps1`` (``python -m backend.app.seed``), which calls
+:func:`seed_demo_data`. The lower-level helpers remain importable for tests and
+maintenance scripts.
+"""
 
 from __future__ import annotations
 
+import argparse
 import calendar
 from datetime import date, datetime, timedelta
 
-from .db import db, get_meta, json_dumps, new_id, now_iso, rows, scalar
+from .db import DB_PATH, db, get_meta, init_db, json_dumps, new_id, now_iso, rows, scalar
 
 TEAMS = [
     {
@@ -221,7 +229,7 @@ def _future_day(base: date, offset: int) -> str:
     return (base + timedelta(days=offset)).isoformat()
 
 
-def seed_if_empty() -> bool:
+def seed_if_empty(force: bool = False) -> bool:
     """Populate the demo workspace once for a brand-new database.
 
     An intentional factory reset (``POST /api/system/reset``) empties every table and
@@ -229,9 +237,14 @@ def seed_if_empty() -> bool:
     decision: the deployment must stay totally empty (default settings, no demo teams,
     members or accounts) until its operator creates real data again, so the seeder
     refuses to run while the marker exists — including after every restart.
+
+    ``force=True`` deliberately bypasses that ``factoryResetAt`` guard. It is reserved
+    for the explicit operator entrypoint (:func:`seed_demo_data`, i.e.
+    ``scripts/seed-demo.ps1``): process startup never calls this function, so a normal
+    restart can never refill an intentionally reset deployment.
     """
     with db() as conn:
-        if get_meta(conn, "factoryResetAt") is not None:
+        if not force and get_meta(conn, "factoryResetAt") is not None:
             return False
         if scalar(conn, "SELECT COUNT(*) FROM teams", default=0):
             return False
@@ -986,3 +999,142 @@ def seed_member_tasks_if_empty() -> int:
                 )
                 inserted += 1
         return inserted
+
+
+# --------------------------------------------------------------------------- explicit seed entry
+#
+# Demo data is no longer created by the FastAPI lifespan. These helpers are the only
+# supported way to (re)create it, and they are intentionally operator-facing: the
+# deployment starts empty, stays empty across restarts, and only gains demo content
+# when somebody explicitly runs the seed script.
+
+_DEMO_COUNT_TABLES: tuple[tuple[str, str], ...] = (
+    ("teams", "teams"),
+    ("groups", "groups"),
+    ("members", "members"),
+    ("works", "works"),
+    ("todos", "todos"),
+    ("memberTasks", "member_tasks"),
+    ("boards", "redblack_boards"),
+    ("links", "links"),
+    ("matrix", "matrix_areas"),
+    ("announcements", "announcements"),
+    ("accounts", "users"),
+)
+
+_COUNT_LABELS: dict[str, str] = {
+    "teams": "团队",
+    "groups": "开发组",
+    "members": "成员",
+    "works": "工作条目",
+    "todos": "待办",
+    "memberTasks": "成员任务",
+    "boards": "红黑榜看板",
+    "links": "常用链接",
+    "matrix": "责任田",
+    "announcements": "公告",
+    "accounts": "账号",
+}
+
+
+def _demo_counts() -> dict[str, int]:
+    """Current row counts of the demo-data tables, keyed for :func:`seed_demo_data`."""
+    with db() as conn:
+        return {
+            key: int(scalar(conn, f"SELECT COUNT(*) FROM {table}", default=0) or 0)
+            for key, table in _DEMO_COUNT_TABLES
+        }
+
+
+def seed_demo_data(*, force: bool = True) -> dict:
+    """Explicitly create the demo workspace, member task ledger and demo accounts.
+
+    This is the only supported way to (re)create demo data: the application lifespan
+    calls :func:`init_db` but never seeds, so a fresh or factory-reset deployment stays
+    empty after a restart until an operator runs this (via ``scripts/seed-demo.ps1`` or
+    ``python -m backend.app.seed``).
+
+    ``force`` defaults to ``True`` because calling this function is itself an explicit
+    operator decision; pass ``force=False`` (CLI: ``--no-force``) to respect the
+    ``factoryResetAt`` marker written by the factory reset. The function is idempotent:
+    on an already populated database every step no-ops, no duplicate row is inserted and
+    ``seeded`` / ``memberTasks`` / ``accounts`` are ``False`` / ``0`` / ``0``.
+
+    Returns ``{"seeded": bool, "memberTasks": int, "accounts": int, "counts": {...}}``
+    where the two integers are the rows added by *this* call.
+    """
+    init_db()
+    with db() as conn:
+        accounts_before = int(scalar(conn, "SELECT COUNT(*) FROM users", default=0) or 0)
+    seeded = seed_if_empty(force=force)
+    member_tasks = seed_member_tasks_if_empty()
+    # Backfill demo accounts for deployments whose users table is still empty. On a
+    # brand-new database seed_if_empty() already created them, so this is a no-op.
+    seed_users_if_empty()
+    counts = _demo_counts()
+    return {
+        "seeded": seeded,
+        "memberTasks": member_tasks,
+        "accounts": counts["accounts"] - accounts_before,
+        "counts": counts,
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI: ``python -m backend.app.seed [--no-force]``.
+
+    Writes the demo data explicitly and prints a Chinese summary. Always exits 0 on a
+    successful (possibly no-op) run, 1 when the database cannot be written.
+    """
+    parser = argparse.ArgumentParser(
+        prog="python -m backend.app.seed",
+        description="为 TeamStudio 显式写入演示数据（服务启动不会自动写入）。",
+    )
+    parser.add_argument(
+        "--no-force",
+        action="store_true",
+        help="尊重系统重置标记：数据库存在 factoryResetAt 时不写入演示数据。",
+    )
+    args = parser.parse_args(argv)
+    force = not args.no_force
+
+    print("TeamStudio 演示数据脚本")
+    print(f"  数据库：{DB_PATH}")
+    print(f"  模式：  {'强制写入（忽略重置标记）' if force else '尊重系统重置标记（--no-force）'}")
+    print("  提示：  请先停止正在运行的服务再执行本脚本；脚本可重复运行（幂等）。")
+    print("")
+
+    try:
+        summary = seed_demo_data(force=force)
+    except Exception as exc:  # pragma: no cover - operator-facing failure path
+        print(f"[失败] 演示数据写入失败：{exc}")
+        return 1
+
+    counts = summary["counts"]
+    if summary["seeded"]:
+        print("[完成] 已写入 TeamStudio 演示数据。")
+    elif summary["memberTasks"] or summary["accounts"]:
+        print("[完成] 演示数据已存在，本次只补齐了缺失的数据（未重复写入）。")
+    else:
+        if counts["teams"]:
+            print("[提示] 演示数据已存在，本次没有做任何变更（脚本幂等）。")
+        else:
+            with db() as conn:
+                reset_at = get_meta(conn, "factoryResetAt")
+            if reset_at is not None and not force:
+                print("[跳过] 检测到系统重置标记 factoryResetAt，--no-force 模式不会写入演示数据。")
+                print("       如需恢复演示数据，请去掉 --no-force 后重新运行。")
+            else:
+                print("[提示] 没有需要写入的演示数据，本次未做变更。")
+
+    print("")
+    print("当前数据量：")
+    for key, label in _COUNT_LABELS.items():
+        print(f"  {label}：{counts[key]}")
+    print("")
+    print(f"本次新增：成员任务 {summary['memberTasks']} 条，演示账号 {summary['accounts']} 个。")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

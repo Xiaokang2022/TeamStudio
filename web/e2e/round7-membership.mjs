@@ -187,6 +187,25 @@ async function healthReachable() {
   }
 }
 
+/**
+ * 服务启动不再自动写入演示数据，自包含实例需要显式执行种子脚本。
+ * 脚本幂等：数据目录已有演示数据时不会重复写入。
+ */
+function seedDemoData() {
+  const result = spawnSync(
+    PYTHON,
+    ["-m", "backend.app.seed"],
+    {
+      cwd: REPO_ROOT,
+      env: { ...process.env, TEAMSTUDIO_DATA_DIR: DATA_DIR },
+      stdio: "inherit",
+      windowsHide: true,
+    },
+  );
+  if (result.error) throw new Error(`演示数据脚本启动失败：${result.error.message}`);
+  if (result.status !== 0) throw new Error(`演示数据脚本执行失败（退出码 ${result.status}）`);
+}
+
 async function startServer() {
   if (EXTERNAL_SERVER) {
     if (!(await healthReachable())) {
@@ -197,6 +216,8 @@ async function startServer() {
   if (await healthReachable()) {
     throw new Error(`${BASE} 已有服务在运行；round7 E2E 需要独占的一次性实例（可换 QA_PORT 或先停止旧服务）`);
   }
+  // 启动后端前显式写入演示数据（服务启动不再自动播种）。
+  seedDemoData();
   logFd = fs.openSync(SERVER_LOG, "a");
   // stdio 用文件 fd（不是管道）：既保留诊断日志，又避开 Windows 受限沙箱下管道 EPERM 的问题。
   server = spawn(

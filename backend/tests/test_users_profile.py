@@ -14,6 +14,31 @@ PNG_BYTES = (
     b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01"
     b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
 )
+GIF_BYTES = (
+    b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04"
+    b"\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D"
+    b"\x01\x00;"
+)
+JPEG_BYTES = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xff\xd9"
+# Minimal valid 1x1 lossless WebP (RIFF....WEBPVP8L, 34 bytes).
+WEBP_BYTES = (
+    b"RIFF\x1a\x00\x00\x00WEBPVP8L\x0d\x00\x00\x00\x2f\x00\x00\x00"
+    b"\x10\x07\x10\x11\x11\x88\x88\xfe\x07\x00"
+)
+MAX_AVATAR_BYTES = 2 * 1024 * 1024
+
+
+def _upload_avatar(
+    client: TestClient,
+    data: bytes,
+    *,
+    filename: str = "avatar.png",
+    content_type: str = "image/png",
+):
+    return client.post(
+        "/api/profile/avatar",
+        files={"file": (filename, data, content_type)},
+    )
 
 
 def _create_account(
@@ -215,6 +240,58 @@ def test_avatar_upload_and_removal(guest_client):
         files={"file": ("notes.txt", b"not an image", "text/plain")},
     )
     assert bad.status_code == 422
+
+
+def test_avatar_upload_trusts_content_not_declared_mime(guest_client):
+    """File content (magic bytes) is authoritative; the browser MIME type is not.
+
+    Windows / some browsers report genuine PNGs as ``image/x-png``,
+    ``application/octet-stream`` or with an empty content type, so accepting on
+    the declared MIME type would reject valid avatars.
+    """
+    _create_account("avatar.uploader@corp.example")
+    _sign_in(guest_client, "avatar.uploader", "avatar.uploader@corp.example")
+
+    for declared in ("image/x-png", "application/octet-stream", "", "image/gif"):
+        uploaded = _upload_avatar(guest_client, PNG_BYTES, content_type=declared)
+        assert uploaded.status_code == 200, declared
+        avatar = uploaded.json()["data"]["avatar"]
+        # The stored extension follows the detected PNG content, not the declaration.
+        assert avatar.endswith(".png"), declared
+        served = guest_client.get(avatar)
+        assert served.status_code == 200, declared
+        assert served.content == PNG_BYTES
+
+    # Genuine non-PNG images are detected from content and stored with their own suffix.
+    for data, extension in ((GIF_BYTES, ".gif"), (JPEG_BYTES, ".jpg"), (WEBP_BYTES, ".webp")):
+        uploaded = _upload_avatar(
+            guest_client, data, filename="payload.bin", content_type="application/octet-stream"
+        )
+        assert uploaded.status_code == 200, extension
+        avatar = uploaded.json()["data"]["avatar"]
+        assert avatar.endswith(extension), extension
+        assert guest_client.get(avatar).content == data
+
+    # ... and non-image content is rejected even when it claims to be a PNG.
+    spoofed = _upload_avatar(
+        guest_client, b"this is not an image", content_type="image/png"
+    )
+    assert spoofed.status_code == 422
+    assert spoofed.json()["error"]["code"] == "avatar_type_unsupported"
+    assert spoofed.json()["error"]["message"] == "头像仅支持 PNG / JPEG / WebP / GIF 格式"
+
+    empty = _upload_avatar(guest_client, b"", content_type="image/png")
+    assert empty.status_code == 422
+    assert empty.json()["error"]["code"] == "avatar_empty"
+
+    # The 2MB guard still runs before content sniffing.
+    oversized = _upload_avatar(
+        guest_client,
+        b"\x89PNG\r\n\x1a\n" + b"0" * MAX_AVATAR_BYTES,
+        content_type="image/png",
+    )
+    assert oversized.status_code == 413
+    assert oversized.json()["error"]["code"] == "avatar_too_large"
 
 
 # --------------------------------------------------------------------------- admin scope

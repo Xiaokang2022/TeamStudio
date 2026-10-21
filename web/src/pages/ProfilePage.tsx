@@ -45,11 +45,38 @@ import type {
 import "./ProfilePage.css";
 
 const AVATAR_COLORS = ["#7c3aed", "#2563eb", "#0ea5e9", "#16a34a", "#ea8a14", "#dc2626", "#db2777", "#4f6f8f"];
-const ACCEPTED_AVATAR_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
+/** Enough bytes to cover PNG (8), JPEG (3), GIF (6) and WebP (12) signatures. */
+const AVATAR_SNIFF_BYTES = 16;
 const MAX_SKILLS = 20;
 const MAX_SKILL_LENGTH = 30;
 const MAX_BIO_LENGTH = 2000;
+
+/**
+ * Magic-byte check used before uploading: the browser-reported MIME type is not
+ * reliable (Windows / some browsers report valid PNGs as image/x-png,
+ * application/octet-stream or ""), so the file content decides support.
+ */
+function isSupportedAvatarHeader(bytes: Uint8Array): boolean {
+  const startsWith = (signature: number[], offset = 0): boolean =>
+    signature.every((value, index) => bytes[offset + index] === value);
+  // PNG: \x89PNG\r\n\x1a\n
+  if (startsWith([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return true;
+  // JPEG: \xff\xd8\xff
+  if (startsWith([0xff, 0xd8, 0xff])) return true;
+  // GIF87a / GIF89a
+  if (
+    startsWith([0x47, 0x49, 0x46, 0x38, 0x37, 0x61]) ||
+    startsWith([0x47, 0x49, 0x46, 0x38, 0x39, 0x61])
+  ) {
+    return true;
+  }
+  // WebP: RIFF at 0..4 and WEBP at 8..12
+  if (startsWith([0x52, 0x49, 0x46, 0x46]) && startsWith([0x57, 0x45, 0x42, 0x50], 8)) {
+    return true;
+  }
+  return false;
+}
 
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof ApiError) return error.message;
@@ -407,12 +434,19 @@ export default function ProfilePage() {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
-    if (!ACCEPTED_AVATAR_TYPES.includes(file.type)) {
-      toast("头像仅支持 PNG / JPEG / WebP / GIF 格式", "error");
-      return;
-    }
     if (file.size > MAX_AVATAR_BYTES) {
       toast("头像图片不能超过 2MB", "error");
+      return;
+    }
+    let header: Uint8Array;
+    try {
+      header = new Uint8Array(await file.slice(0, AVATAR_SNIFF_BYTES).arrayBuffer());
+    } catch {
+      toast("无法读取头像文件，请重新选择", "error");
+      return;
+    }
+    if (!isSupportedAvatarHeader(header)) {
+      toast("头像仅支持 PNG / JPEG / WebP / GIF 格式", "error");
       return;
     }
     setUploading(true);

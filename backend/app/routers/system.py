@@ -8,10 +8,12 @@ guaranteed recovery path afterwards (it can rebuild a team through
 ``POST /api/workspace/teams``).
 
 ``POST /api/system/reset`` empties every business/account/log table, restores
-``DEFAULT_SETTINGS``, removes uploaded files and rotates the session signing secret. The
-``factoryResetAt`` marker written to ``app_meta`` keeps
-:func:`backend.app.seed.seed_if_empty` from refilling demo data on the next restart, so a
-reset system stays intentionally empty until the operator creates new teams.
+``DEFAULT_SETTINGS``, removes uploaded files and rotates the session signing secret. Startup
+never seeds demo data (that is an explicit script action, see
+``backend.app.seed.seed_demo_data``), and the ``factoryResetAt`` marker written to ``app_meta``
+additionally keeps :func:`backend.app.seed.seed_if_empty` from refilling demo data, so a reset
+system stays intentionally empty until the operator creates new teams or explicitly re-runs the
+demo seed script.
 
 The wipe runs with ``secure_delete`` enabled and the database file is compacted afterwards
 (a truncating WAL checkpoint followed by ``VACUUM``), so the erased demo rows are not

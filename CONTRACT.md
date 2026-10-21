@@ -217,7 +217,11 @@ Profile / personal home page:
   `bio` ≤2000 chars, up to 20 skills of ≤30 chars each. Rejected for the device Admin
   (`device_admin_profile`).
 - `POST /api/profile/avatar` multipart `file` (PNG / JPEG / WebP / GIF, ≤2 MB) →
-  `{ avatar, user }`; the old file is removed.
+  `{ avatar, user }`; the old file is removed. The format is detected from the uploaded bytes
+  (magic bytes: PNG signature / `\xff\xd8\xff` / `GIF87a`|`GIF89a` / `RIFF…WEBP`); the
+  browser-supplied `Content-Type` is not trusted, so a genuine image is accepted even when the
+  client reports an empty, generic (`application/octet-stream`) or non-standard (`image/x-png`)
+  type. Unsupported content → `422 avatar_type_unsupported`.
 - `DELETE /api/profile/avatar` → `{ user }`, restores the initials avatar.
 
 `ProfilePayload`:
@@ -552,10 +556,14 @@ and the settings page only renders the tab for `isDeviceAdmin` identities.
     `PRAGMA secure_delete=ON`, and after the commit the file is compacted (truncating WAL
     checkpoint + `VACUUM`), so the deleted demo rows cannot be recovered from
     `teamstudio.db` or its `-wal` sidecar.
-  - A factory-reset database stays empty across restarts: `seed_if_empty()` skips the demo seed
-    whenever `app_meta.factoryResetAt` exists, so the restored system is truly clean. The
-    built-in device Admin identity is not stored, so it survives the reset and can rebuild teams
-    through the workspace manager.
+  - Startup never creates demo data: the FastAPI lifespan only initialises the schema, so a
+    fresh or factory-reset database stays empty across restarts. Demo data is an explicit
+    operator action — `python -m backend.app.seed` (wrapped by `scripts/seed-demo.ps1`) — which
+    is idempotent and intentionally bypasses the `factoryResetAt` marker to rebuild the demo
+    workspace. `seed_if_empty()` itself still refuses to backfill while
+    `app_meta.factoryResetAt` exists when called without `force`. The built-in device Admin
+    identity is not stored, so it survives the reset and can rebuild teams through the workspace
+    manager.
   - Response: `{ reset: true, resetAt, sessionSecretRotated, uploadsRemoved, cleared: {…stats…},
     siteName, siteShortName }`.
 
@@ -607,8 +615,9 @@ relay configured in `settings.email`:
 - `data/.session_secret` – generated HMAC signing key (never exposed).
 - `data/uploads/avatars/` – uploaded profile photos, served under `/uploads/avatars/...`.
 - `app_meta.factoryResetAt` / `factoryResetBy` – written by the device-Admin-only system reset;
-  presence of `factoryResetAt` stops `seed_if_empty()` from refilling the demo data after a
-  factory reset. A reset clears every other `app_meta` key.
+  they record the last reset, and presence of `factoryResetAt` keeps `seed_if_empty()` (called
+  without `force`) from refilling demo data. Startup never seeds regardless. A reset clears
+  every other `app_meta` key.
 - There is no local mailbox, outbox mirror or reminder bookkeeping any more: the legacy
   `mailbox_messages` and `email_reminders_sent` tables (plus the `todos` reminder columns) are
   dropped during the additive round-5 migration.
