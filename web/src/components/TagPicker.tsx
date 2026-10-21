@@ -1,16 +1,16 @@
 /**
- * Task tag UI (#10).
+ * Task tag UI.
  *
- * A group-shared tag library: every logged-in member can create, rename,
+ * A team-shared tag library: every logged-in member can create, rename,
  * recolor and delete labels. `TagPicker` is embedded in `TaskDialog`; the
  * `TagLibraryDialog` is opened from the task overview page and reuses the
  * same inline `TagManager` rows.
  *
- * The backend contract (T5) is:
- *   GET    .../task-tags?scope=group     -> { tags, scope }
- *   POST   .../task-tags { name, color } -> { tag }
- *   PATCH  .../task-tags/{id}            -> { tag }
- *   DELETE .../task-tags/{id}            -> { deleted }
+ * The backend contract is:
+ *   GET    /api/teams/{team}/task-tags              -> { tags }
+ *   POST   /api/teams/{team}/task-tags { name, color } -> { tag }
+ *   PATCH  /api/teams/{team}/task-tags/{id}         -> { tag }
+ *   DELETE /api/teams/{team}/task-tags/{id}         -> { deleted }
  * While the endpoint is still being implemented the component degrades to an
  * inline error state instead of breaking the task dialog.
  */
@@ -36,10 +36,9 @@ import {
 import { api, ApiError } from "../api";
 import { useToast } from "./Toast";
 import { Modal } from "./Modal";
-import { Select } from "./Select";
 import { cn } from "../lib/utils";
-import { TAG_COLORS, tagColorFor } from "../lib/scope";
-import type { ScopeGroupRef, TaskTag } from "../types";
+import { TAG_COLORS, tagColorFor } from "../lib/utils";
+import type { TaskTag } from "../types";
 import "./TagPicker.css";
 
 export interface TagLibraryApi {
@@ -66,8 +65,8 @@ function safeColor(color: string | undefined, index = 0): string {
   return color && HEX_COLOR.test(color) ? color : tagColorFor(index);
 }
 
-/** Load the tag library of one development group. */
-export function useTagLibrary(teamId: string, groupId: string): TagLibraryApi {
+/** Load the tag library of one team. */
+export function useTagLibrary(teamId: string): TagLibraryApi {
   const [tags, setTags] = useState<TaskTag[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -75,7 +74,7 @@ export function useTagLibrary(teamId: string, groupId: string): TagLibraryApi {
 
   const reload = useCallback(
     async (silent = false) => {
-      if (!teamId || !groupId) {
+      if (!teamId) {
         setTags([]);
         setLoading(false);
         setError("");
@@ -84,7 +83,7 @@ export function useTagLibrary(teamId: string, groupId: string): TagLibraryApi {
       const id = ++requestId.current;
       if (!silent) setLoading(true);
       try {
-        const data = await api.taskTags(teamId, groupId);
+        const data = await api.taskTags(teamId);
         if (id !== requestId.current) return;
         setTags(data.tags ?? []);
         setError("");
@@ -96,7 +95,7 @@ export function useTagLibrary(teamId: string, groupId: string): TagLibraryApi {
         if (id === requestId.current) setLoading(false);
       }
     },
-    [teamId, groupId],
+    [teamId],
   );
 
   useEffect(() => {
@@ -183,8 +182,6 @@ function ColorSwatches({
 
 interface TagManagerProps {
   teamId: string;
-  groupId: string;
-  groupName?: string;
   library: TagLibraryApi;
   /** When provided the rows become multi-select checkboxes. */
   selected?: string[];
@@ -197,8 +194,6 @@ interface TagManagerProps {
 
 function TagManager({
   teamId,
-  groupId,
-  groupName,
   library,
   selected,
   onToggle,
@@ -246,7 +241,7 @@ function TagManager({
     setBusy(true);
     setFormError("");
     try {
-      const result = await api.createTaskTag(teamId, groupId, { name, color: draftColor });
+      const result = await api.createTaskTag(teamId, { name, color: draftColor });
       await library.reload(true);
       resetDraft();
       toast(`标签「${result.tag.name}」已创建`, "success");
@@ -287,7 +282,7 @@ function TagManager({
       if (name !== tag.name) body.name = name;
       if (editColor.toLowerCase() !== (tag.color || "").toLowerCase()) body.color = editColor;
       if (Object.keys(body).length) {
-        await api.updateTaskTag(teamId, groupId, tag.id, body);
+        await api.updateTaskTag(teamId, tag.id, body);
       }
       await library.reload(true);
       setEditingId(null);
@@ -305,7 +300,7 @@ function TagManager({
     setBusy(true);
     setFormError("");
     try {
-      await api.deleteTaskTag(teamId, groupId, tag.id);
+      await api.deleteTaskTag(teamId, tag.id);
       await library.reload(true);
       setConfirmId(null);
       if (selected?.includes(tag.id)) onToggle?.(tag.id);
@@ -343,7 +338,7 @@ function TagManager({
 
       {!library.loading && !library.tags.length && !library.error ? (
         <p className="tag-manager-empty">
-          <Tags size={14} /> {groupName ? `「${groupName}」` : ""}标签库还是空的，创建第一个标签吧。
+          <Tags size={14} /> 标签库还是空的，创建第一个标签吧。
         </p>
       ) : null}
 
@@ -489,7 +484,7 @@ function TagManager({
           className="tag-manager-input"
           value={draftName}
           maxLength={TAG_NAME_MAX}
-          placeholder={`新建${groupName ? `「${groupName}」` : ""}标签，最多 ${TAG_NAME_MAX} 字`}
+          placeholder={`新建标签，最多 ${TAG_NAME_MAX} 字`}
           onChange={(event) => setDraftName(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
@@ -531,8 +526,6 @@ function TagManager({
 
 export interface TagPickerProps {
   teamId: string;
-  groupId: string;
-  groupName?: string;
   value: string[];
   onChange: (tagIds: string[]) => void;
   disabled?: boolean;
@@ -541,20 +534,18 @@ export interface TagPickerProps {
 
 export function TagPicker({
   teamId,
-  groupId,
-  groupName,
   value,
   onChange,
   disabled = false,
   max = MAX_TASK_TAGS,
 }: TagPickerProps) {
-  const library = useTagLibrary(teamId, groupId);
+  const library = useTagLibrary(teamId);
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setOpen(false);
-  }, [teamId, groupId]);
+  }, [teamId]);
 
   useEffect(() => {
     if (!open) return;
@@ -608,7 +599,7 @@ export function TagPicker({
           </span>
         ))}
         {missingCount > 0 ? (
-          <span className="tag-picker-missing" title="这些标签不在当前开发组的标签库中">
+          <span className="tag-picker-missing" title="这些标签不在当前团队的标签库中">
             {missingCount} 个未知标签
           </span>
         ) : null}
@@ -631,8 +622,6 @@ export function TagPicker({
         <div className="tag-picker-panel">
           <TagManager
             teamId={teamId}
-            groupId={groupId}
-            groupName={groupName}
             library={library}
             selected={value}
             onToggle={toggle}
@@ -649,22 +638,11 @@ export function TagPicker({
 /* Tag library management dialog (from the task overview page)         */
 /* ------------------------------------------------------------------ */
 
-export interface TagLibraryGroupOption {
-  teamId: string;
-  groupId: string;
-  groupName: string;
-  label: string;
-}
-
 export interface TagLibraryDialogProps {
   open: boolean;
   onClose: () => void;
   teamId: string;
-  groupId: string;
-  groupName?: string;
-  /** Aggregate scope exposes other groups for editing. */
-  groupOptions?: TagLibraryGroupOption[];
-  scopeGroups?: ScopeGroupRef[];
+  teamName?: string;
   onChanged?: () => void;
 }
 
@@ -672,39 +650,17 @@ export function TagLibraryDialog({
   open,
   onClose,
   teamId,
-  groupId,
-  groupName,
-  groupOptions = [],
+  teamName,
   onChanged,
 }: TagLibraryDialogProps) {
-  const [targetTeamId, setTargetTeamId] = useState(teamId);
-  const [targetGroupId, setTargetGroupId] = useState(groupId);
-
-  useEffect(() => {
-    if (!open) return;
-    setTargetTeamId(teamId);
-    setTargetGroupId(groupId);
-  }, [open, teamId, groupId]);
-
-  const library = useTagLibrary(open ? targetTeamId : "", open ? targetGroupId : "");
-  const activeGroup = groupOptions.find(
-    (option) => option.teamId === targetTeamId && option.groupId === targetGroupId,
-  );
-  const activeName = activeGroup?.groupName ?? groupName;
-
-  const options = groupOptions.map((option) => ({
-    value: `${option.teamId}::${option.groupId}`,
-    label: option.label,
-    description: option.groupName,
-  }));
-  const selectedOption = `${targetTeamId}::${targetGroupId}`;
+  const library = useTagLibrary(open ? teamId : "");
 
   return (
     <Modal
       open={open}
       onClose={onClose}
       title="标签库管理"
-      description="标签库按开发组共享，所有登录成员都可以新建、改名、换色或删除标签。"
+      description="标签库按团队共享，所有登录成员都可以新建、改名、换色或删除标签。"
       size="lg"
       footer={
         <button className="btn btn-primary" onClick={onClose}>
@@ -713,30 +669,12 @@ export function TagLibraryDialog({
       }
     >
       <div className="tag-library-dialog">
-        {groupOptions.length > 1 ? (
-          <label className="tag-library-group">
-            <span>管理哪个开发组</span>
-            <Select
-              value={selectedOption}
-              onChange={(next) => {
-                const [nextTeamId, nextGroupId] = next.split("::");
-                setTargetTeamId(nextTeamId);
-                setTargetGroupId(nextGroupId);
-              }}
-              options={options}
-              ariaLabel="选择要管理标签库的开发组"
-            />
-          </label>
-        ) : (
-          <p className="tag-library-group-static">
-            <Tags size={13} /> {activeName ? `「${activeName}」` : ""}标签库
-          </p>
-        )}
+        <p className="tag-library-group-static">
+          <Tags size={13} /> {teamName ? `「${teamName}」` : "当前团队"}标签库
+        </p>
 
         <TagManager
-          teamId={targetTeamId}
-          groupId={targetGroupId}
-          groupName={activeName}
+          teamId={teamId}
           library={library}
           showUsage
           onChanged={onChanged}

@@ -28,7 +28,6 @@ import {
   Globe,
   Inbox,
   KeyRound,
-  Layers3,
   LayoutDashboard,
   LayoutGrid,
   Link2,
@@ -73,7 +72,6 @@ import {
   cn,
   copyText,
   formatDateTime,
-  groupBy,
   hashRoute,
   navigate as navigateHash,
   safeJsonParse,
@@ -83,7 +81,6 @@ import type {
   AdminIdEntry,
   AdminIpEntry,
   AppSettings,
-  DomainGroupSettings,
   DomainSettingsData,
   DomainTeamSettings,
   EmailLog,
@@ -136,9 +133,9 @@ const TAB_KEYS: TabKey[] = [
 ];
 
 const TABS: { key: TabKey; label: string; hint: string; icon: LucideIcon }[] = [
-  { key: "workspace", label: "工作区设置", hint: "团队与开发组基础信息", icon: Building2 },
+  { key: "workspace", label: "工作区设置", hint: "团队基础信息与结构", icon: Building2 },
   { key: "appearance", label: "外观与站点", hint: "名称、品牌与主题", icon: Palette },
-  { key: "modules", label: "模块与展示", hint: "模块开关与默认项", icon: LayoutGrid },
+  { key: "modules", label: "模块与展示", hint: "模块开关与访客访问", icon: LayoutGrid },
   { key: "access", label: "成员与权限", hint: "登录、白名单与超级管理员", icon: ShieldCheck },
   { key: "accounts", label: "账号与角色", hint: "预创建账号与角色授权", icon: UsersRound },
   { key: "sso", label: "企业 SSO", hint: "OIDC 身份接入", icon: Fingerprint },
@@ -169,7 +166,7 @@ const MODULE_META: {
   { key: "insights", label: "数据洞察", description: "完成率、趋势与成员 / 团队数据对比。", icon: TrendingUp },
   { key: "calendar", label: "协作日历", description: "待办、月度日历与展示偏好。", icon: CalendarDays },
   { key: "redblack", label: "红黑榜", description: "每月红榜高光与黑榜改进记录。", icon: Trophy },
-  { key: "announcements", label: "公告栏", description: "开发组公告与置顶消息。", icon: Megaphone },
+  { key: "announcements", label: "公告栏", description: "团队公告与置顶消息。", icon: Megaphone },
   { key: "matrix", label: "责任田矩阵", description: "职责分工、负责人与联络方式。", icon: Waypoints },
   { key: "links", label: "常用链接", description: "团队常用工具与文档入口。", icon: Link2 },
   { key: "settings", label: "工作室设置", description: "关闭后导航隐藏，超级管理员仍可直接访问本页。", icon: Settings2 },
@@ -181,7 +178,7 @@ const FIELD_LABELS: Record<string, string> = {
   "site.tagline": "品牌标语",
   "site.logoText": "Logo 文字",
   "site.footerText": "页脚文案",
-  "site.theme.mode": "主题模式",
+  "site.theme.mode": "主题模式（兼容字段，已不参与明暗解析）",
   "site.theme.accent": "主色",
   "site.theme.accentSecondary": "辅助色",
   "site.theme.radius": "卡片圆角",
@@ -239,12 +236,13 @@ const FIELD_LABELS: Record<string, string> = {
   "features.showDemoBadge": "演示数据标识",
   "features.auditLog": "审计日志",
   "features.allowGuestTodoCreate": "访客创建待办",
+  modules: "模块展示",
+  guestModules: "访客可访问模块",
   "adminWhitelist.ip": "IP / CIDR",
   "adminWhitelist.id": "SSO 标识 / 邮箱",
   "adminWhitelist.name": "显示名称",
   "adminWhitelist.role": "管理角色",
   "adminWhitelist.teamId": "团队",
-  "adminWhitelist.groupIds": "开发组范围",
   "adminWhitelist.note": "备注",
 };
 
@@ -272,6 +270,13 @@ function readTabFromHash(allowed: TabKey[] = TAB_KEYS, fallback: TabKey = "appea
 
 function pathLabel(path: string): string {
   if (FIELD_LABELS[path]) return FIELD_LABELS[path];
+  const modulePath = path.match(/^(modules|guestModules)\.([a-zA-Z]+)$/);
+  if (modulePath) {
+    const meta = MODULE_META.find((item) => item.key === modulePath[2]);
+    if (meta) {
+      return modulePath[1] === "guestModules" ? `访客访问 · ${meta.label}` : `模块 · ${meta.label}`;
+    }
+  }
   const entry = path.match(/^auth\.adminWhitelist\.(ips|ids)\.(\d+)\.(.+)$/);
   if (entry) {
     const kind = entry[1] === "ips" ? "IP" : "ID";
@@ -287,6 +292,7 @@ function tabForPath(path: string): TabKey | null {
   if (path.startsWith("site")) return "appearance";
   if (
     path.startsWith("modules") ||
+    path.startsWith("guestModules") ||
     path.startsWith("announcements") ||
     path.startsWith("calendar") ||
     path.startsWith("redblack") ||
@@ -328,10 +334,7 @@ function entryValue(kind: "ip" | "id", entry: AdminIpEntry | AdminIdEntry): stri
 }
 
 function scopeProblem(entry: AdminIpEntry | AdminIdEntry): string | null {
-  if (entry.role === "team_admin" && !entry.teamId) return "团队管理员必须选择一个团队";
-  if (entry.role === "group_admin" && entry.groupIds.length === 0) {
-    return "开发组管理员必须至少选择一个开发组";
-  }
+  if (!entry.teamId) return "团队管理员必须选择一个团队";
   return null;
 }
 
@@ -526,7 +529,7 @@ function TeamPicker({
           <button
             key={team.id}
             type="button"
-            className={cn("chip", "chip-clickable", active && "settings-group-chip-active")}
+            className={cn("chip", "chip-clickable", active && "settings-team-chip-active")}
             onClick={() =>
               onChange(active ? selected.filter((id) => id !== team.id) : [...selected, team.id])
             }
@@ -535,64 +538,6 @@ function TeamPicker({
             <i className="settings-team-dot" style={{ background: team.color }} />
             {team.name}
           </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function GroupPicker({
-  workspace,
-  teamFilter,
-  selected,
-  onChange,
-}: {
-  workspace: WorkspaceOption;
-  teamFilter?: string;
-  selected: string[];
-  onChange: (ids: string[]) => void;
-}) {
-  const grouped = useMemo(() => groupBy(workspace.groups, (group) => group.team_id), [workspace.groups]);
-  const visibleTeams = teamFilter
-    ? workspace.teams.filter((team) => team.id === teamFilter)
-    : workspace.teams;
-  if (!visibleTeams.length) {
-    return <p className="field-hint">工作区中暂无开发组数据。</p>;
-  }
-  return (
-    <div className="settings-group-picker">
-      {visibleTeams.map((team) => {
-        const groups = grouped[team.id] ?? [];
-        if (!groups.length) return null;
-        return (
-          <div className="settings-group-team" key={team.id}>
-            <span className="settings-group-team-name">
-              <i style={{ background: team.color }} />
-              {team.name}
-            </span>
-            <div className="tag-list">
-              {groups.map((group) => {
-                const active = selected.includes(group.id);
-                return (
-                  <button
-                    key={group.id}
-                    type="button"
-                    className={cn("chip", "chip-clickable", active && "settings-group-chip-active")}
-                    onClick={() =>
-                      onChange(
-                        active
-                          ? selected.filter((id) => id !== group.id)
-                          : [...selected, group.id],
-                      )
-                    }
-                  >
-                    {active ? <Check size={11} /> : null}
-                    {group.name}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
         );
       })}
     </div>
@@ -613,7 +558,7 @@ function SettingsAccessDenied({ onBack }: { onBack: () => void }) {
           不写入 <code>settings.json</code>。
         </p>
         <p className="small muted">
-          团队管理员与开发组管理员可以管理自己范围内的团队 / 开发组信息与成员内容，但无法查看或修改站点配置。
+          团队管理员可以管理自己被授权团队的团队信息与成员内容，但无法查看或修改站点配置。
         </p>
         <div className="state-actions">
           <button className="btn btn-primary" onClick={onBack}>
@@ -629,28 +574,6 @@ function SettingsAccessDenied({ onBack }: { onBack: () => void }) {
 /* Section components                                                  */
 /* ------------------------------------------------------------------ */
 
-/**
- * 真实系统主题（只看操作系统 / 浏览器偏好，不受用户本地手动主题覆盖影响）。
- * 主题模式为 "auto" 时，实时预览必须按它渲染。
- */
-function useSystemPrefersDark(): boolean {
-  const [prefersDark, setPrefersDark] = useState(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
-    return window.matchMedia("(prefers-color-scheme: dark)").matches;
-  });
-
-  useEffect(() => {
-    if (typeof window.matchMedia !== "function") return;
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = (event: MediaQueryListEvent) => setPrefersDark(event.matches);
-    setPrefersDark(media.matches);
-    media.addEventListener("change", onChange);
-    return () => media.removeEventListener("change", onChange);
-  }, []);
-
-  return prefersDark;
-}
-
 function AppearanceSection({
   draft,
   update,
@@ -660,22 +583,16 @@ function AppearanceSection({
   update: UpdateSettings;
   errorsFor: ErrorsFor;
 }) {
+  const { theme: effectiveTheme } = useApp();
   const site = draft.site;
   const theme = site.theme;
-  const systemPrefersDark = useSystemPrefersDark();
-  // 预览严格跟随草稿里的 theme.mode：auto 时解析系统真实主题（并实时监听），
-  // dark/light 则直接使用草稿值，不受用户本地手动主题覆盖影响。
-  const previewMode: "dark" | "light" =
-    theme.mode === "dark" ? "dark" : theme.mode === "auto" ? (systemPrefersDark ? "dark" : "light") : "light";
-  const modeLabel =
-    theme.mode === "dark"
-      ? "暗黑"
-      : theme.mode === "auto"
-        ? `跟随系统 · ${systemPrefersDark ? "暗色" : "亮色"}`
-        : "纸白";
+  // 明暗主题由每位用户的个性化设置决定（默认跟随系统），站点级不再提供明暗开关。
+  // 预览直接使用当前生效主题，强调色与圆角仍取自站点草稿。
+  const previewMode: "dark" | "light" = effectiveTheme;
+  const previewModeLabel = effectiveTheme === "dark" ? "当前生效 · 暗黑" : "当前生效 · 纸白";
   const previewStyle = {
-    "--pv-accent": "#0a59f7",
-    "--pv-secondary": "#4d8dff",
+    "--pv-accent": theme.accent || "#0a59f7",
+    "--pv-secondary": theme.accentSecondary || "#4d8dff",
     "--pv-radius": `${theme.radius}px`,
   } as CSSProperties;
   const enabledModules = MODULE_META.filter((item) => draft.modules[item.key]);
@@ -763,40 +680,86 @@ function AppearanceSection({
 
       <SettingsCard
         title="主题与品牌色"
-        description="保存后立即应用到整个工作台，包括侧边栏高亮与按钮渐变。"
+        description="明暗主题由每位成员的个性化设置决定；站点设置只保留品牌强调色与圆角。"
         icon={<Palette size={18} />}
       >
+        <p className="settings-note">
+          <Palette size={13} />
+          站点不再提供明暗模式开关：实际生效的主题跟随每位用户的「个性化设置」（默认「跟随系统」，会实时响应操作系统 /
+          浏览器的明暗切换）。成员可在「个人主页 → 个性化设置」中切换「跟随系统 / 浅色 / 深色」；站点级{" "}
+          <code>site.theme.mode</code> 仅作为兼容字段保留，不参与明暗解析。
+        </p>
         <div className="settings-theme-grid">
           <Field
-            label="主题模式"
-            error={errorText(errorsFor("site.theme.mode"))}
-            hint="默认选项：跟随系统会自动匹配操作系统 / 浏览器的明暗偏好，并在系统切换时实时同步。"
+            label="主色（强调色）"
+            error={errorText(errorsFor("site.theme.accent"))}
+            hint="#RRGGBB；用于导航高亮、主按钮与图表强调"
           >
-            <div className="segmented settings-mode-switch">
-              {(
-                [
-                  { value: "auto", label: "跟随系统（推荐）" },
-                  { value: "light", label: "纸白" },
-                  { value: "dark", label: "暗黑" },
-                ] as const
-              ).map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={theme.mode === option.value ? "active" : undefined}
-                  onClick={() =>
-                    update((next) => {
-                      next.site.theme.mode = option.value;
-                    })
-                  }
-                >
-                  {option.label}
-                </button>
-              ))}
+            <div className="settings-color-control">
+              <input
+                type="color"
+                value={/^#[0-9a-fA-F]{6}$/.test(theme.accent) ? theme.accent : "#0a59f7"}
+                aria-label="主色取色器"
+                onChange={(event) =>
+                  update((next) => {
+                    next.site.theme.accent = event.target.value;
+                  })
+                }
+              />
+              <input
+                className="input"
+                value={theme.accent}
+                maxLength={7}
+                spellCheck={false}
+                onChange={(event) =>
+                  update((next) => {
+                    next.site.theme.accent = event.target.value;
+                  })
+                }
+              />
             </div>
           </Field>
 
-          <Field label="卡片圆角" error={errorText(errorsFor("site.theme.radius"))} hint="8 - 32 px">
+          <Field
+            label="辅助色"
+            error={errorText(errorsFor("site.theme.accentSecondary"))}
+            hint="#RRGGBB；用于渐变与次级强调"
+          >
+            <div className="settings-color-control">
+              <input
+                type="color"
+                value={
+                  /^#[0-9a-fA-F]{6}$/.test(theme.accentSecondary)
+                    ? theme.accentSecondary
+                    : "#4d8dff"
+                }
+                aria-label="辅助色取色器"
+                onChange={(event) =>
+                  update((next) => {
+                    next.site.theme.accentSecondary = event.target.value;
+                  })
+                }
+              />
+              <input
+                className="input"
+                value={theme.accentSecondary}
+                maxLength={7}
+                spellCheck={false}
+                onChange={(event) =>
+                  update((next) => {
+                    next.site.theme.accentSecondary = event.target.value;
+                  })
+                }
+              />
+            </div>
+          </Field>
+
+          <Field
+            label="卡片圆角"
+            className="span-2"
+            error={errorText(errorsFor("site.theme.radius"))}
+            hint="8 - 32 px"
+          >
             <div className="settings-range">
               <input
                 type="range"
@@ -812,33 +775,12 @@ function AppearanceSection({
               <span className="settings-range-value">{theme.radius}px</span>
             </div>
           </Field>
-
-          <Field
-            label="统一色板"
-            className="span-2"
-            hint="当前版本采用固定鸿蒙色板，避免出现多套高饱和主题；主题模式支持跟随系统、纸白与暗黑三种。"
-          >
-            <div className="settings-locked-palette">
-              <span className="settings-locked-swatch">
-                <i style={{ background: "#0a59f7" }} /> 主色 #0a59f7
-              </span>
-              <span className="settings-locked-swatch">
-                <i style={{ background: "#4d8dff" }} /> 辅助色 #4d8dff
-              </span>
-              <span className="settings-locked-swatch">
-                <i style={{ background: "#f7f7f5" }} /> 纸白 #f7f7f5
-              </span>
-              <span className="settings-locked-swatch">
-                <i style={{ background: "#09090b" }} /> 暗黑 #09090b
-              </span>
-            </div>
-          </Field>
         </div>
       </SettingsCard>
 
       <SettingsCard
         title="实时预览"
-        description="组件配色与圆角会以当前草稿值渲染，保存后同步到全站。"
+        description="强调色与圆角会以当前草稿值渲染；明暗跟随当前生效的主题。"
         icon={<Eye size={18} />}
       >
         <div
@@ -852,7 +794,7 @@ function AppearanceSection({
               <strong>{site.name || "未命名团队工作室"}</strong>
               <small>{site.shortName || "SHORT"}</small>
             </div>
-            <span className="settings-preview-mode">{modeLabel}</span>
+            <span className="settings-preview-mode">{previewModeLabel}</span>
           </div>
           <p className="settings-preview-tagline">{site.tagline || "在这里写一句品牌标语。"}</p>
           <div className="settings-preview-nav">
@@ -918,6 +860,56 @@ function ModulesSection({
             );
           })}
         </div>
+      </SettingsCard>
+
+      <SettingsCard
+        title="访客可访问模块"
+        description="未登录访客只能访问被放行的模块：导航会隐藏未放行的入口，服务端接口也会按同样规则再次校验。系统设置始终不对访客开放。"
+        icon={<Eye size={18} />}
+        extra={<span className="badge badge-gray">仅访客生效</span>}
+      >
+        <div className="settings-toggle-grid">
+          {MODULE_META.filter((module) => module.key !== "settings").map((module) => {
+            const Icon = module.icon;
+            const moduleEnabled = draft.modules[module.key];
+            return (
+              <div
+                className={cn(
+                  "settings-module-toggle",
+                  moduleEnabled && draft.guestModules[module.key] && "is-on",
+                )}
+                key={`guest-${module.key}`}
+              >
+                <span className="settings-module-icon">
+                  <Icon size={16} />
+                </span>
+                <ToggleRow
+                  label={module.label}
+                  description={
+                    moduleEnabled
+                      ? module.description
+                      : "该模块已在「模块展示」中关闭，访客同样不可访问。"
+                  }
+                  badge={
+                    moduleEnabled ? undefined : <span className="badge badge-gray">模块已关闭</span>
+                  }
+                  checked={draft.guestModules[module.key]}
+                  disabled={!moduleEnabled}
+                  onChange={(checked) =>
+                    update((next) => {
+                      next.guestModules[module.key] = checked;
+                    })
+                  }
+                />
+              </div>
+            );
+          })}
+        </div>
+        <p className="settings-note">
+          <ShieldCheck size={13} />
+          此处只决定「访客能访问哪些模块」；关闭「访客模式」或「允许访客只读」后，访客将完全无法浏览内容。
+          「系统设置」模块不对访客开放，也不会出现在上面的列表中。
+        </p>
       </SettingsCard>
 
       <div className="settings-two-col">
@@ -1172,7 +1164,6 @@ function AdminEntryCard({
 }) {
   const basePath = `auth.adminWhitelist.${kind === "ip" ? "ips" : "ids"}.${index}`;
   const teams = workspace.teams;
-  const teamGroups = workspace.groups.filter((group) => group.team_id === entry.teamId);
   const problem = scopeProblem(entry);
 
   return (
@@ -1183,22 +1174,7 @@ function AdminEntryCard({
           {kind === "ip" ? `IP 白名单 #${index + 1}` : `ID 白名单 #${index + 1}`}
         </span>
         <div className="settings-admin-entry-actions">
-          <div className="segmented">
-            <button
-              type="button"
-              className={entry.role === "team_admin" ? "active" : undefined}
-              onClick={() => onChange({ ...entry, role: "team_admin" })}
-            >
-              团队管理员
-            </button>
-            <button
-              type="button"
-              className={entry.role === "group_admin" ? "active" : undefined}
-              onClick={() => onChange({ ...entry, role: "group_admin" })}
-            >
-              开发组管理员
-            </button>
-          </div>
+          <span className="badge badge-orange">团队管理员</span>
           <button
             type="button"
             className="icon-button settings-icon-danger"
@@ -1243,20 +1219,11 @@ function AdminEntryCard({
         <Field
           label="团队"
           error={errorText(errorsFor(`${basePath}.teamId`))}
-          hint={entry.role === "team_admin" ? "团队管理员必须指定团队" : "可仅用于筛选开发组"}
+          hint="白名单条目只能授予一个团队的管理权限"
         >
           <Select
             value={entry.teamId}
-            onChange={(teamId) => {
-              const allowed = new Set(
-                workspace.groups.filter((group) => group.team_id === teamId).map((group) => group.id),
-              );
-              onChange({
-                ...entry,
-                teamId,
-                groupIds: entry.groupIds.filter((id) => allowed.has(id)),
-              });
-            }}
+            onChange={(teamId) => onChange({ ...entry, teamId })}
             ariaLabel="白名单条目所属团队"
             placeholder="未指定团队"
             options={[
@@ -1277,19 +1244,6 @@ function AdminEntryCard({
             onChange={(event) => onChange({ ...entry, note: event.target.value })}
           />
         </Field>
-        <Field
-          label="开发组范围"
-          className="span-2"
-          error={errorText(errorsFor(`${basePath}.groupIds`))}
-          hint="开发组管理员必须至少选择一个开发组；团队管理员按团队授权时可不选。"
-        >
-          <GroupPicker
-            workspace={workspace}
-            teamFilter={entry.teamId || undefined}
-            selected={entry.groupIds}
-            onChange={(groupIds) => onChange({ ...entry, groupIds })}
-          />
-        </Field>
       </div>
       {problem ? (
         <p className="settings-entry-problem">
@@ -1297,10 +1251,7 @@ function AdminEntryCard({
         </p>
       ) : (
         <p className="settings-entry-ok">
-          <CheckCircle2 size={13} /> 范围有效
-          {teamGroups.length && entry.role === "group_admin"
-            ? ` · 已覆盖 ${entry.groupIds.length} 个开发组`
-            : ""}
+          <CheckCircle2 size={13} /> 范围有效：仅授予所选团队的管理权限
         </p>
       )}
     </article>
@@ -1322,7 +1273,6 @@ function AccessSection({
 }) {
   const whitelist = draft.auth.adminWhitelist;
   const deviceAdminName = meta?.deviceAdminName ?? "Admin";
-  const groupsByTeam = useMemo(() => groupBy(workspace.groups, (group) => group.team_id), [workspace.groups]);
 
   const mutateWhitelist = (mutate: (next: Whitelist) => void) => {
     update((next) => {
@@ -1338,7 +1288,6 @@ function AccessSection({
         name: "",
         role: "team_admin",
         teamId: firstTeam?.id ?? "",
-        groupIds: [],
         note: "",
       });
     });
@@ -1346,14 +1295,12 @@ function AccessSection({
 
   const addId = () => {
     const firstTeam = workspace.teams[0];
-    const firstGroup = firstTeam ? groupsByTeam[firstTeam.id]?.[0] : undefined;
     mutateWhitelist((next) => {
       next.ids.push({
         id: "",
         name: "",
-        role: "group_admin",
+        role: "team_admin",
         teamId: firstTeam?.id ?? "",
-        groupIds: firstGroup ? [firstGroup.id] : [],
         note: "",
       });
     });
@@ -1391,7 +1338,7 @@ function AccessSection({
             </li>
             <li>
               <ShieldAlert size={14} />
-              团队管理员与开发组管理员只能管理被授权的团队 / 开发组，无法查看或修改本页站点配置。
+              团队管理员只能管理被授权的团队，无法查看或修改本页站点配置。
             </li>
           </ul>
         </div>
@@ -1629,7 +1576,7 @@ function AccessSection({
             <Globe size={18} />
             <div>
               <strong>尚未配置 IP 白名单</strong>
-              <p>来自内网的固定办公机或运维跳板机可以在这里获得团队 / 开发组管理员权限。</p>
+              <p>来自内网的固定办公机或运维跳板机可以在这里获得团队管理员权限。</p>
             </div>
             <button type="button" className="btn btn-secondary btn-sm" onClick={addIp}>
               <Plus size={14} /> 新增第一条
@@ -1676,7 +1623,7 @@ function AccessSection({
             <Fingerprint size={18} />
             <div>
               <strong>尚未配置 ID 白名单</strong>
-              <p>通过企业 SSO 登录的团队成员可以在这里获得对应团队或开发组的管理权限。</p>
+              <p>通过企业 SSO 登录的团队成员可以在这里获得对应团队的管理权限。</p>
             </div>
             <button type="button" className="btn btn-secondary btn-sm" onClick={addId}>
               <Plus size={14} /> 新增第一条
@@ -2012,7 +1959,7 @@ function SsoSection({
         </div>
         <p className="settings-note">
           <ShieldCheck size={13} />
-          SSO 登录后，系统会用 <code>id</code> / <code>email</code> / <code>sub</code> 匹配 ID 白名单来确定团队或开发组管理权限；
+          SSO 登录后，系统会用 <code>id</code> / <code>email</code> / <code>sub</code> 匹配 ID 白名单来确定团队管理权限；
           未匹配的白名单身份仍可作为普通成员或访客访问。
         </p>
       </SettingsCard>
@@ -2026,14 +1973,12 @@ function SsoSection({
 
 const ROLE_OPTIONS: { value: UserRole; label: string }[] = [
   { value: "member", label: "成员" },
-  { value: "group_admin", label: "开发组管理员" },
   { value: "team_admin", label: "团队管理员" },
   { value: "super", label: "超级管理员" },
 ];
 
 const ROLE_BADGE: Record<UserRole, string> = {
   member: "badge-gray",
-  group_admin: "badge-blue",
   team_admin: "badge-orange",
   super: "badge-violet",
 };
@@ -2048,16 +1993,14 @@ interface AccountDraft {
   name: string;
   role: UserRole;
   teamIds: string[];
-  groupIds: string[];
 }
 
 function emptyAccountDraft(): AccountDraft {
-  return { name: "", role: "member", teamIds: [], groupIds: [] };
+  return { name: "", role: "member", teamIds: [] };
 }
 
-function accountScopeIssue(role: UserRole, teamIds: string[], groupIds: string[]): string | null {
+function accountScopeIssue(role: UserRole, teamIds: string[]): string | null {
   if (role === "team_admin" && teamIds.length === 0) return "团队管理员至少需要指定一个团队";
-  if (role === "group_admin" && groupIds.length === 0) return "开发组管理员至少需要指定一个开发组";
   return null;
 }
 
@@ -2075,27 +2018,12 @@ function AccountScopeEditor({
       <Field
         label="授权团队"
         className="span-2"
-        hint="团队管理员可管理所选团队及其下全部开发组；站点级设置仍仅超级管理员可编辑。"
+        hint="团队管理员可管理所选团队的成员、任务与团队信息；站点级设置仍仅超级管理员可编辑。"
       >
         <TeamPicker
           workspace={workspace}
           selected={draft.teamIds}
-          onChange={(teamIds) => onChange({ ...draft, teamIds, groupIds: [] })}
-        />
-      </Field>
-    );
-  }
-  if (draft.role === "group_admin") {
-    return (
-      <Field
-        label="授权开发组"
-        className="span-2"
-        hint="开发组管理员只能管理所选开发组的成员与内容。"
-      >
-        <GroupPicker
-          workspace={workspace}
-          selected={draft.groupIds}
-          onChange={(groupIds) => onChange({ ...draft, groupIds })}
+          onChange={(teamIds) => onChange({ ...draft, teamIds })}
         />
       </Field>
     );
@@ -2215,17 +2143,13 @@ function AccountsSection({
     (id: string) => workspace.teams.find((team) => team.id === id)?.name ?? id,
     [workspace.teams],
   );
-  const groupName = useCallback(
-    (id: string) => workspace.groups.find((group) => group.id === id)?.name ?? id,
-    [workspace.groups],
-  );
 
   const createEmail = createForm.email.trim().toLowerCase();
   const createIssue = !ACCOUNT_EMAIL_PATTERN.test(createEmail)
     ? createEmail
       ? "请填写有效的邮箱地址"
       : "请填写登录邮箱"
-    : accountScopeIssue(createForm.role, createForm.teamIds, createForm.groupIds);
+    : accountScopeIssue(createForm.role, createForm.teamIds);
 
   const submitCreate = async () => {
     if (creating || createIssue) return;
@@ -2237,7 +2161,6 @@ function AccountsSection({
         name: createForm.name.trim() || undefined,
         role: createForm.role,
         teamIds: createForm.role === "team_admin" ? createForm.teamIds : [],
-        groupIds: createForm.role === "group_admin" ? createForm.groupIds : [],
       });
       if (result.activation) {
         await presentActivation(
@@ -2267,7 +2190,6 @@ function AccountsSection({
       name: account.name,
       role: account.role,
       teamIds: [...account.teamIds],
-      groupIds: [...account.groupIds],
     });
   };
 
@@ -2275,7 +2197,7 @@ function AccountsSection({
     if (savingId) return;
     const issue = !editForm.name.trim()
       ? "显示名称不能为空"
-      : accountScopeIssue(editForm.role, editForm.teamIds, editForm.groupIds);
+      : accountScopeIssue(editForm.role, editForm.teamIds);
     if (issue) {
       toast(issue, "error");
       return;
@@ -2286,7 +2208,6 @@ function AccountsSection({
         name: editForm.name.trim(),
         role: editForm.role,
         teamIds: editForm.role === "team_admin" ? editForm.teamIds : [],
-        groupIds: editForm.role === "group_admin" ? editForm.groupIds : [],
       });
       toast("账号信息已更新");
       setEditingId(null);
@@ -2350,7 +2271,7 @@ function AccountsSection({
   const normalUsers = users.filter((account) => !account.isDeviceAdmin);
   const editIssue = !editForm.name.trim()
     ? "显示名称不能为空"
-    : accountScopeIssue(editForm.role, editForm.teamIds, editForm.groupIds);
+    : accountScopeIssue(editForm.role, editForm.teamIds);
 
   return (
     <div className="settings-sections">
@@ -2421,8 +2342,9 @@ function AccountsSection({
         </div>
         <p className="settings-note">
           <Link2 size={13} />
-          预创建账号（含团队 / 开发组管理员与超级管理员）在激活前无法登录；对方打开激活链接即自动激活并登录，
-          无需邮箱验证码，也不依赖 SMTP 邮件服务。链接默认 10 分钟内有效、仅可使用一次。
+          预创建账号（含团队管理员与超级管理员）无需激活即可直接用邮箱验证码登录，验证成功时自动激活；
+          也可以打开一次性激活链接快捷激活并登录，无需邮箱验证码，也不依赖 SMTP 邮件服务。链接默认 10
+          分钟内有效、仅可使用一次。
         </p>
       </SettingsCard>
 
@@ -2557,9 +2479,6 @@ function AccountsSection({
                         <span>{account.email}</span>
                         {account.teamIds.length ? (
                           <span>团队：{account.teamIds.map(teamName).join("、")}</span>
-                        ) : null}
-                        {account.groupIds.length ? (
-                          <span>开发组：{account.groupIds.map(groupName).join("、")}</span>
                         ) : null}
                       </div>
                     </div>
@@ -3350,7 +3269,7 @@ function JsonWorkspace({
 }
 
 /* ------------------------------------------------------------------ */
-/* Domain settings: teams & development groups                         */
+/* Domain settings: teams only                                         */
 /* ------------------------------------------------------------------ */
 
 interface DomainTeamDraft {
@@ -3358,13 +3277,6 @@ interface DomainTeamDraft {
   shortName: string;
   description: string;
   color: string;
-}
-
-interface DomainGroupDraft {
-  name: string;
-  description: string;
-  color: string;
-  icon: string;
 }
 
 const DOMAIN_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
@@ -3495,7 +3407,8 @@ function TeamDomainCard({
             </span>
           </div>
           <small>
-            {team.groups.length} 个开发组 · 标识色 <code className="mono">{team.color}</code>
+            团队 ID <code className="mono">{team.id}</code> · 标识色{" "}
+            <code className="mono">{team.color}</code>
           </small>
         </div>
         {editable ? (
@@ -3568,179 +3481,7 @@ function TeamDomainCard({
           <DomainReadonlyRow label="标识色" value={<code className="mono">{team.color}</code>} />
         </div>
       )}
-
-      <div className="settings-domain-groups">
-        <span className="settings-domain-groups-label">
-          <Layers3 size={13} /> 开发组
-        </span>
-        {team.groups.length ? (
-          team.groups.map((group) => (
-            <GroupDomainCard key={group.id} teamId={team.id} group={group} onSaved={onSaved} />
-          ))
-        ) : (
-          <p className="field-hint">该团队下暂无开发组，可使用「管理工作区结构」创建。</p>
-        )}
-      </div>
     </article>
-  );
-}
-
-function GroupDomainCard({
-  teamId,
-  group,
-  onSaved,
-}: {
-  teamId: string;
-  group: DomainGroupSettings;
-  onSaved: () => Promise<void>;
-}) {
-  const { toast } = useToast();
-  const [draft, setDraft] = useState<DomainGroupDraft>(() => ({
-    name: group.name,
-    description: group.description,
-    color: group.color,
-    icon: group.icon,
-  }));
-  const [saving, setSaving] = useState(false);
-  const editable = group.canEdit;
-
-  useEffect(() => {
-    setDraft({
-      name: group.name,
-      description: group.description,
-      color: group.color,
-      icon: group.icon,
-    });
-  }, [group.id, group.name, group.description, group.color, group.icon]);
-
-  const dirty =
-    editable &&
-    (draft.name !== group.name ||
-      draft.description !== group.description ||
-      draft.color !== group.color ||
-      draft.icon !== group.icon);
-  const colorValid = DOMAIN_COLOR_PATTERN.test(draft.color);
-  const nameValid = draft.name.trim().length > 0;
-
-  const save = async () => {
-    if (saving || !editable) return;
-    if (!nameValid) {
-      toast("开发组名称不能为空", "error");
-      return;
-    }
-    if (!colorValid) {
-      toast("开发组标识色必须是 #RRGGBB 格式", "error");
-      return;
-    }
-    setSaving(true);
-    try {
-      await api.updateDomainGroup(teamId, group.id, {
-        name: draft.name.trim(),
-        description: draft.description.trim(),
-        color: draft.color.toLowerCase(),
-        icon: draft.icon.trim() || "layers",
-      });
-      toast(`开发组「${draft.name.trim()}」已更新`);
-      await onSaved();
-    } catch (error) {
-      toast(error instanceof ApiError ? error.message : "保存开发组设置失败", "error");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const reset = () => {
-    setDraft({
-      name: group.name,
-      description: group.description,
-      color: group.color,
-      icon: group.icon,
-    });
-  };
-
-  return (
-    <div className="settings-domain-group">
-      <header className="settings-domain-group-head">
-        <span className="settings-domain-group-dot" style={{ background: group.color }} />
-        <div className="settings-domain-group-copy">
-          <strong>{group.name}</strong>
-          <small>
-            {group.description || "暂无简介"} · 图标 <code className="mono">{group.icon || "layers"}</code>
-          </small>
-        </div>
-        <span className={cn("badge", editable ? "badge-blue" : "badge-gray")}>
-          {editable ? "可编辑" : "只读"}
-        </span>
-        {editable ? (
-          <div className="settings-domain-actions">
-            {dirty ? (
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={reset}
-                disabled={saving}
-              >
-                <RotateCcw size={13} /> 撤销
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              onClick={() => void save()}
-              disabled={!dirty || saving}
-            >
-              {saving ? <Loader2 size={13} className="spin" /> : <Save size={13} />}
-              {saving ? "保存中…" : "保存开发组"}
-            </button>
-          </div>
-        ) : null}
-      </header>
-
-      {editable ? (
-        <div className="form-grid settings-domain-form settings-domain-group-form">
-          <Field label="开发组名称" hint="2 - 40 个字符">
-            <input
-              className="input"
-              value={draft.name}
-              maxLength={40}
-              onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
-            />
-          </Field>
-          <Field label="图标名称" hint="例如 layers / rocket / shield">
-            <input
-              className="input"
-              value={draft.icon}
-              maxLength={40}
-              spellCheck={false}
-              onChange={(event) => setDraft((current) => ({ ...current, icon: event.target.value }))}
-            />
-          </Field>
-          <DomainColorField
-            label="开发组标识色"
-            value={draft.color}
-            onChange={(color) => setDraft((current) => ({ ...current, color }))}
-          />
-          <Field label="开发组简介" className="span-2" hint="最多 120 个字符">
-            <textarea
-              className="textarea"
-              value={draft.description}
-              rows={2}
-              maxLength={120}
-              onChange={(event) =>
-                setDraft((current) => ({ ...current, description: event.target.value }))
-              }
-            />
-          </Field>
-        </div>
-      ) : (
-        <div className="settings-domain-readonly settings-domain-readonly-compact">
-          <DomainReadonlyRow label="开发组名称" value={group.name} />
-          <DomainReadonlyRow label="开发组简介" value={group.description} />
-          <DomainReadonlyRow label="标识色" value={<code className="mono">{group.color}</code>} />
-          <DomainReadonlyRow label="图标" value={group.icon || "layers"} />
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -3784,19 +3525,18 @@ function WorkspaceSettingsSection() {
 
   const teams = data?.teams ?? [];
   const permissions = data?.permissions;
-  const groupTotal = teams.reduce((total, team) => total + team.groups.length, 0);
 
   const scopeHint = permissions?.isSuperAdmin
-    ? "你是超级管理员：可编辑所有团队与开发组的基础信息。"
-    : permissions?.canEditStructure
-      ? "你是团队管理员：可编辑所属团队及其下开发组；如需新建或删除结构，请使用「管理工作区结构」。"
-      : "你是开发组管理员：可编辑被授权开发组的信息，团队信息为只读。";
+    ? "你是超级管理员：可编辑所有团队的基础信息。"
+    : permissions?.canEditTeam
+      ? "你是团队管理员：可编辑被授权团队的团队信息；新建或删除团队需要超级管理员操作。"
+      : "你暂时没有可编辑的团队：团队信息为只读。";
 
   return (
     <div className="settings-sections">
       <SettingsCard
         title="工作区结构与基础信息"
-        description="团队与开发组名称、简介和标识色；每项修改保存后立即生效，并同步到导航与筛选器。"
+        description="团队是唯一组织单位：数据按团队隔离。团队名称、简介和标识色保存后立即生效，并同步到导航与团队切换器。"
         icon={<Building2 size={18} />}
         extra={
           <>
@@ -3821,7 +3561,7 @@ function WorkspaceSettingsSection() {
         }
       >
         {loading ? (
-          <LoadingBlock label="正在读取团队与开发组…" rows={4} />
+          <LoadingBlock label="正在读取团队信息…" rows={4} />
         ) : error ? (
           <div className="settings-inline-empty">
             <AlertTriangle size={18} />
@@ -3839,10 +3579,6 @@ function WorkspaceSettingsSection() {
               <span className="settings-domain-summary-item">
                 <Building2 size={14} />
                 <strong>{teams.length}</strong> 个团队
-              </span>
-              <span className="settings-domain-summary-item">
-                <Layers3 size={14} />
-                <strong>{groupTotal}</strong> 个开发组
               </span>
               <span className="settings-domain-summary-item">
                 <ShieldCheck size={14} />
@@ -3864,14 +3600,14 @@ function WorkspaceSettingsSection() {
                 <Building2 size={18} />
                 <div>
                   <strong>当前范围没有可管理的团队</strong>
-                  <p>请联系超级管理员创建团队与开发组，或检查你的账号授权范围。</p>
+                  <p>请联系超级管理员创建团队，或检查你的账号授权范围。</p>
                 </div>
               </div>
             )}
             {!permissions?.canEditStructure && permissions ? (
               <p className="settings-note">
-                <Layers3 size={13} />
-                新建 / 删除团队与开发组需要团队管理员或超级管理员操作。
+                <Building2 size={13} />
+                新建 / 删除团队需要超级管理员操作。
               </p>
             ) : null}
           </>
@@ -3895,7 +3631,6 @@ function WorkspaceSettingsSection() {
 
 const RESET_PRIMARY_STATS: { key: keyof SystemResetStats; label: string; icon: LucideIcon }[] = [
   { key: "teams", label: "团队", icon: Building2 },
-  { key: "groups", label: "开发组", icon: Layers3 },
   { key: "members", label: "成员", icon: UsersRound },
   { key: "tasks", label: "任务", icon: ListTodo },
   { key: "todos", label: "待办", icon: CheckCircle2 },
@@ -3996,7 +3731,6 @@ function SystemResetSection({ onCompleted }: { onCompleted: () => Promise<void> 
       toast("已重置整个系统，全部数据已清除");
       try {
         localStorage.removeItem("teamstudio.team");
-        localStorage.removeItem("teamstudio.group");
       } catch {
         // ignore storage failures
       }
@@ -4101,7 +3835,7 @@ function SystemResetSection({ onCompleted }: { onCompleted: () => Promise<void> 
               <span>
                 <strong>系统内置管理员身份保留</strong>
                 ：你仍以系统内置 <code>Admin</code> 身份登录，不会被登出。需要重建工作区时，前往
-                「工作区设置」重新创建团队与开发组即可。
+                「工作区设置」重新创建团队即可。
               </span>
             </p>
           </section>
@@ -4141,7 +3875,7 @@ function SystemResetSection({ onCompleted }: { onCompleted: () => Promise<void> 
             <li>
               <Trash2 size={14} />
               <span>
-                删除所有团队、开发组、成员、工作记录、任务、待办、红黑榜、公告、任务标签、常用链接与责任田数据。
+                删除所有团队、成员、工作记录、任务、待办、红黑榜、公告、任务标签、常用链接与责任田数据。
               </span>
             </li>
             <li>
@@ -4227,7 +3961,7 @@ function SystemResetSection({ onCompleted }: { onCompleted: () => Promise<void> 
       <ConfirmDialog
         open={step === "confirm"}
         title="确定要重置整个系统吗？"
-        message="重置会永久删除全部团队、开发组、成员、任务、待办、账号、日志与上传文件，并把所有设置恢复为默认值。系统内置管理员身份会保留，但所有业务数据都无法恢复。确认后还需要输入完整站点名称。"
+        message="重置会永久删除全部团队、成员、任务、待办、账号、日志与上传文件，并把所有设置恢复为默认值。系统内置管理员身份会保留，但所有业务数据都无法恢复。确认后还需要输入完整站点名称。"
         confirmLabel="确认重置"
         onClose={() => setStep("closed")}
         onConfirm={() => setStep("input")}
@@ -4241,7 +3975,7 @@ function SystemResetSection({ onCompleted }: { onCompleted: () => Promise<void> 
         message={
           <>
             <p>
-              即将<strong>永久删除全部数据</strong>并恢复默认设置：所有团队、开发组、成员、任务、待办、
+              即将<strong>永久删除全部数据</strong>并恢复默认设置：所有团队、成员、任务、待办、
               账号、邮件验证码、激活令牌、邮件日志与审计日志，以及已上传的头像文件。
             </p>
             <p>
@@ -4279,14 +4013,12 @@ function DomainSettingsPage() {
       ? "超级管理员"
       : me?.admin.role === "team_admin"
         ? "团队管理员"
-        : me?.admin.role === "group_admin"
-          ? "开发组管理员"
-          : "管理员";
+        : "管理员";
   const scopeLabel = me?.isSuperAdmin
     ? "所有团队"
     : me?.admin.teamIds.length
       ? `${me.admin.teamIds.length} 个团队`
-      : `${me?.admin.groupIds.length ?? 0} 个开发组`;
+      : "暂无团队授权";
 
   return (
     <div className="settings-page fade-up">
@@ -4297,7 +4029,7 @@ function DomainSettingsPage() {
           </span>
           <h1 className="page-title">工作区设置</h1>
           <p className="page-subtitle">
-            管理你被授权的团队与开发组信息，保存后立即生效。站点级设置仅超级管理员可访问。
+            管理你被授权团队的团队信息，保存后立即生效。团队是唯一组织单位，数据按团队隔离；站点级设置仅超级管理员可访问。
           </p>
         </div>
         <div className="page-actions settings-header-actions">
@@ -4332,9 +4064,9 @@ function DomainSettingsPage() {
 
 /**
  * Settings are role-scoped: super administrators get the full site control
- * centre; team / group administrators only ever see the domain (workspace)
- * settings. Non-super identities must never request `/api/settings` — that
- * endpoint answers 403 for them.
+ * centre; team administrators only ever see the domain (workspace) settings.
+ * Non-super identities must never request `/api/settings` — that endpoint
+ * answers 403 for them.
  */
 export default function SettingsPage() {
   const { data } = useApp();
@@ -4361,7 +4093,7 @@ function SiteSettingsPage() {
   const [saved, setSaved] = useState<AppSettings | null>(null);
   const [draft, setDraft] = useState<AppSettings | null>(null);
   const [meta, setMeta] = useState<SettingsMeta | null>(null);
-  const [workspace, setWorkspace] = useState<WorkspaceOption>({ teams: [], groups: [], members: [] });
+  const [workspace, setWorkspace] = useState<WorkspaceOption>({ teams: [] });
   const [workspaceError, setWorkspaceError] = useState("");
   const [activeTab, setActiveTab] = useState<TabKey>(() =>
     readTabFromHash(allowedTabKeys, "appearance"),
@@ -4391,6 +4123,13 @@ function SiteSettingsPage() {
     setLoadError("");
     try {
       const result = await api.getSettings();
+      // 契约 v3：旧服务端可能还没返回 guestModules；按「除系统设置外全部放行」补齐，
+      // 避免设置页与 JSON 编辑器因缺字段崩溃（保存时会按新结构写回）。
+      if (!result.settings.guestModules) {
+        result.settings.guestModules = { ...result.settings.modules, settings: false };
+      }
+      // 系统设置模块永远不对访客开放：无论旧配置残留什么值都强制关闭。
+      result.settings.guestModules.settings = false;
       setSaved(result.settings);
       setDraft(cloneSettings(result.settings));
       setMeta(result.meta);
@@ -4419,14 +4158,13 @@ function SiteSettingsPage() {
   }, [loadSettings, loadWorkspace]);
 
   /**
-   * After a successful factory reset: drop the stale selected team / group ids and re-read
+   * After a successful factory reset: drop the stale selected team id and re-read
    * settings, workspace options and the bootstrap data. `loadSettings(true)` refreshes in the
    * background so the reset success panel stays visible instead of a full-page loader.
    */
   const handleResetCompleted = useCallback(async () => {
     try {
       localStorage.removeItem("teamstudio.team");
-      localStorage.removeItem("teamstudio.group");
     } catch {
       // ignore storage failures
     }
@@ -4573,10 +4311,8 @@ function SiteSettingsPage() {
         errors.push({ path: `auth.adminWhitelist.ips.${index}.ip`, message: "IP / CIDR 不能为空" });
       }
       const problem = scopeProblem(entry);
-      if (problem === "团队管理员必须选择一个团队") {
+      if (problem) {
         errors.push({ path: `auth.adminWhitelist.ips.${index}.teamId`, message: problem });
-      } else if (problem) {
-        errors.push({ path: `auth.adminWhitelist.ips.${index}.groupIds`, message: problem });
       }
     });
     draft.auth.adminWhitelist.ids.forEach((entry, index) => {
@@ -4584,10 +4320,8 @@ function SiteSettingsPage() {
         errors.push({ path: `auth.adminWhitelist.ids.${index}.id`, message: "SSO 标识 / 邮箱不能为空" });
       }
       const problem = scopeProblem(entry);
-      if (problem === "团队管理员必须选择一个团队") {
+      if (problem) {
         errors.push({ path: `auth.adminWhitelist.ids.${index}.teamId`, message: problem });
-      } else if (problem) {
-        errors.push({ path: `auth.adminWhitelist.ids.${index}.groupIds`, message: problem });
       }
     });
     if (draft.auth.session.maxAgeDays < 1 || draft.auth.session.maxAgeDays > 90) {
@@ -4626,6 +4360,11 @@ function SiteSettingsPage() {
 
   const applySaved = useCallback(
     (result: { settings: AppSettings; meta: SettingsMeta }) => {
+      // 与 loadSettings 一致：保证 guestModules 始终存在，且系统设置模块对访客始终关闭。
+      if (!result.settings.guestModules) {
+        result.settings.guestModules = { ...result.settings.modules, settings: false };
+      }
+      result.settings.guestModules.settings = false;
       setSaved(result.settings);
       setDraft(cloneSettings(result.settings));
       setMeta(result.meta);
@@ -5032,7 +4771,7 @@ function SiteSettingsPage() {
         <div className="settings-workspace-warning">
           <AlertTriangle size={14} />
           <span>
-            工作区数据加载失败：{workspaceError}。「成员与权限」「账号与角色」中的团队 / 开发组选择器可能不可用。
+            工作区数据加载失败：{workspaceError}。「成员与权限」「账号与角色」中的团队选择器可能不可用。
           </span>
           <button type="button" className="text-button" onClick={() => void loadWorkspace()}>
             重试
@@ -5071,7 +4810,7 @@ function SiteSettingsPage() {
             );
           })}
           <p className="settings-tabs-note">
-            <ShieldCheck size={13} /> 站点级设置仅超级管理员可修改；团队 / 开发组管理员只能在「工作区设置」中管理自己的范围。
+            <ShieldCheck size={13} /> 站点级设置仅超级管理员可修改；团队管理员只能在「工作区设置」中管理自己的团队范围。
           </p>
         </nav>
 

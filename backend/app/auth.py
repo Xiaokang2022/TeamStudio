@@ -1,20 +1,21 @@
 """Identity, signed-cookie sessions, IP/ID admin whitelist and permission helpers.
 
-Round 5 introduces password-less e-mail accounts stored in the ``users`` table:
+Round 8 makes the **team** the only organisation unit:
 
-* a registered account's id is the e-mail local part and is immutable;
-* the display name defaults to that local part and may only be changed by the
-  account owner or a super administrator;
-* roles are ``member`` / ``group_admin`` / ``team_admin`` / ``super``.
+* account roles are ``member`` / ``team_admin`` / ``super`` (``group_admin`` is gone);
+* a ``team_admin`` is scoped by ``team_ids`` and may manage that team's structure;
+* e-mail accounts are still password-less: a registered account's id is the e-mail local
+  part and may only be changed by a super administrator;
+* the deployment device keeps the built-in ``Admin`` identity (super administrator) and is
+  detected through the real client IP (loopback, the machine's own interface addresses,
+  IPv4-mapped IPv6 forms and an optional ``TEAMSTUDIO_DEVICE_IPS`` allow-list). Forwarding
+  headers are only trusted when the TCP peer itself is the deployment device, so a remote
+  client can never spoof its way into the built-in Admin identity, while a local reverse
+  proxy carrying a remote client is correctly treated as remote.
 
-The deployment device itself (loopback/local interface) keeps the built-in
-``Admin`` identity and therefore is always a super administrator. Other super
-administrators share every permission of the device admin except that the device
-admin itself is not a stored/manageable account.
-
-Sessions are sliding: every authenticated bootstrap/`me` request re-issues the
-signed cookie with a fresh expiry, so ``auth.session.maxAgeDays`` (default 7)
-counts from the most recent visit.
+Sessions are sliding: every authenticated bootstrap/`me` request re-issues the signed
+cookie with a fresh expiry, so ``auth.session.maxAgeDays`` (default 7) counts from the
+most recent visit.
 """
 
 from __future__ import annotations
@@ -43,9 +44,11 @@ STATE_COOKIE = "teamstudio_sso_state"
 # Admin identity. The flag only *disables* automatic device-admin privileges; it never
 # grants any. Visiting the login page can clear it again ("以系统内置管理员身份登录").
 DEVICE_LOGOUT_COOKIE = "teamstudio_device_logout"
-LOCAL_HOSTNAMES = {"localhost", "127.0.0.1", "::1", "testclient"}
+# Environment variable with extra device addresses (comma separated), e.g. the LAN IP of
+# the deployment machine behind a NAT/router.
+DEVICE_IPS_ENV = "TEAMSTUDIO_DEVICE_IPS"
 
-USER_ROLES = ("member", "group_admin", "team_admin", "super")
+USER_ROLES = ("member", "team_admin", "super")
 
 
 class SessionIdentity(BaseModel):
@@ -57,7 +60,6 @@ class SessionIdentity(BaseModel):
     provider: str = "sso"
     sub: str = ""
     exp: int = 0
-    groups: list[str] = []
 
 
 @dataclass
@@ -75,12 +77,12 @@ class CurrentUser:
     admin_role: str | None = None
     user_role: str = "member"
     team_ids: set[str] = field(default_factory=set)
-    group_ids: set[str] = field(default_factory=set)
     linked_member_id: str | None = None
     linked_member_name: str | None = None
-    # Every ``members`` archive row owned by this identity across development groups,
-    # ordered by group (round 7). ``linked_member_id`` keeps the first entry for
-    # compatibility; write permissions check the whole list.
+    # Every ``members`` archive row owned by this identity across teams, ordered by team
+    # and then by the member's own ordering. ``linked_member_id`` keeps the first entry;
+    # write permissions check the whole list (one account may own archive rows in several
+    # teams, and migration keeps historical duplicates inside one team).
     linked_member_ids: list[str] = field(default_factory=list)
     email_verified: bool = True
     sso_configured: bool = False
@@ -105,32 +107,25 @@ class CurrentUser:
     def can_manage_users(self) -> bool:
         return self.is_super_admin
 
-    def can_view_all_scope(self) -> bool:
-        # Every identity (including guests) may aggregate all teams; browsing scope
-        # is a view preference, not a permission boundary.
-        return True
-
-    def can_edit_group(self, team_id: str, group_id: str) -> bool:
+    def can_edit_team(self, team_id: str) -> bool:
+        """Super administrators edit every team; team admins only their own team_ids."""
         if self.is_super_admin:
             return True
-        return group_id in self.group_ids or team_id in self.team_ids
-
-    def can_edit_any_group(self) -> bool:
-        return self.is_super_admin or bool(self.team_ids or self.group_ids)
+        return bool(team_id) and team_id in self.team_ids
 
     def can_manage_team(self, team_id: str) -> bool:
-        """A super admin manages every team; a team_admin only its own ``teamIds``."""
-        return self.is_super_admin or team_id in self.team_ids
+        """Team administration (member/structure writes) inside ``team_id``."""
+        return self.can_edit_team(team_id)
 
     def can_create_team(self) -> bool:
-        """Creating a whole team is reserved for super administrators."""
+        """Creating (and deleting) a whole team stays reserved for super administrators."""
         return self.is_super_admin
 
-    def can_manage_group_settings(self, group_id: str) -> bool:
-        return self.is_super_admin or group_id in self.group_ids
+    def can_edit_any(self) -> bool:
+        return self.is_super_admin or bool(self.team_ids)
 
-    def require_team_manager(self, team_id: str) -> None:
-        """Raise 403 ``not_admin`` unless the user may restructure ``team_id``."""
+    def ensure_team(self, team_id: str) -> None:
+        """Raise 403 ``not_admin`` unless the user may manage ``team_id``."""
         if not self.can_manage_team(team_id):
             raise HTTPException(
                 status_code=403,
@@ -153,25 +148,17 @@ class CurrentUser:
         )
 
     def linked_member_id_list(self) -> list[str]:
-        """All linked archive ids, keeping the legacy single id (if any) first."""
+        """All linked archive ids, keeping the single id (if any) first."""
         values = list(self.linked_member_ids)
         if self.linked_member_id and self.linked_member_id not in values:
             values.insert(0, self.linked_member_id)
         return values
 
     def is_linked_member(self, member_id: str | None) -> bool:
-        """Whether ``member_id`` is one of this identity's archive rows.
-
-        The legacy ``linked_member_id`` field is honoured so manual test identities
-        constructed before round 7 keep working.
-        """
+        """Whether ``member_id`` is one of this identity's archive rows (any team)."""
         if not member_id:
             return False
         return member_id in self.linked_member_id_list()
-
-    def ensure_group(self, team_id: str, group_id: str) -> None:
-        if not self.can_edit_group(team_id, group_id):
-            raise HTTPException(status_code=403, detail="你没有该开发组的管理权限")
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -191,7 +178,6 @@ class CurrentUser:
             "admin": {
                 "role": self.admin_role,
                 "teamIds": sorted(self.team_ids),
-                "groupIds": sorted(self.group_ids),
             },
             "linkedMemberId": self.linked_member_id,
             "linkedMemberName": self.linked_member_name,
@@ -201,13 +187,15 @@ class CurrentUser:
             "deviceAdminActive": self.device_admin_active,
             "permissions": {
                 "canEditSettings": self.can_edit_settings(),
-                "canEditAny": self.can_edit_any_group(),
+                "canEditAny": self.can_edit_any(),
                 "canEditSelf": self.can_edit_self(),
                 "canManageUsers": self.can_manage_users(),
-                "canViewAllScope": self.can_view_all_scope(),
-                "canManageWorkspace": self.is_super_admin or bool(self.team_ids),
+                "canManageWorkspace": self.can_edit_any(),
             },
         }
+
+
+# --------------------------------------------------------------------------- sessions
 
 
 def _secret_path() -> Path:
@@ -382,50 +370,162 @@ def clear_device_logout_cookie(response: Any) -> None:
     response.delete_cookie(DEVICE_LOGOUT_COOKIE, path="/")
 
 
-def _local_addresses() -> set[str]:
-    addresses = {"127.0.0.1", "::1", "localhost", "testclient"}
+# ------------------------------------------------------------------- device (local) detection
+
+
+def normalize_ip(value: Any) -> str:
+    """Normalise one IP-ish header value (quotes, ports, IPv4-mapped IPv6, case)."""
+    text = str(value or "").strip().strip('"').strip("'").strip()
+    if not text:
+        return ""
+    if text.startswith("["):  # "[::1]:8080" or "[::ffff:127.0.0.1]"
+        closing = text.find("]")
+        if closing > 0:
+            text = text[1:closing]
+    elif text.count(":") == 1 and "." in text:  # "192.168.1.5:8080"
+        host, _, port = text.rpartition(":")
+        if port.isdigit():
+            text = host
+    text = text.strip().strip("[]").strip().lower()
+    if not text:
+        return ""
+    if text in {"localhost", "testclient"}:
+        return text
     try:
-        hostname = socket.gethostname()
-        for info in socket.getaddrinfo(hostname, None):
-            address = info[4][0]
-            if address:
-                addresses.add(address)
-        for address in socket.gethostbyname_ex(hostname)[2]:
-            addresses.add(address)
-    except OSError:
+        address = ipaddress.ip_address(text)
+    except ValueError:
+        return text  # hostname or unparsable value: compared verbatim (lower-cased)
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return str(address.ipv4_mapped)
+    return str(address)
+
+
+def _collect_local_addresses() -> set[str]:
+    """Loopback + every address of this machine, cached for the process lifetime."""
+    addresses = {"127.0.0.1", "::1", "localhost", "testclient", "0:0:0:0:0:0:0:1"}
+    hostnames: set[str] = set()
+    try:
+        hostnames.add(socket.gethostname())
+    except OSError:  # pragma: no cover - unusual socket-less environment
         pass
-    return addresses
+    try:
+        hostnames.add(socket.getfqdn())
+    except OSError:  # pragma: no cover
+        pass
+    for hostname in hostnames:
+        if not hostname:
+            continue
+        addresses.add(normalize_ip(hostname))
+        try:
+            for info in socket.getaddrinfo(hostname, None):
+                addresses.add(normalize_ip(info[4][0]))
+        except OSError:
+            pass
+        try:
+            addresses.update(normalize_ip(item) for item in socket.gethostbyname_ex(hostname)[2])
+        except OSError:
+            pass
+    return {item for item in addresses if item}
 
 
-_LOCAL_ADDRESSES = _local_addresses()
+_LOCAL_ADDRESSES = _collect_local_addresses()
+
+
+def device_ip_allowlist() -> set[str]:
+    """Extra deployment-device addresses from ``TEAMSTUDIO_DEVICE_IPS`` (comma separated)."""
+    raw = os.environ.get(DEVICE_IPS_ENV, "")
+    return {normalize_ip(item) for item in raw.split(",") if item.strip()} - {""}
+
+
+def local_addresses() -> set[str]:
+    """Every address that identifies the deployment device right now."""
+    return _LOCAL_ADDRESSES | device_ip_allowlist()
+
+
+def is_local_ip(value: str) -> bool:
+    """Whether one normalised IP/hostname belongs to the deployment device."""
+    normalized = normalize_ip(value)
+    if not normalized:
+        return False
+    if normalized in local_addresses():
+        return True
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError:
+        return False
+    # Loopback is the device by definition even when the cached address set is stale.
+    return address.is_loopback
+
+
+def _effective_forwarded_ip(request: Request) -> str:
+    """The real client IP reported by an on-device reverse proxy, if any.
+
+    ``X-Forwarded-For`` is a comma separated chain; the last entry is appended by the
+    closest proxy and therefore names the real client. ``X-Real-IP`` and the RFC 7239
+    ``Forwarded: for=`` values are used as fallbacks.
+    """
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        parts = [part.strip() for part in forwarded_for.split(",") if part.strip()]
+        if parts:
+            return normalize_ip(parts[-1])
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return normalize_ip(real_ip)
+    forwarded = request.headers.get("forwarded")
+    if forwarded:
+        values: list[str] = []
+        for element in forwarded.split(","):
+            for part in element.split(";"):
+                key, _, value = part.partition("=")
+                if key.strip().lower() == "for" and value.strip():
+                    values.append(normalize_ip(value))
+        if values:
+            return values[-1]
+    return ""
+
+
+def candidate_ips(request: Request) -> list[str]:
+    """Candidate real client IPs: TCP peer first, then the forwarded real IP."""
+    values = []
+    if request.client and request.client.host:
+        values.append(normalize_ip(request.client.host))
+    forwarded = _effective_forwarded_ip(request)
+    if forwarded:
+        values.append(forwarded)
+    return [item for item in values if item]
 
 
 def client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-    if forwarded and os.environ.get("TEAMSTUDIO_TRUST_PROXY", "0") == "1":
+    """The real client IP used for IP-whitelist matching.
+
+    Forwarding headers are only trusted when the TCP peer is the deployment device (a
+    local reverse proxy), so a remote client cannot spoof a whitelisted address.
+    """
+    peer = normalize_ip(request.client.host if request.client else "")
+    forwarded = _effective_forwarded_ip(request)
+    if peer and is_local_ip(peer) and forwarded:
         return forwarded
-    return request.client.host if request.client else ""
+    return peer
 
 
 def is_local_request(request: Request) -> bool:
-    # Do not treat a reverse proxy on the deployment host as the device itself.
-    # When proxy headers are present without an explicit trust opt-in, refuse the
-    # built-in Admin identity; the operator can still use a direct loopback URL.
-    forwarded_headers = (
-        request.headers.get("x-forwarded-for")
-        or request.headers.get("x-real-ip")
-        or request.headers.get("forwarded")
-    )
-    if forwarded_headers and os.environ.get("TEAMSTUDIO_TRUST_PROXY", "0") != "1":
+    """Whether the request really originates from the deployment device.
+
+    The TCP peer must be a device address; forwarding headers can then only *narrow* the
+    decision (a local reverse proxy carrying a remote client is not the device). A remote
+    peer never becomes the device by sending forwarding headers.
+    """
+    peer = normalize_ip(request.client.host if request.client else "")
+    if not is_local_ip(peer):
         return False
-    host = client_ip(request)
-    if host in _LOCAL_ADDRESSES:
-        return True
-    try:
-        address = ipaddress.ip_address(host)
-        return address.is_loopback or host in _LOCAL_ADDRESSES
-    except ValueError:
-        return False
+    forwarded = _effective_forwarded_ip(request)
+    if forwarded:
+        return is_local_ip(forwarded)
+    return True
+
+
+# --------------------------------------------------------------------------- admin whitelist
 
 
 def match_ip_admin(ip_value: str) -> tuple[list[Any], str]:
@@ -460,15 +560,14 @@ def match_id_admin(identity: SessionIdentity) -> list[Any]:
     return matched
 
 
-def merge_scopes(entries: list[Any]) -> tuple[set[str], set[str]]:
+def merge_team_scopes(entries: list[Any]) -> set[str]:
+    """Team ids granted by whitelist entries (empty ``teamId`` grants nothing)."""
     team_ids: set[str] = set()
-    group_ids: set[str] = set()
     for entry in entries:
-        if entry.role == "team_admin" and entry.teamId:
-            team_ids.add(entry.teamId)
-        if entry.role == "group_admin":
-            group_ids.update(entry.groupIds)
-    return team_ids, group_ids
+        team_id = str(getattr(entry, "teamId", "") or "").strip()
+        if entry.role == "team_admin" and team_id:
+            team_ids.add(team_id)
+    return team_ids
 
 
 def _find_user(identity: SessionIdentity) -> dict[str, Any] | None:
@@ -494,9 +593,9 @@ def _linked_members(identity: SessionIdentity) -> list[dict[str, Any]]:
     One query matches every account identifier (id / e-mail / SSO sub) against both
     ``external_id`` and ``email``: historical rows store the e-mail in ``external_id``
     while account-created rows store the account id, and the same account may own rows in
-    several development groups. Rows are ordered by development group and then by the
-    member's own ordering, so the first row is the global "primary" archive kept in
-    ``linked_member_id`` for the legacy contract.
+    several teams (or several historical rows inside one team). Rows are ordered by team
+    and then by the member's own ordering, so the first row is the global "primary"
+    archive kept in ``linked_member_id``.
     """
     candidates = [identity.id, identity.email, identity.sub]
     lowered = sorted({value.strip().lower() for value in candidates if value and value.strip()})
@@ -506,10 +605,11 @@ def _linked_members(identity: SessionIdentity) -> list[dict[str, Any]]:
     with db() as conn:
         return rows(
             conn,
-            "SELECT m.id, m.name FROM members m JOIN groups g ON g.id=m.group_id "
+            "SELECT m.id, m.name, m.team_id FROM members m "
+            "JOIN teams t ON t.id = m.team_id "
             f"WHERE lower(m.external_id) IN ({placeholders}) "
             f"OR lower(m.email) IN ({placeholders}) "
-            "ORDER BY g.sort_order, g.name, m.sort_order, m.created_at, m.id",
+            "ORDER BY t.sort_order, t.name, m.sort_order, m.created_at, m.id",
             (*lowered, *lowered),
         )
 
@@ -521,7 +621,7 @@ def _role_from_user(user: dict[str, Any] | None) -> str:
     return role if role in USER_ROLES else "member"
 
 
-def _scope_list(user: dict[str, Any] | None, key: str) -> set[str]:
+def _json_list(user: dict[str, Any] | None, key: str) -> set[str]:
     if not user:
         return set()
     parsed = json_loads(user.get(key), [])
@@ -557,35 +657,27 @@ def build_user(request: Request) -> CurrentUser:
     if local:
         # The device owner is using another account: IP-based admin grants are not
         # applied so the session really behaves like any other browser session.
-        ip_entries, ip_display = [], ""
+        ip_entries: list[Any] = []
+        ip_display = ""
     else:
         ip_entries, ip_display = match_ip_admin(ip_value)
     entries: list[Any] = list(ip_entries)
     if identity:
         entries.extend(match_id_admin(identity))
 
-    team_ids, group_ids = merge_scopes(entries)
-    role: str | None = None
-    if team_ids:
-        role = "team_admin"
-    elif group_ids:
-        role = "group_admin"
+    team_ids = merge_team_scopes(entries)
+    role: str | None = "team_admin" if team_ids else None
 
     account = _find_user(identity) if identity else None
     if account:
         account_role = _role_from_user(account)
-        team_ids |= _scope_list(account, "team_ids")
-        group_ids |= _scope_list(account, "group_ids")
+        team_ids |= _json_list(account, "team_ids")
         if account_role == "super":
             role = "super"
-        elif account_role == "team_admin" or (
-            account_role == "group_admin" and role != "team_admin"
-        ):
-            role = account_role
-        elif role is None and (team_ids or group_ids):
-            role = "team_admin" if team_ids else "group_admin"
-    elif role is None and (team_ids or group_ids):
-        role = "team_admin" if team_ids else "group_admin"
+        elif account_role == "team_admin":
+            role = "team_admin"
+        elif role is None and team_ids:
+            role = "team_admin"
 
     linked_rows = _linked_members(identity) if identity else []
     linked = linked_rows[0] if linked_rows else None
@@ -593,11 +685,10 @@ def build_user(request: Request) -> CurrentUser:
 
     if account and identity:
         display_name = account.get("name") or identity.name or account["id"]
-        email = account.get("email") or identity.email
         return CurrentUser(
             id=account["id"],
             name=display_name,
-            email=email,
+            email=account.get("email") or identity.email,
             avatar=account.get("avatar") or "",
             avatar_color=account.get("avatar_color") or "#5865f2",
             bio=account.get("bio") or "",
@@ -607,7 +698,6 @@ def build_user(request: Request) -> CurrentUser:
             admin_role=role,
             user_role=_role_from_user(account),
             team_ids=team_ids,
-            group_ids=group_ids,
             linked_member_id=linked["id"] if linked else None,
             linked_member_name=linked["name"] if linked else None,
             linked_member_ids=linked_ids,
@@ -628,7 +718,6 @@ def build_user(request: Request) -> CurrentUser:
             admin_role=role,
             user_role=role or "member",
             team_ids=team_ids,
-            group_ids=group_ids,
             linked_member_id=linked["id"] if linked else None,
             linked_member_name=linked["name"] if linked else None,
             linked_member_ids=linked_ids,
@@ -638,21 +727,21 @@ def build_user(request: Request) -> CurrentUser:
             session=identity,
         )
 
-    if entries:
+    if team_ids:
         return CurrentUser(
             id=f"ip:{ip_value}",
             name=ip_display or "IP 管理员",
             authenticated=True,
             source="ip",
-            admin_role=role or "team_admin",
-            user_role=role or "team_admin",
+            admin_role="team_admin",
+            user_role="team_admin",
             team_ids=team_ids,
-            group_ids=group_ids,
             sso_configured=sso_configured,
             deploy_device=local,
             device_admin_active=False,
         )
 
+    # A whitelist entry without a team grants nothing (round 8 §2.1).
     return CurrentUser(
         id="guest",
         name="访客",
@@ -682,13 +771,6 @@ def require_device_admin(user: CurrentUser = Depends(get_current_user)) -> Curre
     """Require the deployment device's built-in Admin identity."""
     if not user.is_device_admin:
         raise HTTPException(status_code=403, detail="仅系统内置的 Admin 可执行此操作")
-    return user
-
-
-def require_group_admin(
-    team_id: str, group_id: str, user: CurrentUser = Depends(get_current_user)
-) -> CurrentUser:
-    user.ensure_group(team_id, group_id)
     return user
 
 

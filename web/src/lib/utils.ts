@@ -1,4 +1,11 @@
-import type { CurrentUser, Member, MemberMembership, Todo, TodoPriority } from "../types";
+import type {
+  CurrentUser,
+  InsightsRangeKey,
+  Member,
+  MemberMembership,
+  Todo,
+  TodoPriority,
+} from "../types";
 
 /**
  * Minimal identity shape shared by member cards, workloads and profile rows.
@@ -6,10 +13,8 @@ import type { CurrentUser, Member, MemberMembership, Todo, TodoPriority } from "
  */
 export type MemberIdentity = Pick<Member, "id" | "email"> & { memberIds?: string[] };
 
-/** One development group a person belongs to (used for multi-group badges). */
-export interface MemberGroupRef {
-  groupId: string;
-  groupName: string;
+/** One team a person belongs to (used for multi-team badges). */
+export interface MemberTeamRef {
   teamId: string;
   teamName: string;
 }
@@ -27,6 +32,14 @@ export function initials(name: string): string {
   const parts = trimmed.split(/\s+/).filter(Boolean);
   if (parts.length > 1) return (parts[0][0] + parts[1][0]).toUpperCase();
   return trimmed.slice(0, 2).toUpperCase();
+}
+
+/** Name collation used by member cards/profiles (Chinese pinyin order). */
+const NAME_COLLATOR = new Intl.Collator("zh-Hans-CN");
+
+/** Ascending name comparison for Chinese-friendly sorting. */
+export function compareNames(left: string, right: string): number {
+  return NAME_COLLATOR.compare(left || "", right || "");
 }
 
 export function dateFromISO(value: string): Date {
@@ -135,28 +148,24 @@ export const PRIORITY_META: Record<TodoPriority, { label: string; tone: string }
   urgent: { label: "紧急", tone: "urgent" },
 };
 
-export const STATUS_META: Record<string, { label: string; tone: string }> = {
-  available: { label: "可协作", tone: "green" },
-  busy: { label: "专注中", tone: "orange" },
-  remote: { label: "远程", tone: "blue" },
-  offline: { label: "休假中", tone: "gray" },
-};
-
-export function canManageGroup(
+/**
+ * 团队管理权限：超级管理员（含系统内置 Admin）可管理所有团队；
+ * 团队管理员只能管理 `admin.teamIds` 内的团队（创建 / 删除团队仍仅超级管理员）。
+ */
+export function canManageTeam(
   user: CurrentUser | null | undefined,
   teamId?: string | null,
-  groupId?: string | null,
 ): boolean {
   if (!user) return false;
   if (user.isSuperAdmin || user.isDeviceAdmin) return true;
-  if (!teamId || !groupId) return false;
-  return user.admin.teamIds.includes(teamId) || user.admin.groupIds.includes(groupId);
+  if (!teamId) return false;
+  return user.admin.teamIds.includes(teamId);
 }
 
 /**
  * Every member archive id linked to this account. The backend returns
- * `linkedMemberIds` for all development groups; `linkedMemberId` (current
- * group's archive) stays as a fallback for older payloads.
+ * `linkedMemberIds` for all teams; `linkedMemberId` (current team's archive)
+ * stays as a fallback for older payloads.
  */
 export function linkedMemberIdsOf(user: CurrentUser | null | undefined): string[] {
   if (!user) return [];
@@ -177,7 +186,7 @@ export function memberArchiveIdsOf(
 }
 
 /**
- * "这是我" 判定：账号在任一开发组的档案都算本人（linkedMemberIds 命中），
+ * "这是我" 判定：账号在任一团队的档案都算本人（linkedMemberIds 命中），
  * 或登录邮箱与该档案邮箱一致。超级管理员身份不在此列——那是权限而非本人。
  */
 export function isLinkedMember(
@@ -192,56 +201,45 @@ export function isLinkedMember(
   return Boolean(viewerEmail) && Boolean(memberEmail) && viewerEmail === memberEmail;
 }
 
-/** Fields any payload may use to describe a person's development groups. */
-export interface GroupRefSource {
-  groupId?: string;
-  groupName?: string;
+/** Fields any payload may use to describe a person's team memberships. */
+export interface TeamRefSource {
   teamId?: string;
   teamName?: string;
   memberships?: MemberMembership[];
-  groupIds?: string[];
-  groupNames?: string[];
   teamIds?: string[];
   teamNames?: string[];
 }
 
 /**
- * All development groups a person belongs to. Prefers the merged `memberships`
- * payload, then the flat `groupIds`/`groupNames` arrays, and finally the single
- * group fields of classic (non-aggregated) payloads.
+ * All teams a person belongs to. Prefers the merged `memberships` payload, then
+ * the flat `teamIds`/`teamNames` arrays, and finally the single team fields of
+ * classic (non-aggregated) payloads.
  */
-export function memberGroupRefs(
-  member: GroupRefSource | null | undefined,
-): MemberGroupRef[] {
+export function memberTeamRefs(
+  member: TeamRefSource | null | undefined,
+): MemberTeamRef[] {
   if (!member) return [];
   const memberships = Array.isArray(member.memberships) ? member.memberships : [];
   if (memberships.length) {
     return memberships
       .map((item) => ({
-        groupId: item.groupId || "",
-        groupName: item.groupName || item.groupId || "",
         teamId: item.teamId || "",
-        teamName: item.teamName || "",
+        teamName: item.teamName || item.teamId || "",
       }))
-      .filter((item) => item.groupId || item.groupName);
+      .filter((item) => item.teamId || item.teamName);
   }
-  const groupIds = Array.isArray(member.groupIds) ? member.groupIds : [];
-  const groupNames = Array.isArray(member.groupNames) ? member.groupNames : [];
-  if (groupIds.length || groupNames.length) {
-    const teamNames = Array.isArray(member.teamNames) ? member.teamNames : [];
-    const count = Math.max(groupIds.length, groupNames.length);
+  const teamIds = Array.isArray(member.teamIds) ? member.teamIds : [];
+  const teamNames = Array.isArray(member.teamNames) ? member.teamNames : [];
+  if (teamIds.length || teamNames.length) {
+    const count = Math.max(teamIds.length, teamNames.length);
     return Array.from({ length: count }, (_, index) => ({
-      groupId: groupIds[index] ?? `group-${index}`,
-      groupName: groupNames[index] ?? groupIds[index] ?? "",
-      teamId: "",
-      teamName: teamNames[index] ?? teamNames[0] ?? "",
-    })).filter((item) => item.groupName);
+      teamId: teamIds[index] ?? `team-${index}`,
+      teamName: teamNames[index] ?? teamIds[index] ?? "",
+    })).filter((item) => item.teamName);
   }
-  if (member.groupId || member.groupName) {
+  if (member.teamId || member.teamName) {
     return [
       {
-        groupId: member.groupId ?? "",
-        groupName: member.groupName ?? "",
         teamId: member.teamId ?? "",
         teamName: member.teamName ?? "",
       },
@@ -265,20 +263,18 @@ export function canEditPersonalInfo(
 }
 
 /**
- * 组织信息（职位 / 团队角色 / 状态）的编辑权限。
- * 仅超级管理员（含系统内置 Admin）与在管辖范围内的团队 / 开发组管理员可编辑。
+ * 组织信息（职位 / 团队角色）的编辑权限。
+ * 仅超级管理员（含系统内置 Admin）与在管辖范围内的团队管理员可编辑。
  */
 export function canEditOrganizationalInfo(
   user: CurrentUser | null | undefined,
   teamId?: string | null,
-  groupId?: string | null,
 ): boolean {
   if (!user) return false;
   if (user.isSuperAdmin || user.isDeviceAdmin) return true;
   const role = user.userRole ?? user.admin.role;
   if (role === "team_admin" && teamId) return user.admin.teamIds.includes(teamId);
-  if (role === "group_admin" && groupId) return user.admin.groupIds.includes(groupId);
-  return canManageGroup(user, teamId, groupId);
+  return canManageTeam(user, teamId);
 }
 
 /**
@@ -288,11 +284,10 @@ export function canEditOrganizationalInfo(
 export function canEditMember(
   user: CurrentUser | null | undefined,
   teamId: string,
-  groupId: string,
   member: string | MemberIdentity | null | undefined,
 ): boolean {
   if (!user) return false;
-  if (canEditOrganizationalInfo(user, teamId, groupId)) return true;
+  if (canEditOrganizationalInfo(user, teamId)) return true;
   if (!user.permissions.canEditSelf || !member) return false;
   if (typeof member === "string") {
     return linkedMemberIdsOf(user).includes(member);
@@ -300,6 +295,71 @@ export function canEditMember(
   const linkedIds = linkedMemberIdsOf(user);
   return memberArchiveIdsOf(member).some((id) => linkedIds.includes(id));
 }
+
+/* ------------------------------------------------------------------ */
+/* Ranges & tag palette (formerly web/src/lib/scope.ts)               */
+/* ------------------------------------------------------------------ */
+
+export interface RangeOption {
+  key: InsightsRangeKey;
+  label: string;
+  days: number | null;
+}
+
+/** Analytics range: minimum one week, maximum everything. */
+export const INSIGHTS_RANGES: RangeOption[] = [
+  { key: "1w", label: "近 1 周", days: 7 },
+  { key: "2w", label: "近 2 周", days: 14 },
+  { key: "1m", label: "近 1 个月", days: 30 },
+  { key: "3m", label: "近 3 个月", days: 90 },
+  { key: "all", label: "全部时间", days: null },
+];
+
+/** Task ledger range: minimum one week, maximum three months. */
+export const TASK_RANGES: RangeOption[] = [
+  { key: "1w", label: "近 1 周", days: 7 },
+  { key: "2w", label: "近 2 周", days: 14 },
+  { key: "1m", label: "近 1 个月", days: 30 },
+  { key: "2m", label: "近 2 个月", days: 60 },
+  { key: "3m", label: "近 3 个月", days: 90 },
+];
+
+export function rangeStartISO(days: number | null, now: Date = new Date()): string | null {
+  if (days === null) return null;
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  start.setDate(start.getDate() - days);
+  const year = start.getFullYear();
+  const month = String(start.getMonth() + 1).padStart(2, "0");
+  const day = String(start.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+/** True when an ISO timestamp/date falls inside [start, +∞). */
+export function isWithinRange(value: string | null | undefined, startISO: string | null): boolean {
+  if (!startISO) return true;
+  if (!value) return false;
+  return value.slice(0, 10) >= startISO;
+}
+
+/** Shared palette for the team tag library. */
+export const TAG_COLORS = [
+  "#0a59f7",
+  "#1d7a4d",
+  "#9a6210",
+  "#b3261e",
+  "#7c3aed",
+  "#0e7490",
+  "#be185d",
+  "#4f6f8f",
+];
+
+export function tagColorFor(index: number): string {
+  return TAG_COLORS[index % TAG_COLORS.length];
+}
+
+/* ------------------------------------------------------------------ */
+/* Misc helpers                                                       */
+/* ------------------------------------------------------------------ */
 
 export interface CalendarCell {
   date: Date;

@@ -10,11 +10,19 @@
     <title>团队工作室 · TeamStudio</title>
     <script>
       try {
-        const saved = localStorage.getItem("teamstudio.theme");
+        // Round 8: the user preference decides the palette; "auto" follows the OS.
+        // Read it before the first paint so "follow system" never flashes.
+        const key = "teamstudio.theme.preference";
+        let pref = localStorage.getItem(key);
+        if (pref !== "auto" && pref !== "light" && pref !== "dark") {
+          const legacy = localStorage.getItem("teamstudio.theme");
+          pref = legacy === "light" || legacy === "dark" ? legacy : "auto";
+          if (pref !== "auto") localStorage.setItem(key, pref);
+          localStorage.removeItem("teamstudio.theme");
+        }
         const systemDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-        // Site default follows the system colour scheme; an explicit local choice wins.
         document.documentElement.dataset.theme =
-          saved === "light" || saved === "dark" ? saved : systemDark ? "dark" : "light";
+          pref === "light" || pref === "dark" ? pref : systemDark ? "dark" : "light";
       } catch (e) {}
     </script>
   </head>

@@ -297,14 +297,6 @@
   white-space: nowrap;
 }
 
-/* Aggregate scope: owning development group badge. */
-.links-group-badge {
-  flex: none;
-  padding: 0 6px;
-  font-size: 9px;
-  font-weight: 600;
-}
-
 .links-card-actions {
   display: flex;
   align-items: center;

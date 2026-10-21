@@ -16,6 +16,7 @@ type EdgeRole = "owner" | "backup";
 interface PersonNode {
   id: string;
   name: string;
+  avatar?: string;
   ownerOf: Set<string>;
   backupOf: Set<string>;
 }
@@ -83,36 +84,56 @@ export function MatrixNetwork({ areas, selectedMemberId, onSelectMember }: Matri
 
   const graph = useMemo<GraphLayout>(() => {
     const personMap = new Map<string, PersonNode>();
-    const ensurePerson = (id: string, name: string): PersonNode => {
+    const ensurePerson = (id: string, name: string, avatar?: string): PersonNode => {
       let person = personMap.get(id);
       if (!person) {
-        person = { id, name: name || "未命名", ownerOf: new Set<string>(), backupOf: new Set<string>() };
+        person = {
+          id,
+          name: name || "未命名",
+          avatar,
+          ownerOf: new Set<string>(),
+          backupOf: new Set<string>(),
+        };
         personMap.set(id, person);
-      } else if (!person.name && name) {
-        person.name = name;
+      } else {
+        if (!person.name && name) person.name = name;
+        if (!person.avatar && avatar) person.avatar = avatar;
       }
       return person;
     };
 
-    // Hydrated backup names come with the area payload; the legacy fields cover
-    // an older payload while the backend rollout is in flight.
+    // Hydrated backup names/avatars come with the area payload; legacy fields
+    // cover an older payload while the backend rollout is in flight.
     const backupNames = new Map<string, string>();
+    const backupAvatars = new Map<string, string>();
     areas.forEach((area) => {
       if (!Array.isArray(area.backups)) return;
       area.backups.forEach((backup) => {
-        if (backup?.id && backup.name) backupNames.set(backup.id, backup.name);
+        if (!backup?.id) return;
+        if (backup.name) backupNames.set(backup.id, backup.name);
+        if (backup.avatar) backupAvatars.set(backup.id, backup.avatar);
       });
     });
     const backupNameOf = (area: MatrixArea, backupId: string): string =>
       backupNames.get(backupId) ||
       (area.backupMemberId === backupId ? area.backupName || "" : "") ||
       "未命名成员";
+    const backupAvatarOf = (area: MatrixArea, backupId: string): string | undefined =>
+      backupAvatars.get(backupId) ||
+      (area.backupMemberId === backupId ? area.backupAvatar || "" : "") ||
+      undefined;
 
     areas.forEach((area) => {
-      if (area.ownerMemberId) ensurePerson(area.ownerMemberId, area.ownerName).ownerOf.add(area.id);
+      if (area.ownerMemberId) {
+        ensurePerson(area.ownerMemberId, area.ownerName, area.ownerAvatar || undefined).ownerOf.add(area.id);
+      }
       // Include backup-only members as person nodes and count every backup area.
       backupIdsOf(area).forEach((backupId) => {
-        ensurePerson(backupId, backupNameOf(area, backupId)).backupOf.add(area.id);
+        ensurePerson(
+          backupId,
+          backupNameOf(area, backupId),
+          backupAvatarOf(area, backupId),
+        ).backupOf.add(area.id);
       });
     });
 
@@ -264,7 +285,7 @@ export function MatrixNetwork({ areas, selectedMemberId, onSelectMember }: Matri
           </g>
 
           <g className="mx-network-nodes">
-            {graph.persons.map((person) => {
+            {graph.persons.map((person, personIndex) => {
               const y = graph.personYs.get(person.id) ?? 0;
               const isSelected = person.id === selectedMemberId;
               return (
@@ -292,10 +313,30 @@ export function MatrixNetwork({ areas, selectedMemberId, onSelectMember }: Matri
                 >
                   <title>{`${person.name} · 主责 ${person.ownerOf.size} 块 · 备份 ${person.backupOf.size} 块`}</title>
                   {isSelected ? <circle r={MEMBER_RADIUS + 7} className="mx-network-focus-ring" /> : null}
-                  <circle r={MEMBER_RADIUS} className="mx-network-person-dot" />
-                  <text textAnchor="middle" y={3.5} className="mx-network-person-initial">
-                    {displayMark(person.name)}
-                  </text>
+                  {person.avatar ? (
+                    <>
+                      <clipPath id={`mx-person-clip-${personIndex}`}>
+                        <circle r={MEMBER_RADIUS} />
+                      </clipPath>
+                      <circle r={MEMBER_RADIUS} className="mx-network-person-dot" />
+                      <image
+                        href={person.avatar}
+                        x={-MEMBER_RADIUS}
+                        y={-MEMBER_RADIUS}
+                        width={MEMBER_RADIUS * 2}
+                        height={MEMBER_RADIUS * 2}
+                        clipPath={`url(#mx-person-clip-${personIndex})`}
+                        preserveAspectRatio="xMidYMid slice"
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <circle r={MEMBER_RADIUS} className="mx-network-person-dot" />
+                      <text textAnchor="middle" y={3.5} className="mx-network-person-initial">
+                        {displayMark(person.name)}
+                      </text>
+                    </>
+                  )}
                   <text x={MEMBER_RADIUS + 10} y={-1} className="mx-network-person-label">
                     {truncate(person.name, 10)}
                   </text>

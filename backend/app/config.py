@@ -42,7 +42,8 @@ class StrictModel(BaseModel):
 
 
 class ThemeSettings(StrictModel):
-    # "auto" (default) follows the operating system / browser colour scheme.
+    # Retained for settings-file compatibility only: round 8 resolves light/dark from the
+    # user's personal preference (auto/light/dark) and never from this site-level value.
     mode: Literal["light", "dark", "auto"] = "auto"
     accent: str = "#0a59f7"
     accentSecondary: str = "#4d8dff"
@@ -75,6 +76,24 @@ class ModuleFlags(StrictModel):
     settings: bool = True
     tasks: bool = True
     insights: bool = True
+
+
+class GuestModuleFlags(StrictModel):
+    """Which modules unauthenticated guests may read (round 8 requirement #6).
+
+    Everything except the system settings module is open by default so the historical
+    read-only guest experience is preserved until an administrator narrows it down.
+    """
+
+    overview: bool = True
+    calendar: bool = True
+    redblack: bool = True
+    links: bool = True
+    matrix: bool = True
+    announcements: bool = True
+    tasks: bool = True
+    insights: bool = True
+    settings: bool = False
 
 
 class AnnouncementSettings(StrictModel):
@@ -184,28 +203,26 @@ class EmailLoginSettings(StrictModel):
 
 
 class AdminIdEntry(StrictModel):
+    """A whitelisted SSO/e-mail identity (round 8: team administrators only).
+
+    ``role`` may only be ``team_admin`` and the grant is scoped by ``teamId``; an empty
+    ``teamId`` is accepted so legacy settings keep loading, but grants no permission.
+    """
+
     id: str = Field(min_length=1, max_length=200)
     name: str = Field(default="", max_length=60)
-    role: Literal["team_admin", "group_admin"] = "group_admin"
+    role: Literal["team_admin"] = "team_admin"
     teamId: str = ""
-    groupIds: list[str] = Field(default_factory=list)
     note: str = Field(default="", max_length=200)
-
-    @model_validator(mode="after")
-    def scope_required(self) -> "AdminIdEntry":
-        if self.role == "team_admin" and not self.teamId:
-            raise ValueError("团队管理员必须指定 teamId")
-        if self.role == "group_admin" and not self.groupIds:
-            raise ValueError("开发组管理员必须至少指定一个 groupId")
-        return self
 
 
 class AdminIpEntry(StrictModel):
+    """A whitelisted source IP/CIDR (round 8: team administrators only)."""
+
     ip: str = Field(min_length=1, max_length=80)
     name: str = Field(default="", max_length=60)
-    role: Literal["team_admin", "group_admin"] = "team_admin"
+    role: Literal["team_admin"] = "team_admin"
     teamId: str = ""
-    groupIds: list[str] = Field(default_factory=list)
     note: str = Field(default="", max_length=200)
 
     @field_validator("ip")
@@ -216,14 +233,6 @@ class AdminIpEntry(StrictModel):
         except ValueError as exc:
             raise ValueError(f"IP/CIDR 格式不正确: {value}") from exc
         return value
-
-    @model_validator(mode="after")
-    def scope_required(self) -> "AdminIpEntry":
-        if self.role == "team_admin" and not self.teamId:
-            raise ValueError("团队管理员必须指定 teamId")
-        if self.role == "group_admin" and not self.groupIds:
-            raise ValueError("开发组管理员必须至少指定一个 groupId")
-        return self
 
 
 class AdminWhitelist(StrictModel):
@@ -255,9 +264,10 @@ class FeatureSettings(StrictModel):
 
 
 class Settings(StrictModel):
-    version: int = 2
+    version: int = 3
     site: SiteSettings = Field(default_factory=SiteSettings)
     modules: ModuleFlags = Field(default_factory=ModuleFlags)
+    guestModules: GuestModuleFlags = Field(default_factory=GuestModuleFlags)
     announcements: AnnouncementSettings = Field(default_factory=AnnouncementSettings)
     calendar: CalendarSettings = Field(default_factory=CalendarSettings)
     redblack: RedBlackSettings = Field(default_factory=RedBlackSettings)
@@ -278,8 +288,42 @@ _LEGACY_CALENDAR_KEYS = (
 )
 
 
-def migrate_legacy_settings(raw: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    """Return ``(clean_payload, changed)`` after removing round-4 email/reminder keys."""
+def _migrate_whitelist_entry(entry: Any) -> dict[str, Any] | None:
+    """Normalise one legacy admin-whitelist entry to the round-8 team-only shape.
+
+    Returns ``None`` when the entry cannot be mapped to a real team (a legacy
+    ``group_admin`` grant without a ``teamId``), so the loaded configuration never keeps
+    a permission-less or group-scoped grant around.
+    """
+    if not isinstance(entry, dict):
+        return None
+    cleaned = dict(entry)
+    cleaned.pop("groupIds", None)
+    cleaned["role"] = "team_admin"
+    raw_team = cleaned.get("teamId")
+    team_id = raw_team.strip() if isinstance(raw_team, str) else ""
+    cleaned["teamId"] = team_id
+    if not team_id:
+        # Round 8 §1.3: group-admin entries without a team, and empty grants, are dropped.
+        return None
+    return cleaned
+
+
+def migrate_legacy_settings(
+    raw: dict[str, Any], *, sanitize_legacy: bool = True
+) -> tuple[dict[str, Any], bool]:
+    """Return ``(clean_payload, changed)`` after upgrading older settings files.
+
+    Round 5 removed the bundled mail/reminder keys; round 8 (version 3) adds
+    ``guestModules``, removes the development-group whitelist fields
+    (``groupIds`` / ``role='group_admin'``) and keeps ``site.theme.mode`` as an unused
+    compatibility field.
+
+    ``sanitize_legacy`` is true when loading an existing settings file (legacy grants are
+    converted and unusable ones dropped) and false when validating a payload submitted
+    through the API, so invalid input keeps being rejected with a path-specific 422
+    instead of being silently rewritten.
+    """
     if not isinstance(raw, dict):
         return raw, False
     changed = False
@@ -312,6 +356,48 @@ def migrate_legacy_settings(raw: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     if isinstance(auth, dict) and "emailLogin" not in auth:
         auth["emailLogin"] = EmailLoginSettings().model_dump(mode="json")
         changed = True
+
+    if sanitize_legacy:
+        if isinstance(auth, dict):
+            whitelist = auth.get("adminWhitelist")
+            if isinstance(whitelist, dict):
+                for key in ("ips", "ids"):
+                    entries = whitelist.get(key)
+                    if not isinstance(entries, list):
+                        continue
+                    cleaned_entries = [
+                        item
+                        for item in (_migrate_whitelist_entry(entry) for entry in entries)
+                        if item is not None
+                    ]
+                    if cleaned_entries != entries:
+                        whitelist[key] = cleaned_entries
+                        changed = True
+
+        guest_modules = raw.get("guestModules")
+        guest_defaults = GuestModuleFlags().model_dump(mode="json")
+        if not isinstance(guest_modules, dict):
+            raw["guestModules"] = guest_defaults
+            changed = True
+        else:
+            cleaned_flags = {
+                key: (
+                    bool(guest_modules[key])
+                    if isinstance(guest_modules.get(key), bool)
+                    else default
+                )
+                for key, default in guest_defaults.items()
+            }
+            if cleaned_flags != guest_modules:
+                raw["guestModules"] = cleaned_flags
+                changed = True
+
+        site = raw.get("site")
+        if isinstance(site, dict):
+            theme = site.get("theme")
+            if isinstance(theme, dict) and theme.get("mode") not in ("auto", "light", "dark"):
+                theme["mode"] = "auto"
+                changed = True
 
     if raw.get("version") != DEFAULT_SETTINGS.version:
         raw["version"] = DEFAULT_SETTINGS.version
@@ -378,7 +464,9 @@ class SettingsService:
 
     def validate(self, payload: dict) -> tuple[bool, Settings | None, list[dict[str, str]]]:
         try:
-            clean, _ = migrate_legacy_settings(payload)
+            # API payloads are validated as-is: a legacy group-scoped or unknown field is
+            # a path-specific 422 instead of being silently rewritten.
+            clean, _ = migrate_legacy_settings(payload, sanitize_legacy=False)
             candidate = Settings.model_validate(clean)
             return True, candidate, []
         except ValidationError as exc:
@@ -408,6 +496,7 @@ class SettingsService:
         return {
             "site": cfg.site.model_dump(mode="json"),
             "modules": cfg.modules.model_dump(mode="json"),
+            "guestModules": cfg.guestModules.model_dump(mode="json"),
             "announcements": cfg.announcements.model_dump(mode="json"),
             "calendar": cfg.calendar.model_dump(mode="json"),
             "redblack": cfg.redblack.model_dump(mode="json"),

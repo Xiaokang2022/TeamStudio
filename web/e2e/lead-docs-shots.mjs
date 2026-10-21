@@ -15,8 +15,7 @@ async function makePage({ width = 1440, height = 1000, theme = "light" } = {}) {
   const context = await browser.newContext({ viewport: { width, height } });
   await context.addInitScript(
     (t) => {
-      localStorage.setItem("teamstudio.theme", t);
-      localStorage.setItem("teamstudio.scope", "group");
+      localStorage.setItem("teamstudio.theme.preference", t);
     },
     theme,
   );

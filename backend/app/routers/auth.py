@@ -137,15 +137,10 @@ def request_email_code(payload: dict = Body(...)):
                     "user_id_conflict",
                 )
 
-    # Pre-created accounts must first activate via the one-time link issued by the
-    # super administrator; they do not use e-mail codes. This works without SMTP.
-    if account and not account.get("email_verified"):
-        raise fail(
-            403,
-            "该账号尚未激活，请使用超级管理员提供的激活链接完成激活",
-            "account_not_activated",
-        )
-
+    # Round 8 requirement #4: pre-created (not yet activated) accounts are no longer
+    # blocked here. They receive a verification code like everyone else and a successful
+    # verification marks them activated; the one-time activation link stays an optional
+    # shortcut (users.py issues it).
     if not settings_service.email_configured():
         raise fail(
             503,
@@ -416,7 +411,11 @@ def logout(
 def device_admin_login(request: Request, response: Response):
     """Restore the built-in device Admin identity (only on the deployment device)."""
     if not is_local_request(request):
-        raise fail(403, "仅本机可使用系统内置管理员登录", "device_admin_unavailable")
+        raise fail(
+            403,
+            "仅部署设备（本机或与设备一致的 IP）可使用系统内置管理员登录",
+            "device_admin_unavailable",
+        )
     clear_device_logout_cookie(response)
     clear_session_cookie(response)
     return ok({"deviceAdmin": True, "authenticated": True})

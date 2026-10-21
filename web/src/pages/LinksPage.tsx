@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   ArrowUpRight,
   Copy,
@@ -57,47 +57,12 @@ const linkMark = (title: string): string => {
   return parts.length > 1 ? (parts[0][0] + parts[1][0]).toUpperCase() : trimmed.slice(0, 2).toUpperCase();
 };
 
-function GroupBadge({ name, color }: { name: string; color: string }) {
-  return (
-    <span className="badge badge-gray links-group-badge" title={`所属开发组：${name}`}>
-      <i className="dot" style={{ background: color }} />
-      {name}
-    </span>
-  );
-}
-
 export default function LinksPage() {
-  const { data, currentTeam, currentGroup, canManageActiveGroup, config, scope } = useApp();
+  const { currentTeam, canManageActiveTeam, config } = useApp();
   const { toast } = useToast();
 
   const teamId = currentTeam?.id ?? "";
-  const groupId = currentGroup?.id ?? "";
   const accent = config?.site.theme.accent || "#5865f2";
-  const aggregate = scope !== "group";
-
-  // Resolve a link's owning group for badges and item-level write routing.
-  const groupIndex = useMemo(() => {
-    const map = new Map<string, { teamId: string; name: string; color: string }>();
-    data?.teams.forEach((team) =>
-      team.groups.forEach((group) =>
-        map.set(group.id, { teamId: team.id, name: group.name, color: group.color }),
-      ),
-    );
-    return map;
-  }, [data?.teams]);
-
-  const targetOf = useCallback(
-    (link: LinkItem) => {
-      const meta = link.groupId ? groupIndex.get(link.groupId) : undefined;
-      return {
-        teamId: meta?.teamId || teamId,
-        groupId: link.groupId || groupId,
-        groupName: meta?.name || currentGroup?.name || "",
-        groupColor: meta?.color || "#8b8c88",
-      };
-    },
-    [groupIndex, teamId, groupId, currentGroup?.name],
-  );
 
   const [links, setLinks] = useState<LinkItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -112,12 +77,12 @@ export default function LinksPage() {
   const [deleteTarget, setDeleteTarget] = useState<LinkItem | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  const lastGroupRef = useRef("");
+  const lastTeamRef = useRef("");
 
   useEffect(() => {
-    if (!teamId || !groupId) return;
-    if (lastGroupRef.current !== groupId) {
-      lastGroupRef.current = groupId;
+    if (!teamId) return;
+    if (lastTeamRef.current !== teamId) {
+      lastTeamRef.current = teamId;
       setEditorOpen(false);
       setDeleteTarget(null);
       setLinks([]);
@@ -126,7 +91,7 @@ export default function LinksPage() {
     setLoading(true);
     setError("");
     void api
-      .links(teamId, groupId, scope)
+      .links(teamId)
       .then((result) => {
         if (!cancelled) setLinks(result.links);
       })
@@ -142,7 +107,7 @@ export default function LinksPage() {
     return () => {
       cancelled = true;
     };
-  }, [teamId, groupId, scope, refreshTick, toast]);
+  }, [teamId, refreshTick, toast]);
 
   const sortedLinks = useMemo(
     () => [...links].sort((a, b) => a.sortOrder - b.sortOrder || a.title.localeCompare(b.title, "zh-CN")),
@@ -202,7 +167,7 @@ export default function LinksPage() {
   };
 
   const handleSave = async () => {
-    if (!teamId || !groupId) return;
+    if (!teamId) return;
     const title = draft.title.trim();
     const url = draft.url.trim();
     if (!title) {
@@ -229,17 +194,13 @@ export default function LinksPage() {
         sortOrder: sortOrder === "" ? undefined : Number(sortOrder),
       };
       if (editing) {
-        const target = targetOf(editing);
-        const result = await api.updateLink(target.teamId, target.groupId, editing.id, body);
+        const result = await api.updateLink(teamId, editing.id, body);
         setLinks((prev) => prev.map((item) => (item.id === result.link.id ? result.link : item)));
         toast("链接已更新", "success");
       } else {
-        const result = await api.createLink(teamId, groupId, body);
+        const result = await api.createLink(teamId, body);
         setLinks((prev) => [...prev, result.link]);
-        toast(
-          aggregate && currentGroup ? `链接已添加到「${currentGroup.name}」` : "链接已添加",
-          "success",
-        );
+        toast("链接已添加", "success");
       }
       setEditorOpen(false);
     } catch (err) {
@@ -250,11 +211,10 @@ export default function LinksPage() {
   };
 
   const handleDelete = async () => {
-    if (!teamId || !groupId || !deleteTarget) return;
-    const target = targetOf(deleteTarget);
+    if (!teamId || !deleteTarget) return;
     setDeleting(true);
     try {
-      await api.deleteLink(target.teamId, target.groupId, deleteTarget.id);
+      await api.deleteLink(teamId, deleteTarget.id);
       setLinks((prev) => prev.filter((item) => item.id !== deleteTarget.id));
       toast("链接已删除", "success");
       setDeleteTarget(null);
@@ -265,11 +225,11 @@ export default function LinksPage() {
     }
   };
 
-  if (!currentTeam || !currentGroup) {
+  if (!currentTeam) {
     return (
       <EmptyState
-        title="尚未选择开发组"
-        description="请从左侧导航选择一个开发组，再查看它的常用链接。"
+        title="尚未选择团队"
+        description="请从左侧导航选择一个团队，再查看它的常用链接。"
         icon={<Link2 size={24} />}
       />
     );
@@ -304,7 +264,7 @@ export default function LinksPage() {
               </button>
             ) : null}
           </label>
-          {canManageActiveGroup ? (
+          {canManageActiveTeam ? (
             <button type="button" className="btn btn-primary" onClick={openCreate}>
               <Plus size={15} /> 添加链接
             </button>
@@ -361,13 +321,13 @@ export default function LinksPage() {
         <EmptyState
           title="还没有常用链接"
           description={
-            canManageActiveGroup
+            canManageActiveTeam
               ? "把文档、看板、设计稿的入口添加到这里，团队就不用再到处找链接了。"
               : "管理员还没有整理常用链接，稍后再来看看吧。"
           }
           icon={<Link2 size={24} />}
           action={
-            canManageActiveGroup ? (
+            canManageActiveTeam ? (
               <button type="button" className="btn btn-primary" onClick={openCreate}>
                 <Plus size={15} /> 添加第一个链接
               </button>
@@ -423,9 +383,6 @@ export default function LinksPage() {
                 <span className="links-cat">
                   <Layers size={12} /> {link.category || "常用"}
                 </span>
-                {aggregate ? (
-                  <GroupBadge name={targetOf(link).groupName} color={targetOf(link).groupColor} />
-                ) : null}
                 <div className="links-card-actions">
                   <button
                     type="button"
@@ -446,7 +403,7 @@ export default function LinksPage() {
                   >
                     <ExternalLink size={14} />
                   </a>
-                  {canManageActiveGroup ? (
+                  {canManageActiveTeam ? (
                     <>
                       <button
                         type="button"
@@ -481,13 +438,7 @@ export default function LinksPage() {
           if (!saving) setEditorOpen(false);
         }}
         title={editing ? "编辑链接" : "添加链接"}
-        description={
-          editing && aggregate
-            ? `当前在聚合视角编辑「${targetOf(editing).groupName}」的链接，保存会写回该开发组。`
-            : !editing && aggregate
-              ? `聚合视角下新增的链接会写入当前开发组：${currentGroup?.name ?? "当前开发组"}。`
-              : "链接会按分类展示在团队常用链接看板中，分类留空时归入「常用」。"
-        }
+        description="链接会按分类展示在团队常用链接看板中，分类留空时归入「常用」。"
         size="lg"
         footer={
           <>

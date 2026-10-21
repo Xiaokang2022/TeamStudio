@@ -51,9 +51,9 @@ ACKNOWLEDGE_MESSAGE = "重置操作需要显式确认"
 CONFIRM_MISMATCH_MESSAGE = "站点名称不匹配，无法重置系统"
 
 # Public stat keys -> SQLite table, in the fixed order the API contract documents.
+# Round 8 removed development groups from the statistics.
 _STAT_TABLES: tuple[tuple[str, str], ...] = (
     ("teams", "teams"),
-    ("groups", "groups"),
     ("members", "members"),
     ("works", "works"),
     ("todos", "todos"),
@@ -83,7 +83,6 @@ _WIPE_TABLES: tuple[str, ...] = (
     "matrix_areas",
     "links",
     "members",
-    "groups",
     "teams",
     "user_activation_tokens",
     "email_codes",
@@ -96,6 +95,23 @@ _WIPE_TABLES: tuple[str, ...] = (
 def _require_device_admin(user: CurrentUser) -> None:
     if not user.is_device_admin:
         raise fail(403, DEVICE_ADMIN_MESSAGE, "device_admin_required")
+
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    found = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+    ).fetchone()
+    return found is not None
+
+
+def _clear_legacy_groups(conn: sqlite3.Connection) -> None:
+    """Empty an orphan pre-round-8 ``groups`` table, if an upgraded database still has one.
+
+    Round-8 code never reads or writes development groups; a factory reset must not leave
+    stale group rows behind either, so the orphan table is cleared when present.
+    """
+    if _table_exists(conn, "groups"):
+        conn.execute("DELETE FROM groups")
 
 
 def _stat_counts(conn: sqlite3.Connection) -> dict[str, int]:
@@ -234,6 +250,7 @@ def reset_system(
         conn.execute("PRAGMA secure_delete=ON")
         for table in _WIPE_TABLES:
             conn.execute(f"DELETE FROM {table}")
+        _clear_legacy_groups(conn)
         conn.execute("DELETE FROM app_meta")
         set_meta(conn, RESET_AT_KEY, reset_at)
         set_meta(conn, RESET_BY_KEY, actor)

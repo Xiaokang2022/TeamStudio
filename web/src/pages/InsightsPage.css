@@ -1,7 +1,7 @@
 /* ============================================================
    Data insights board (#12)
    Scoped classes: .ins-* (KPI strip, range picker, pure-CSS trend chart,
-   sortable member/group/team tables). All colours reuse the shared tokens
+   sortable member table). All colours reuse the shared tokens
    so light and dark themes stay consistent.
    ============================================================ */
 
@@ -17,19 +17,6 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-}
-
-.ins-scope-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 26px;
-  padding: 0 9px;
-  font-size: 10.5px;
-  max-width: 260px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .ins-ranges {
@@ -582,19 +569,6 @@
   min-width: 150px;
 }
 
-.ins-avatar {
-  display: inline-grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  color: #fff;
-  font-size: 10px;
-  font-weight: 700;
-  flex: none;
-  letter-spacing: 0.02em;
-}
-
 .ins-person-copy {
   display: flex;
   flex-direction: column;
@@ -615,28 +589,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 150px;
-}
-
-.ins-group-cell {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--text);
-  white-space: nowrap;
-}
-
-.ins-group-cell i {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex: none;
-}
-
-.ins-muted {
-  color: var(--text-3);
-  font-size: 11px;
 }
 
 .ins-num {
@@ -814,10 +766,6 @@
   .ins-range-btn {
     flex: 1;
     padding: 5px 6px;
-  }
-
-  .ins-scope-badge {
-    max-width: 100%;
   }
 
   .ins-table-count {

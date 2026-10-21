@@ -1,8 +1,8 @@
-﻿import { chromium } from "playwright";
+import { chromium } from "playwright";
 const BASE = "http://127.0.0.1:5173";
 const browser = await chromium.launch({ channel: "msedge", headless: true });
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
-await ctx.addInitScript(() => { localStorage.setItem("teamstudio.theme", "light"); localStorage.setItem("teamstudio.scope", "group"); });
+await ctx.addInitScript(() => { localStorage.setItem("teamstudio.theme.preference", "light"); });
 const page = await ctx.newPage();
 const errors = []; page.on("console", m => m.type()==="error" && errors.push(m.text())); page.on("pageerror", e=>errors.push(String(e)));
 

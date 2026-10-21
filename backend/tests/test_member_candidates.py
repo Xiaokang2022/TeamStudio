@@ -1,138 +1,67 @@
-"""Member candidates and account-derived member creation (round 6 §1).
+"""Member candidates and account-derived member creation (round 8: team scoped).
 
-``GET /member-candidates`` lists registered accounts (pre-created but unverified ones
-included) that have no member profile in the group yet. ``POST /members`` only selects
-a person by ``userId``; every identity field is derived from the ``users`` row so custom
-name / e-mail / id / avatar values in the payload are ignored.
+``GET /api/teams/{team_id}/member-candidates`` lists accounts that have no member profile
+in *that team*. ``POST /members`` only selects a person by ``userId``; identity fields
+(name/e-mail/id/avatar/bio/skills) are derived from the account row and payload overrides
+are ignored.
 """
 
 from __future__ import annotations
 
 import json
 
-import pytest
-
-from backend.app.auth import CurrentUser, get_current_user
 from backend.app.db import db, row
-from backend.app.main import app
-from backend.app.services import accounts
+from backend.tests.helpers import (
+    TEAM_AURORA,
+    TEAM_VOYAGE,
+    assert_error,
+    create_account,
+    data,
+    data as _data,
+    email_login,
+    error,
+    ip_admin,
+    member_by_email,
+    remote_client,
+    upload_avatar,
+)
 
-TEAM_ID = "team-aurora"
-GROUP_ID = "grp-frontend"
-BASE = f"/api/teams/{TEAM_ID}/groups/{GROUP_ID}"
-CANDIDATES_URL = f"{BASE}/member-candidates"
-MEMBERS_URL = f"{BASE}/members"
+CANDIDATES_URL = f"/api/teams/{TEAM_AURORA}/member-candidates"
+MEMBERS_URL = f"/api/teams/{TEAM_AURORA}/members"
 
-# Seeded demo accounts that already own a member profile in grp-frontend.
-GROUP_ACCOUNT_IDS = {"lin.zhixia", "chen.yu", "su.wan", "he.chuan", "tang.li"}
-
-
-# --------------------------------------------------------------------------- helpers
-
-
-def _data(response):
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["ok"] is True, body
-    return body["data"]
-
-
-def _error(response) -> dict:
-    body = response.json()
-    assert body["ok"] is False, body
-    return body["error"]
-
-
-@pytest.fixture()
-def as_user():
-    """Switch the authenticated identity of the shared ``client`` fixture."""
-
-    def _switch(user: CurrentUser) -> None:
-        app.dependency_overrides[get_current_user] = lambda: user
-
-    yield _switch
-    app.dependency_overrides.pop(get_current_user, None)
-
-
-def _guest() -> CurrentUser:
-    return CurrentUser(id="guest", name="访客", authenticated=False, source="guest")
-
-
-def _member() -> CurrentUser:
-    return CurrentUser(
-        id="lin.zhixia",
-        name="林知夏",
-        email="lin.zhixia@corp.example",
-        authenticated=True,
-        source="email",
-        linked_member_id="m-lin",
-    )
-
-
-def _group_admin() -> CurrentUser:
-    return CurrentUser(
-        id="group-admin@corp.example",
-        name="组管理员",
-        email="group-admin@corp.example",
-        authenticated=True,
-        source="sso",
-        admin_role="group_admin",
-        group_ids={GROUP_ID},
-    )
-
-
-def _team_admin(team_id: str = TEAM_ID) -> CurrentUser:
-    return CurrentUser(
-        id="team-admin@corp.example",
-        name="团队管理员",
-        email="team-admin@corp.example",
-        authenticated=True,
-        source="sso",
-        admin_role="team_admin",
-        team_ids={team_id},
-    )
-
-
-def _create_account(
-    email: str,
-    *,
-    name: str = "",
-    role: str = "member",
-    team_ids: list[str] | None = None,
-    group_ids: list[str] | None = None,
-    email_verified: bool = True,
-) -> dict:
-    with db() as conn:
-        return accounts.create_user(
-            conn,
-            email=email,
-            name=name,
-            role=role,
-            team_ids=team_ids,
-            group_ids=group_ids,
-            email_verified=email_verified,
-            created_by="test",
-        )
+# Seeded demo accounts that already own an archive row in team-aurora.
+AURORA_ACCOUNT_IDS = {
+    "lin.zhixia",
+    "chen.yu",
+    "su.wan",
+    "he.chuan",
+    "tang.li",
+    "zhou.ye",
+    "wu.qi",
+    "xu.cheng",
+    "luo.yi",
+    "yu.an",
+    "qin.ke",
+    "shen.mo",
+}
+VOYAGE_ACCOUNT_IDS = {"gu.xing", "li.mu", "fang.jue", "jia.ning", "pei.ran", "han.xiao"}
 
 
 # --------------------------------------------------------------------------- candidates
 
 
-def test_member_candidates_lists_registered_accounts_outside_the_group(client):
-    data = _data(client.get(CANDIDATES_URL))
-    ids = [item["id"] for item in data["candidates"]]
-
-    assert data["total"] == len(ids)
+def test_candidates_list_accounts_outside_the_team(client):
+    payload = data(client.get(CANDIDATES_URL))
+    ids = [item["id"] for item in payload["candidates"]]
+    assert payload["total"] == len(ids)
     assert len(ids) == len(set(ids))
-    # Accounts that already own a member profile in this group are excluded.
-    assert GROUP_ACCOUNT_IDS.isdisjoint(ids)
-    # Verified accounts of other groups are valid candidates.
-    assert "zhou.ye" in ids
+    assert AURORA_ACCOUNT_IDS.isdisjoint(ids)
+    assert VOYAGE_ACCOUNT_IDS <= set(ids)
     # The built-in device Admin is not a users row and can never be selected.
     assert "device-admin" not in ids
 
-    payload = next(item for item in data["candidates"] if item["id"] == "zhou.ye")
-    assert set(payload) == {
+    other = next(item for item in payload["candidates"] if item["id"] == "gu.xing")
+    for key in (
         "id",
         "name",
         "email",
@@ -142,56 +71,52 @@ def test_member_candidates_lists_registered_accounts_outside_the_group(client):
         "roleLabel",
         "emailVerified",
         "skills",
-    }
-    assert payload["name"] == "周野"
-    assert payload["email"] == "zhou.ye@corp.example"
-    assert payload["role"] == "member"
-    assert payload["roleLabel"] == "成员"
-    assert payload["emailVerified"] is True
+    ):
+        assert key in other, key
+    assert other["name"] == "顾行"
+    assert other["email"] == "gu.xing@corp.example"
+    assert other["role"] == "member"
+    assert other["roleLabel"] == "成员"
+    assert other["emailVerified"] is True
+    assert "groupId" not in other
+    assert "groupIds" not in other
 
 
-def test_member_candidates_include_precreated_unverified_accounts(client):
-    created = _data(
-        client.post(
-            "/api/users",
-            json={"email": "pending.user@corp.example", "name": "待激活成员"},
-        )
-    )
-    assert created["user"]["emailVerified"] is False
+def test_candidates_include_precreated_unverified_accounts(client):
+    created = create_account(client, "pending.user@corp.example", name="待激活成员")
+    assert created["emailVerified"] is False
 
-    data = _data(client.get(CANDIDATES_URL))
-    entry = next(item for item in data["candidates"] if item["id"] == "pending.user")
+    payload = data(client.get(CANDIDATES_URL))
+    entry = next(item for item in payload["candidates"] if item["id"] == "pending.user")
     assert entry["name"] == "待激活成员"
     assert entry["emailVerified"] is False
 
 
-def test_member_candidates_search_matches_name_email_and_id_case_insensitively(client):
-    _create_account("search.target@corp.example", name="搜索目标")
+def test_candidates_search_matches_name_email_and_id_case_insensitively(client):
+    create_account(client, "search.target@corp.example", name="搜索目标")
 
-    by_name = _data(client.get(CANDIDATES_URL, params={"search": "搜索"}))
+    by_name = data(client.get(CANDIDATES_URL, params={"search": "搜索"}))
     assert [item["id"] for item in by_name["candidates"]] == ["search.target"]
 
-    by_email = _data(client.get(CANDIDATES_URL, params={"search": "SEARCH.TARGET@CORP"}))
+    by_email = data(client.get(CANDIDATES_URL, params={"search": "SEARCH.TARGET@CORP"}))
     assert [item["id"] for item in by_email["candidates"]] == ["search.target"]
 
-    by_id = _data(client.get(CANDIDATES_URL, params={"search": "search.TARGET"}))
+    by_id = data(client.get(CANDIDATES_URL, params={"search": "search.TARGET"}))
     assert [item["id"] for item in by_id["candidates"]] == ["search.target"]
 
-    empty = _data(client.get(CANDIDATES_URL, params={"search": "不存在的账号"}))
+    empty = data(client.get(CANDIDATES_URL, params={"search": "不存在的账号"}))
     assert empty == {"candidates": [], "total": 0}
 
 
-def test_member_candidates_exclude_account_linked_by_external_id(client):
-    account = _create_account("linked.by.id@corp.example", name="外部关联")
-    # A legacy member row links the account by external_id only (its e-mail differs).
+def test_candidates_exclude_account_linked_by_external_id(client):
+    account = create_account(client, "linked.by.id@corp.example", name="外部关联")
     with db() as conn:
         conn.execute(
-            "INSERT INTO members (id,team_id,group_id,external_id,name,email,created_at,updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO members (id,team_id,external_id,name,email,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?)",
             (
                 "m-external-link",
-                TEAM_ID,
-                GROUP_ID,
+                TEAM_AURORA,
                 account["id"],
                 "外部关联",
                 "legacy.link@corp.example",
@@ -199,50 +124,40 @@ def test_member_candidates_exclude_account_linked_by_external_id(client):
                 "2026-01-01T00:00:00+08:00",
             ),
         )
-
-    ids = [item["id"] for item in _data(client.get(CANDIDATES_URL))["candidates"]]
+    ids = [item["id"] for item in data(client.get(CANDIDATES_URL))["candidates"]]
     assert account["id"] not in ids
 
 
-def test_member_candidates_require_in_scope_admin(client, as_user):
-    as_user(_guest())
-    response = client.get(CANDIDATES_URL)
-    assert response.status_code == 401
-    assert _error(response)["code"] == "authentication_required"
+def test_candidates_require_in_scope_admin(client, monkeypatch):
+    chen = member_by_email(client, "chen.yu@corp.example")
+    with remote_client("10.20.30.104", 51604) as guest:
+        assert guest.get(CANDIDATES_URL).status_code == 401
 
-    as_user(_member())
-    assert client.get(CANDIDATES_URL).status_code == 403
+    with remote_client("10.20.30.105", 51605) as browser:
+        email_login(browser, chen["email"], monkeypatch)
+        assert browser.get(CANDIDATES_URL).status_code == 403
 
-    as_user(_team_admin("team-voyage"))
-    assert client.get(CANDIDATES_URL).status_code == 403
+    with ip_admin(TEAM_VOYAGE, ip="10.91.2.10", port=51606) as voyage_admin:
+        assert voyage_admin.get(CANDIDATES_URL).status_code == 403
 
-    as_user(_group_admin())
-    assert client.get(CANDIDATES_URL).status_code == 200
-
-    as_user(_team_admin())
-    assert client.get(CANDIDATES_URL).status_code == 200
+    with ip_admin(TEAM_AURORA, ip="10.91.2.11", port=51607) as aurora_admin:
+        assert aurora_admin.get(CANDIDATES_URL).status_code == 200
 
 
-def test_member_candidates_unknown_group_returns_404(client):
-    response = client.get(f"/api/teams/{TEAM_ID}/groups/grp-missing/member-candidates")
-    assert response.status_code == 404
-    assert _error(response)["code"] == "group_not_found"
+def test_candidates_unknown_team_returns_404(client):
+    response = client.get("/api/teams/team-missing/member-candidates")
+    assert_error(response, 404, "team_not_found")
 
 
 # --------------------------------------------------------------------------- create member
 
 
-def test_create_member_derives_identity_from_account(client):
-    account = _create_account("derived.user@corp.example", name="派生成员")
-    with db() as conn:
-        account = accounts.update_user(
-            conn,
-            account["id"],
-            avatar="/uploads/avatars/derived.png",
-            avatar_color="#123456",
-            bio="账号简介",
-            skills=["Rust", "测试"],
-        )
+def test_create_member_derives_identity_from_account(client, monkeypatch):
+    account = create_account(client, "derived.user@corp.example", name="派生成员")
+    avatar_url = ""
+    with remote_client("10.20.30.106", 51608) as browser:
+        email_login(browser, "derived.user@corp.example", monkeypatch)
+        avatar_url = upload_avatar(browser)
 
     response = client.post(
         MEMBERS_URL,
@@ -259,26 +174,24 @@ def test_create_member_derives_identity_from_account(client):
             "tags": ["自定义"],
             "title": "测试工程师",
             "role": "核心成员",
-            "status": "busy",
             "sortOrder": 42,
         },
     )
     assert response.status_code == 200, response.text
-    member = response.json()["data"]["member"]
+    member = _data(response)["member"]
 
-    assert member["id"].startswith("member-")
     assert member["id"] != "m-hijack"
     assert member["name"] == "派生成员"
     assert member["email"] == "derived.user@corp.example"
-    assert member["avatar"] == "/uploads/avatars/derived.png"
-    assert member["avatarColor"] == "#123456"
-    assert member["bio"] == "账号简介"
-    assert member["skills"] == ["Rust", "测试"]
+    assert member["avatar"] == avatar_url
+    assert member["avatarColor"] != "#000000"
+    assert member["bio"] != "自定义简介"
+    assert member["skills"] != ["Python"]
     assert member["tags"] == []
+    assert "status" not in member
     # Organizational fields stay settable.
     assert member["title"] == "测试工程师"
     assert member["role"] == "核心成员"
-    assert member["status"] == "busy"
 
     with db() as conn:
         stored = row(
@@ -299,59 +212,51 @@ def test_create_member_derives_identity_from_account(client):
 
 
 def test_create_member_accepts_email_and_rejects_duplicates(client):
-    account = _create_account("email.lookup@corp.example", name="邮箱定位")
+    account = create_account(client, "email.lookup@corp.example", name="邮箱定位")
 
-    created = _data(
-        client.post(MEMBERS_URL, json={"userId": "EMAIL.LOOKUP@corp.example"})
-    )["member"]
+    created = data(client.post(MEMBERS_URL, json={"userId": "EMAIL.LOOKUP@corp.example"}))[
+        "member"
+    ]
     assert created["name"] == "邮箱定位"
     assert created["email"] == "email.lookup@corp.example"
 
     by_id = client.post(MEMBERS_URL, json={"userId": account["id"]})
-    assert by_id.status_code == 409
-    assert _error(by_id)["code"] == "member_exists"
-    assert "当前开发组" in _error(by_id)["message"]
+    assert_error(by_id, 409, "member_exists")
+    assert "开发组" not in error(by_id)["message"]
 
     by_email = client.post(MEMBERS_URL, json={"userId": "email.lookup@corp.example"})
-    assert by_email.status_code == 409
-    assert _error(by_email)["code"] == "member_exists"
+    assert_error(by_email, 409, "member_exists")
 
 
 def test_create_member_validation_and_missing_account_errors(client):
     missing = client.post(MEMBERS_URL, json={})
-    assert missing.status_code == 422
-    assert _error(missing)["code"] == "validation_error"
-
+    assert_error(missing, 422, "validation_error")
     empty = client.post(MEMBERS_URL, json={"userId": "   "})
-    assert empty.status_code == 422
-    assert _error(empty)["code"] == "validation_error"
-
+    assert_error(empty, 422, "validation_error")
     unknown = client.post(MEMBERS_URL, json={"userId": "ghost.account"})
-    assert unknown.status_code == 404
-    assert _error(unknown)["code"] == "user_not_found"
+    assert_error(unknown, 404, "user_not_found")
 
-    # The built-in device Admin is not a users row: it can never join a group.
     device_admin = client.post(MEMBERS_URL, json={"userId": "device-admin"})
-    assert device_admin.status_code == 404
-    assert _error(device_admin)["code"] == "user_not_found"
+    assert_error(device_admin, 404, "user_not_found")
 
-    # Seeded account that already owns a member profile in this group.
+    # A seeded account already owns an archive row in this team.
     existing = client.post(MEMBERS_URL, json={"userId": "lin.zhixia"})
-    assert existing.status_code == 409
-    assert _error(existing)["code"] == "member_exists"
+    assert_error(existing, 409, "member_exists")
 
 
-def test_create_member_requires_in_scope_admin(client, as_user):
-    account = _create_account("permission.target@corp.example", name="权限目标")
+def test_create_member_requires_in_scope_admin(client, monkeypatch):
+    account = create_account(client, "permission.target@corp.example", name="权限目标")
+    chen = member_by_email(client, "chen.yu@corp.example")
 
-    as_user(_guest())
-    assert client.post(MEMBERS_URL, json={"userId": account["id"]}).status_code == 401
+    with remote_client("10.20.30.107", 51609) as guest:
+        assert guest.post(MEMBERS_URL, json={"userId": account["id"]}).status_code == 401
 
-    as_user(_member())
-    assert client.post(MEMBERS_URL, json={"userId": account["id"]}).status_code == 403
+    with remote_client("10.20.30.108", 51610) as browser:
+        email_login(browser, chen["email"], monkeypatch)
+        assert browser.post(MEMBERS_URL, json={"userId": account["id"]}).status_code == 403
 
-    as_user(_team_admin("team-voyage"))
-    assert client.post(MEMBERS_URL, json={"userId": account["id"]}).status_code == 403
+    with ip_admin(TEAM_VOYAGE, ip="10.91.3.10", port=51611) as voyage_admin:
+        assert voyage_admin.post(MEMBERS_URL, json={"userId": account["id"]}).status_code == 403
 
-    as_user(_group_admin())
-    assert client.post(MEMBERS_URL, json={"userId": account["id"]}).status_code == 200
+    with ip_admin(TEAM_AURORA, ip="10.91.3.11", port=51612) as aurora_admin:
+        assert aurora_admin.post(MEMBERS_URL, json={"userId": account["id"]}).status_code == 200

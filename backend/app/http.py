@@ -1,4 +1,4 @@
-"""Small HTTP helpers shared by routers."""
+"""Small HTTP helpers shared by routers (round 8: team-scoped lookups)."""
 
 from __future__ import annotations
 
@@ -24,24 +24,21 @@ def fail(status: int, message: str, code: str = "error", details: Any = None) ->
     return HTTPException(status_code=status, detail={"code": code, "message": message, "details": details})
 
 
-def get_group(conn: sqlite3.Connection, team_id: str, group_id: str) -> dict[str, Any]:
-    found = conn.execute(
-        "SELECT g.id, g.team_id, g.name, g.description, g.color, g.icon, g.sort_order, "
-        "g.created_at, t.name AS team_name, t.short_name AS team_short_name, t.color AS team_color "
-        "FROM groups g JOIN teams t ON t.id=g.team_id WHERE g.id=? AND g.team_id=?",
-        (group_id, team_id),
-    ).fetchone()
+def get_team(conn: sqlite3.Connection, team_id: str) -> dict[str, Any]:
+    """Load one team or raise 404 ``team_not_found``."""
+    found = conn.execute("SELECT * FROM teams WHERE id=?", (team_id,)).fetchone()
     if not found:
-        raise fail(404, "团队或开发组不存在", "group_not_found")
+        raise fail(404, "团队不存在", "team_not_found")
     return dict(found)
 
 
-def get_member(conn: sqlite3.Connection, member_id: str, group_id: str) -> dict[str, Any]:
+def get_member(conn: sqlite3.Connection, team_id: str, member_id: str) -> dict[str, Any]:
+    """Load one member of ``team_id`` or raise 404 ``member_not_found``."""
     found = conn.execute(
-        "SELECT * FROM members WHERE id=? AND group_id=?", (member_id, group_id)
+        "SELECT * FROM members WHERE id=? AND team_id=?", (member_id, team_id)
     ).fetchone()
     if not found:
-        raise fail(404, "成员不存在或不属于该开发组", "member_not_found")
+        raise fail(404, "成员不存在", "member_not_found")
     return dict(found)
 
 

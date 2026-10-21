@@ -15,13 +15,6 @@
 /* Member filter sizing lives in MatrixNetwork.css together with the page chrome
    rules so both views share one source of truth. */
 
-/* Aggregate scope: owning development group badge. */
-.mx-group-badge {
-  padding: 0 6px;
-  font-size: 9px;
-  font-weight: 600;
-}
-
 /* ---------- help / legend ---------- */
 .mx-help {
   position: relative;

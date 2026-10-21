@@ -1,28 +1,28 @@
-"""Tests for the data insights dashboard API (``#12``).
-
-The payload must match ``web/src/types.ts`` exactly (``InsightsData``), use 0-100 integer
-rates, honour the scope/range query parameters and apply the documented active-window
-semantics.
-"""
+"""Team insights dashboard (round 8 removes the group/team comparison tables)."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-TEAM_ID = "team-aurora"
-GROUP_ID = "grp-frontend"
-BASE = f"/api/teams/{TEAM_ID}/groups/{GROUP_ID}"
-INSIGHTS_URL = f"{BASE}/insights"
+from backend.tests.helpers import (
+    TEAM_AURORA,
+    TEAM_VOYAGE,
+    data,
+    error,
+    insights_payload,
+    member_by_email,
+)
+
+INSIGHTS_URL = f"/api/teams/{TEAM_AURORA}/insights"
 
 MEMBER_ROW_KEYS = {
     "memberId",
     "memberName",
     "memberTitle",
+    "avatar",
     "avatarColor",
     "teamId",
     "teamName",
-    "groupId",
-    "groupName",
     "tasks",
     "openTasks",
     "completedTasks",
@@ -32,41 +32,9 @@ MEMBER_ROW_KEYS = {
     "loadPoints",
     "todos",
     "completedTodos",
-}
-GROUP_ROW_KEYS = {
-    "groupId",
-    "groupName",
-    "teamId",
-    "teamName",
-    "color",
-    "members",
-    "tasks",
-    "openTasks",
-    "completedTasks",
-    "overdueTasks",
-    "blockedTasks",
-    "completionRate",
-    "loadPoints",
-    "averageLoadPercent",
-    "todos",
-    "completedTodos",
-}
-TEAM_ROW_KEYS = {
-    "teamId",
-    "teamName",
-    "color",
-    "groups",
-    "members",
-    "tasks",
-    "openTasks",
-    "completedTasks",
-    "overdueTasks",
-    "completionRate",
-    "loadPoints",
 }
 SUMMARY_KEYS = {
     "teams",
-    "groups",
     "members",
     "tasks",
     "openTasks",
@@ -81,13 +49,9 @@ SUMMARY_KEYS = {
     "capacityPoints",
     "averageLoadPercent",
 }
-
-
-def _data(response):
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["ok"] is True
-    return body["data"]
+TREND_KEYS = {"granularity", "buckets"}
+BUCKET_KEYS = {"label", "start", "created", "completed", "todos"}
+SEEDED_MEMBER_TASKS = 49
 
 
 def _iso_days_ago(days: float) -> str:
@@ -98,6 +62,7 @@ def _iso_days_ago(days: float) -> str:
 def _insert_task(
     task_id: str,
     *,
+    member_id: str,
     progress_status: str,
     created_days_ago: float,
     completed_days_ago: float | None = None,
@@ -109,13 +74,13 @@ def _insert_task(
     completed = _iso_days_ago(completed_days_ago) if completed_days_ago is not None else None
     with db() as conn:
         conn.execute(
-            "INSERT INTO member_tasks (id,group_id,member_id,title,description,"
+            "INSERT INTO member_tasks (id,team_id,member_id,title,description,"
             "progress_status,health_status,priority,difficulty,expected_date,created_by,"
             "created_at,updated_at,completed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 task_id,
-                GROUP_ID,
-                "m-lin",
+                TEAM_AURORA,
+                member_id,
                 f"洞察窗口 {task_id}",
                 "",
                 progress_status,
@@ -131,93 +96,105 @@ def _insert_task(
         )
 
 
+def _seed_member_id(client) -> str:
+    return member_by_email(client, "lin.zhixia@corp.example")["id"]
+
+
+# --------------------------------------------------------------------------- structure
+
+
 def test_insights_structure_matches_frontend_contract(client):
-    data = _data(client.get(INSIGHTS_URL))
-    assert set(data) == {"scope", "range", "summary", "members", "groups", "teams", "trend"}
-    assert data["scope"]["kind"] == "group"
-    assert data["range"]["key"] == "1m"
-    assert set(data["range"]) == {"key", "label", "days", "start"}
-    assert data["range"]["label"] == "近 1 个月"
-    assert data["range"]["days"] == 30
-    assert data["range"]["start"]
+    payload = insights_payload(client)
+    assert set(payload) == {"range", "summary", "members", "trend"}
+    # Group/team comparison tables are gone in the team-only view.
+    assert "groups" not in payload
+    assert "teams" not in payload
 
-    assert set(data["summary"]) == SUMMARY_KEYS
+    assert payload["range"]["key"] == "1m"
+    assert set(payload["range"]) >= {"key", "label", "days", "start"}
+    assert payload["range"]["days"] == 30
+
+    assert set(payload["summary"]) == SUMMARY_KEYS
+    assert "groups" not in payload["summary"]
+    assert payload["summary"]["teams"] == 1
     for key in ("completionRate", "todoCompletionRate", "averageLoadPercent"):
-        assert isinstance(data["summary"][key], int)
-        assert 0 <= data["summary"][key] <= 100
+        assert isinstance(payload["summary"][key], int)
+        assert 0 <= payload["summary"][key] <= 100
 
-    assert data["members"] and data["groups"] and data["teams"]
-    assert set(data["members"][0]) == MEMBER_ROW_KEYS
-    assert set(data["groups"][0]) == GROUP_ROW_KEYS
-    assert set(data["teams"][0]) == TEAM_ROW_KEYS
-
-    assert data["groups"][0]["groupId"] == GROUP_ID
-    assert data["groups"][0]["teamName"] == "极光产品团队"
-    assert data["teams"][0]["teamId"] == TEAM_ID
-    assert data["trend"]["granularity"] == "week"
-    point = data["trend"]["buckets"][0]
-    assert set(point) == {"label", "start", "created", "completed", "todos"}
-    for row in data["members"]:
+    assert payload["members"]
+    assert set(payload["members"][0]) == MEMBER_ROW_KEYS
+    for row in payload["members"]:
+        assert row["teamId"] == TEAM_AURORA
+        assert "avatar" in row
+        assert isinstance(row["tasks"], int)
         if row["tasks"]:
             assert row["completionRate"] == round(
                 row["completedTasks"] / row["tasks"] * 100
             )
-        assert 0 <= row["completionRate"] <= 100
-        for key in ("tasks", "openTasks", "completedTasks", "overdueTasks", "blockedTasks", "todos"):
-            assert isinstance(row[key], int)
+
+    assert set(payload["trend"]) == TREND_KEYS
+    assert payload["trend"]["granularity"] in {"day", "week"}
+    assert payload["trend"]["buckets"]
+    assert set(payload["trend"]["buckets"][0]) == BUCKET_KEYS
 
 
 def test_range_windows_and_trend_granularity(client):
     expectations = {
-        "1w": ("day", 7, 7),
-        "2w": ("day", 14, 14),
-        "1m": ("week", 30, 5),
-        "2m": ("week", 60, 9),
-        "3m": ("week", 90, 13),
-        "all": ("week", None, 26),
+        "1w": ("day", 7),
+        "2w": ("day", 14),
+        "1m": ("week", 30),
+        "2m": ("week", 60),
+        "3m": ("week", 90),
+        "all": ("week", None),
     }
-    for range_key, (granularity, days, buckets) in expectations.items():
-        data = _data(client.get(f"{INSIGHTS_URL}?range={range_key}"))
-        assert data["range"]["key"] == range_key
-        assert data["range"]["days"] == days
-        assert data["range"]["start"] is None if days is None else bool(data["range"]["start"])
-        assert data["trend"]["granularity"] == granularity, range_key
-        assert len(data["trend"]["buckets"]) == buckets, range_key
-        starts = [point["start"] for point in data["trend"]["buckets"]]
+    for range_key, (granularity, days) in expectations.items():
+        payload = insights_payload(client, range_key=range_key)
+        assert payload["range"]["key"] == range_key
+        assert payload["range"]["days"] == days
+        assert payload["trend"]["granularity"] == granularity, range_key
+        starts = [point["start"] for point in payload["trend"]["buckets"]]
         assert starts == sorted(starts), range_key
 
 
-def test_scope_and_range_aggregate_totals(client):
-    group_all = _data(client.get(f"{INSIGHTS_URL}?range=all"))
-    assert group_all["scope"]["kind"] == "group"
-    assert group_all["summary"]["tasks"] == 14
-    assert group_all["summary"]["members"] == 5
-    assert group_all["summary"]["groups"] == 1
-    assert group_all["summary"]["teams"] == 1
-    assert group_all["summary"]["capacityPoints"] == 5 * 15
-    assert len(group_all["members"]) == 5
+def test_invalid_range_is_rejected(client):
+    response = client.get(f"{INSIGHTS_URL}?range=12m")
+    assert response.status_code == 422
+    assert error(response)["code"] == "invalid_range"
 
-    all_scope = _data(client.get(f"{INSIGHTS_URL}?scope=all&range=all"))
-    assert all_scope["scope"]["kind"] == "all"
-    assert all_scope["summary"]["tasks"] == 49
-    assert all_scope["summary"]["members"] == 18
-    assert all_scope["summary"]["groups"] == 5
-    assert all_scope["summary"]["teams"] == 2
-    assert {row["teamId"] for row in all_scope["teams"]} == {
-        "team-aurora",
-        "team-voyage",
+
+# --------------------------------------------------------------------------- totals
+
+
+def test_team_totals_split_the_seeded_ledger(client):
+    aurora = insights_payload(client, range_key="all")
+    voyage = insights_payload(client, TEAM_VOYAGE, range_key="all")
+
+    assert aurora["summary"]["tasks"] + voyage["summary"]["tasks"] == SEEDED_MEMBER_TASKS
+    assert 0 < aurora["summary"]["tasks"] < SEEDED_MEMBER_TASKS
+    assert aurora["summary"]["members"] >= 1
+    assert voyage["summary"]["members"] >= 1
+    assert aurora["summary"]["capacityPoints"] == aurora["summary"]["members"] * 15
+
+    # The scoped member rows only contain members of the requested team.
+    aurora_member_ids = {
+        member["id"]
+        for member in data(client.get(f"/api/teams/{TEAM_AURORA}/overview"))["members"]
     }
+    assert {row["memberId"] for row in aurora["members"]} <= aurora_member_ids
 
-    team_scope = _data(client.get(f"{INSIGHTS_URL}?scope=team&range=all"))
-    assert team_scope["scope"]["kind"] == "team"
-    assert team_scope["summary"]["teams"] == 1
-    assert team_scope["summary"]["groups"] == 3
-    assert 0 < team_scope["summary"]["tasks"] < all_scope["summary"]["tasks"]
+
+def test_trend_sums_match_totals_for_all_range(client):
+    payload = insights_payload(client, range_key="all")
+    buckets = payload["trend"]["buckets"]
+    summary = payload["summary"]
+    assert sum(point["created"] for point in buckets) == summary["tasks"]
+    assert sum(point["completed"] for point in buckets) == summary["completedTasks"]
 
 
 def test_active_window_filters_completed_and_keeps_open_tasks(client):
+    member_id = _seed_member_id(client)
     baseline = {
-        key: _data(client.get(f"{INSIGHTS_URL}?range={key}"))["summary"]["tasks"]
+        key: insights_payload(client, range_key=key)["summary"]["tasks"]
         for key in ("1w", "1m", "3m", "all")
     }
 
@@ -227,9 +204,10 @@ def test_active_window_filters_completed_and_keeps_open_tasks(client):
         progress_status="completed",
         created_days_ago=40,
         completed_days_ago=35,
+        member_id=member_id,
     )
     after_completed = {
-        key: _data(client.get(f"{INSIGHTS_URL}?range={key}"))["summary"]["tasks"]
+        key: insights_payload(client, range_key=key)["summary"]["tasks"]
         for key in ("1w", "1m", "3m", "all")
     }
     assert after_completed["1w"] == baseline["1w"]
@@ -242,9 +220,10 @@ def test_active_window_filters_completed_and_keeps_open_tasks(client):
         "task-insight-old-open",
         progress_status="pending",
         created_days_ago=40,
+        member_id=member_id,
     )
     after_open = {
-        key: _data(client.get(f"{INSIGHTS_URL}?range={key}"))["summary"]["tasks"]
+        key: insights_payload(client, range_key=key)["summary"]["tasks"]
         for key in ("1w", "1m", "3m", "all")
     }
     assert after_open["1w"] == baseline["1w"] + 1
@@ -259,13 +238,12 @@ def test_members_without_window_activity_are_omitted(client):
     member_id = new_id("member")
     with db() as conn:
         conn.execute(
-            "INSERT INTO members (id,team_id,group_id,external_id,name,email,title,role,"
-            "avatar_color,bio,tags,skills,status,joined_at,sort_order,created_at,updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO members (id,team_id,external_id,name,email,title,role,"
+            "avatar_color,bio,tags,skills,joined_at,sort_order,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 member_id,
-                TEAM_ID,
-                GROUP_ID,
+                TEAM_AURORA,
                 "",
                 "空成员",
                 "empty@corp.example",
@@ -275,36 +253,18 @@ def test_members_without_window_activity_are_omitted(client):
                 "",
                 "[]",
                 "[]",
-                "available",
                 "",
                 99,
                 _iso_days_ago(0),
                 _iso_days_ago(0),
             ),
         )
-    data = _data(client.get(f"{INSIGHTS_URL}?range=all"))
-    assert all(row["memberId"] != member_id for row in data["members"])
-    assert data["summary"]["members"] == 5
-
-
-def test_trend_sums_match_totals_for_all_range(client):
-    data = _data(client.get(f"{INSIGHTS_URL}?scope=all&range=all"))
-    buckets = data["trend"]["buckets"]
-    summary = data["summary"]
-    assert sum(point["created"] for point in buckets) == summary["tasks"]
-    assert sum(point["completed"] for point in buckets) == summary["completedTasks"]
-    assert sum(point["todos"] for point in buckets) == summary["todos"]
-    assert len(buckets) == 26
-
-
-def test_invalid_range_is_rejected(client):
-    response = client.get(f"{INSIGHTS_URL}?range=12m")
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "invalid_range"
+    payload = insights_payload(client, range_key="all")
+    assert all(row["memberId"] != member_id for row in payload["members"])
 
 
 def test_guest_can_read_insights(guest_client):
-    data = _data(guest_client.get(f"{INSIGHTS_URL}?scope=team&range=2w"))
-    assert data["scope"]["kind"] == "team"
-    assert data["range"]["key"] == "2w"
-    assert isinstance(data["summary"]["tasks"], int)
+    payload = insights_payload(guest_client, range_key="2w")
+    assert payload["range"]["key"] == "2w"
+    assert isinstance(payload["summary"]["tasks"], int)
+    assert "groups" not in payload

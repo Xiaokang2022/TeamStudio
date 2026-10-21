@@ -221,6 +221,17 @@
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent);
 }
 
+/* Member avatars inside the trigger / option rows. */
+.ts-select-option .avatar {
+  margin-top: 1px;
+}
+
+.ts-select-sm .ts-select-trigger .avatar {
+  width: 20px;
+  height: 20px;
+  font-size: 8px;
+}
+
 .ts-select-option-main {
   display: flex;
   flex-direction: column;

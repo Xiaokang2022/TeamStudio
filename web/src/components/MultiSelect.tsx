@@ -42,6 +42,8 @@ export interface MultiSelectOption {
   label: string;
   /** Secondary line, usually the member title / duty. */
   description?: string;
+  /** Real avatar image URL (members / assignees) rendered in trigger & list. */
+  avatar?: string;
   /** Avatar base colour (falls back to the shared avatar default). */
   color?: string;
   /** Disabled options cannot be added. A selected disabled row can be removed. */
@@ -434,7 +436,12 @@ export function MultiSelect({
           <span className="ts-multiselect-value">
             {visibleChips.map((option) => (
               <span key={option.value} className="ts-multiselect-chip" title={option.label}>
-                <Avatar name={option.label} color={option.color} size="xs" />
+                <Avatar
+                  name={option.label}
+                  src={option.avatar}
+                  color={option.color}
+                  size="xs"
+                />
                 <span className="ts-multiselect-chip-label">{option.label}</span>
               </span>
             ))}
@@ -531,7 +538,12 @@ export function MultiSelect({
                         >
                           {selected ? <Check size={11} /> : null}
                         </span>
-                        <Avatar name={option.label} color={option.color} size="xs" />
+                        <Avatar
+                          name={option.label}
+                          src={option.avatar}
+                          color={option.color}
+                          size="xs"
+                        />
                         <span className="ts-multiselect-option-main">
                           <span className="ts-multiselect-option-label">{option.label}</span>
                           {option.description ? (

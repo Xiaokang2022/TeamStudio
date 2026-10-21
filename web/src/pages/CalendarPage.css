@@ -591,44 +591,6 @@
   white-space: nowrap;
 }
 
-/* Aggregate scope: owning development group badge. */
-.cal-group-badge {
-  padding: 0 6px;
-  font-size: 9px;
-  font-weight: 600;
-}
-
-.cal-chip-group {
-  flex: none;
-  max-width: 46px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-3);
-  font-size: 8px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-}
-
-/* TodoDialog aggregate hint: which group a new todo is written to. */
-.td-target-hint {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0 0 2px;
-  padding: 8px 11px;
-  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--border));
-  border-radius: 10px;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-size: 11.5px;
-  line-height: 1.5;
-}
-
-.td-target-hint strong {
-  font-weight: 700;
-}
-
 .cal-todo-assignee {
   max-width: 100px;
   color: var(--text-2);

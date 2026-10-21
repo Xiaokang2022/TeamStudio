@@ -125,7 +125,7 @@ export function AboutDialog({ open, onClose }: { open: boolean; onClose: () => v
               <h4>项目能力</h4>
             </div>
             <div className="about-feature-list">
-              <span><UsersRound size={14} /> 团队 / 开发组双层协作</span>
+              <span><UsersRound size={14} /> 以团队为单位的协作空间</span>
               <span><ListTodo size={14} /> 成员任务台账、健康状态与工作量负载</span>
               <span><CalendarDays size={14} /> 协作日历与到期管理</span>
               <span><UsersRound size={14} /> 邮箱验证码登录与个人主页</span>

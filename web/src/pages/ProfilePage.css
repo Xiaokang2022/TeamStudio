@@ -70,10 +70,6 @@
   margin-top: 2px;
 }
 
-.profile-chip-muted {
-  color: var(--text-3);
-}
-
 /* ---------- Administrator management scope (public info) ---------- */
 .profile-admin-scope {
   display: inline-flex;
@@ -153,7 +149,7 @@
   color: var(--text-3);
 }
 
-/* ---------- Member archives (one per development group) ---------- */
+/* ---------- Member archives (one per team) ---------- */
 .profile-membership-chip {
   gap: 5px;
   max-width: 100%;
@@ -398,6 +394,27 @@
   flex: 1;
 }
 
+/* ---------- Personalization (per-browser theme preference) ---------- */
+.profile-personalization {
+  padding: 20px 22px 22px;
+}
+
+.profile-personalization-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.profile-theme-switch {
+  width: 100%;
+  max-width: 360px;
+  margin: 8px 0 2px;
+}
+
+.profile-theme-switch button {
+  flex: 1;
+}
+
 /* ---------- Sections ---------- */
 .profile-grid {
   display: grid;
@@ -475,18 +492,19 @@
   color: var(--text-3);
 }
 
-.profile-group-badges {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+.profile-team-badge {
   flex: none;
   max-width: 46%;
+  justify-content: flex-end;
+  font-weight: 500;
+  white-space: normal;
+  text-align: right;
 }
 
-.profile-group-badges .badge {
-  font-weight: 500;
+.profile-member-head .profile-team-badge {
+  max-width: 100%;
+  justify-content: flex-start;
+  text-align: left;
 }
 
 .profile-empty {
@@ -583,9 +601,10 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .profile-group-badges {
+  .profile-team-badge {
     max-width: 100%;
     justify-content: flex-start;
+    text-align: left;
   }
 
   .profile-row {
@@ -597,7 +616,8 @@
   .profile-hero,
   .profile-section,
   .profile-members,
-  .profile-settings {
+  .profile-settings,
+  .profile-personalization {
     padding: 16px;
   }
 

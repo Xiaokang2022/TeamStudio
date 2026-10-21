@@ -1,6 +1,8 @@
-"""Group overview, member profiles and member work-item routes.
+"""Team overview, member profiles and member work-item routes (round 8).
 
-Base path: ``/api/teams/{team_id}/groups/{group_id}``.
+Base path: ``/api/teams/{team_id}``. Development groups no longer exist: every business
+row is isolated by ``team_id`` only, member payloads carry no availability ``status`` and
+every member / work payload carries the account's real avatar.
 
 Response envelope is always ``{"ok": true, "data": ...}``; errors use
 ``HTTPException(status_code, detail={"code", "message", "details"})``.
@@ -16,30 +18,29 @@ from fastapi import APIRouter, Body, Depends, Query
 from ..auth import CurrentUser, get_current_user
 from ..config import EMAIL_PATTERN
 from ..db import db, json_dumps, json_loads, new_id, now_iso, row, rows, scalar
-from ..http import fail, get_group, get_member, int_value, ok, text
+from ..http import fail, get_member, get_team, int_value, ok, text
 from ..permissions import (
     audit,
-    require_admin,
     require_member_writer,
-    require_read_access,
+    require_read_module,
+    require_team_admin,
 )
-from ..scope import resolve_scope
 from ..services import accounts
 from ..services.member_identity import (
-    group_members,
+    account_avatar_map,
     identity_fields,
+    member_avatar,
     member_ids,
+    team_members,
 )
 from ..services.tasks_service import build_workload_section
 
-router = APIRouter(
-    prefix="/api/teams/{team_id}/groups/{group_id}", tags=["workspace"]
-)
+router = APIRouter(prefix="/api/teams/{team_id}", tags=["workspace"])
 
 HEX_PATTERN = re.compile(r"^#[0-9a-fA-F]{6}$")
 WORK_STATUSES = {"current", "done", "planned"}
 # Member fields that describe the person rather than their place in the team: only a
-# super administrator or the linked account owner may edit them (round-5 contract §6).
+# super administrator or the linked account owner may edit them.
 PERSONAL_FIELDS = ("name", "email", "bio", "avatarColor", "tags", "skills", "avatar", "avatarUrl")
 
 
@@ -100,11 +101,6 @@ def _email(value: Any) -> str:
     return email
 
 
-def _in_clause(group_ids: list[str]) -> str:
-    """SQL ``IN`` placeholder list; an empty scope matches nothing."""
-    return ",".join("?" for _ in group_ids) if group_ids else "NULL"
-
-
 def _avatar_url(value: Any) -> str:
     """Validate an avatar path/URL written through a member payload."""
     if value is None:
@@ -123,17 +119,13 @@ def _can_edit_personal_info(user: CurrentUser, member: dict[str, Any]) -> bool:
     return bool(email) and email == str(user.email or "").strip().lower()
 
 
-def _work_payload(
-    work: dict[str, Any], group: dict[str, Any] | None = None
-) -> dict[str, Any]:
-    group = group or {}
+def _work_payload(work: dict[str, Any], team: dict[str, Any]) -> dict[str, Any]:
+    """CamelCase projection of one ``works`` row (team-only, no group fields)."""
     return {
         "id": work["id"],
         "memberId": work["member_id"],
-        "groupId": work.get("group_id", ""),
-        "groupName": work.get("group_name") or group.get("name", ""),
-        "teamId": work.get("group_team_id") or group.get("team_id", ""),
-        "teamName": work.get("team_name") or group.get("team_name", ""),
+        "teamId": work.get("team_id") or team.get("id", ""),
+        "teamName": work.get("team_name") or team.get("name", ""),
         "title": work["title"],
         "description": work.get("description", ""),
         "status": work.get("status", "current"),
@@ -147,98 +139,83 @@ def _work_payload(
 def _member_payload(
     member: dict[str, Any],
     works: list[dict[str, Any]],
+    team: dict[str, Any],
+    avatars: dict[str, str],
     open_todos: int = 0,
 ) -> dict[str, Any]:
-    group = {
-        "name": member.get("group_name", ""),
-        "team_id": member.get("group_team_id") or member.get("team_id", ""),
-        "team_name": member.get("team_name", ""),
-    }
-    work_items = [_work_payload(work, group) for work in works]
+    """``Member`` payload (contract §3.3): no status/group, real avatar, team identity."""
+    work_items = [_work_payload(work, team) for work in works]
     current = [work for work in work_items if work["status"] == "current"]
     history = [work for work in work_items if work["status"] == "done"]
     return {
         "id": member["id"],
         "name": member["name"],
         "email": member.get("email", ""),
+        "avatar": member_avatar(member, avatars),
         "title": member.get("title", ""),
         "role": member.get("role", ""),
         "avatarColor": member.get("avatar_color", "#5865f2"),
-        "avatar": member.get("avatar_url", ""),
         "bio": member.get("bio", ""),
-        "groupId": member.get("group_id", ""),
-        "groupName": group["name"],
-        "teamId": group["team_id"],
-        "teamName": group["team_name"],
         "tags": _parsed_list(member.get("tags")),
         "skills": _parsed_list(member.get("skills")),
-        # ``duties`` has no dedicated column yet; tolerate future schema additions.
+        # ``duties`` has no dedicated column; tolerate future schema additions.
         "duties": _parsed_list(member.get("duties")),
-        "status": member.get("status", "available"),
         "joinedAt": member.get("joined_at", ""),
+        "teamId": team.get("id") or member.get("team_id", ""),
+        "teamName": member.get("team_name") or team.get("name", ""),
         "currentWorks": current,
         "historyWorks": history,
         "stats": {"current": len(current), "done": len(history), "todos": open_todos},
     }
 
 
-def _member_detail(conn, member: dict[str, Any]) -> dict[str, Any]:
+def _member_detail(conn, team: dict[str, Any], member: dict[str, Any]) -> dict[str, Any]:
+    """One merged-person card for a single member archive (POST/PATCH responses)."""
     works = rows(
         conn,
-        "SELECT * FROM works WHERE member_id=? AND group_id=? ORDER BY sort_order, created_at",
-        (member["id"], member["group_id"]),
+        "SELECT * FROM works WHERE member_id=? AND team_id=? ORDER BY sort_order, created_at",
+        (member["id"], team["id"]),
     )
     open_todos = int(
         scalar(
             conn,
-            "SELECT COUNT(*) FROM todos WHERE assignee_member_id=? AND group_id=? AND status<>'done'",
-            (member["id"], member["group_id"]),
+            "SELECT COUNT(*) FROM todos WHERE assignee_member_id=? AND team_id=? AND status<>'done'",
+            (member["id"], team["id"]),
             default=0,
         )
         or 0
     )
-    meta = row(
-        conn,
-        "SELECT g.name AS group_name, g.team_id AS group_team_id, tm.name AS team_name "
-        "FROM groups g JOIN teams tm ON tm.id=g.team_id WHERE g.id=?",
-        (member["group_id"],),
-    )
-    member = {**member, **(meta or {})}
-    return _member_payload(member, works, open_todos)
+    avatars = account_avatar_map(conn)
+    person = {"personKey": "", "primary": member, "rows": [member]}
+    card = _member_payload(member, works, team, avatars, open_todos)
+    card.update(identity_fields(person))
+    return card
 
 
-def _group_detail(group: dict[str, Any], member_count: int = 0) -> dict[str, Any]:
-    """Frontend-facing camelCase projection of a group joined with its team."""
+def _team_detail(team: dict[str, Any], member_count: int = 0) -> dict[str, Any]:
+    """Frontend-facing camelCase projection of one team (contract §3.3)."""
     return {
-        "id": group["id"],
-        "teamId": group["team_id"],
-        "teamName": group.get("team_name", ""),
-        "teamShortName": group.get("team_short_name", ""),
-        "name": group["name"],
-        "description": group.get("description", ""),
-        "color": group.get("color", "#5865f2"),
-        "icon": group.get("icon", "layers"),
+        "id": team["id"],
+        "name": team["name"],
+        "shortName": team.get("short_name", ""),
+        "description": team.get("description", ""),
+        "color": team.get("color", "#5865f2"),
         "memberCount": member_count,
     }
 
 
-def _recent_activity(
-    conn, group_ids: str | list[str], limit: int = 12
-) -> list[dict[str, Any]]:
-    groups = [group_ids] if isinstance(group_ids, str) else list(group_ids)
-    if not groups:
-        return []
-    placeholders = _in_clause(groups)
-    params = tuple(groups)
+def _recent_activity(conn, team: dict[str, Any], limit: int = 12) -> list[dict[str, Any]]:
+    """Cross-module recent activity for one team; no group fields."""
+    team_id = team["id"]
+    team_name = team.get("name", "")
     entries: list[dict[str, Any]] = []
     for todo in rows(
         conn,
-        "SELECT t.id, t.title, t.status, t.updated_at, t.completed_at, t.group_id, "
-        "m.name AS assignee_name, g.name AS group_name "
+        "SELECT t.id, t.title, t.status, t.updated_at, t.completed_at, "
+        "m.name AS assignee_name "
         "FROM todos t LEFT JOIN members m ON m.id=t.assignee_member_id "
-        "JOIN groups g ON g.id=t.group_id "
-        f"WHERE t.group_id IN ({placeholders}) ORDER BY t.updated_at DESC LIMIT 6",
-        params,
+        "WHERE t.team_id=? ORDER BY t.updated_at DESC LIMIT 6",
+        (team_id,),
     ):
         entries.append(
             {
@@ -248,17 +225,16 @@ def _recent_activity(
                 "description": "待办已完成" if todo["status"] == "done" else "待办更新",
                 "memberName": todo.get("assignee_name") or "",
                 "memberId": None,
-                "groupId": todo.get("group_id", ""),
-                "groupName": todo.get("group_name", ""),
+                "teamId": team_id,
+                "teamName": team_name,
                 "at": todo.get("completed_at") or todo.get("updated_at") or "",
             }
         )
     for announcement in rows(
         conn,
-        "SELECT a.id, a.title, a.author_name, a.created_at, a.group_id, g.name AS group_name "
-        "FROM announcements a JOIN groups g ON g.id=a.group_id "
-        f"WHERE a.group_id IN ({placeholders}) ORDER BY a.created_at DESC LIMIT 4",
-        params,
+        "SELECT id, title, author_name, created_at FROM announcements "
+        "WHERE team_id=? ORDER BY created_at DESC LIMIT 4",
+        (team_id,),
     ):
         entries.append(
             {
@@ -268,19 +244,17 @@ def _recent_activity(
                 "description": "发布公告",
                 "memberName": announcement.get("author_name", ""),
                 "memberId": None,
-                "groupId": announcement.get("group_id", ""),
-                "groupName": announcement.get("group_name", ""),
+                "teamId": team_id,
+                "teamName": team_name,
                 "at": announcement.get("created_at", ""),
             }
         )
     for work in rows(
         conn,
-        "SELECT w.id, w.title, w.status, w.updated_at, w.group_id, "
-        "m.id AS member_id, m.name AS member_name, g.name AS group_name "
-        "FROM works w JOIN members m ON m.id=w.member_id "
-        "JOIN groups g ON g.id=w.group_id "
-        f"WHERE w.group_id IN ({placeholders}) ORDER BY w.updated_at DESC LIMIT 4",
-        params,
+        "SELECT w.id, w.title, w.status, w.updated_at, w.member_id, m.name AS member_name "
+        "FROM works w LEFT JOIN members m ON m.id=w.member_id "
+        "WHERE w.team_id=? ORDER BY w.updated_at DESC LIMIT 4",
+        (team_id,),
     ):
         entries.append(
             {
@@ -290,19 +264,17 @@ def _recent_activity(
                 "description": f"工作进展 · {work['status']}",
                 "memberName": work.get("member_name", ""),
                 "memberId": work.get("member_id"),
-                "groupId": work.get("group_id", ""),
-                "groupName": work.get("group_name", ""),
+                "teamId": team_id,
+                "teamName": team_name,
                 "at": work.get("updated_at", ""),
             }
         )
     for entry in rows(
         conn,
-        "SELECT e.id, e.side, e.title, e.reason, e.member_id, e.member_name, "
-        "e.created_at, b.group_id, g.name AS group_name "
+        "SELECT e.id, e.side, e.title, e.reason, e.member_id, e.member_name, e.created_at "
         "FROM redblack_entries e JOIN redblack_boards b ON b.id=e.board_id "
-        "JOIN groups g ON g.id=b.group_id "
-        f"WHERE b.group_id IN ({placeholders}) ORDER BY e.created_at DESC LIMIT 4",
-        params,
+        "WHERE b.team_id=? ORDER BY e.created_at DESC LIMIT 4",
+        (team_id,),
     ):
         side = "红榜" if entry["side"] == "red" else "黑榜"
         description = side + (f" · {entry['reason']}" if entry.get("reason") else "")
@@ -314,8 +286,8 @@ def _recent_activity(
                 "description": description,
                 "memberName": entry.get("member_name", ""),
                 "memberId": entry.get("member_id"),
-                "groupId": entry.get("group_id", ""),
-                "groupName": entry.get("group_name", ""),
+                "teamId": team_id,
+                "teamName": team_name,
                 "at": entry.get("created_at", ""),
             }
         )
@@ -335,54 +307,43 @@ def _work_status(value: Any, default: str = "current") -> str:
 
 
 @router.get("/overview")
-def group_overview(
+def team_overview(
     team_id: str,
-    group_id: str,
-    scope: str = Query(default="group"),
-    user: CurrentUser = Depends(require_read_access),
+    user: CurrentUser = Depends(require_read_module("overview")),
 ):
     with db() as conn:
-        group = get_group(conn, team_id, group_id)
-        ctx = resolve_scope(conn, team_id, group_id, scope, user)
-        group_ids = ctx["groupIds"]
-        placeholders = _in_clause(group_ids)
-        params = tuple(group_ids)
+        team = get_team(conn, team_id)
         member_rows = rows(
             conn,
-            "SELECT m.*, g.name AS group_name, g.team_id AS group_team_id, "
-            "tm.name AS team_name FROM members m "
-            "JOIN groups g ON g.id=m.group_id JOIN teams tm ON tm.id=g.team_id "
-            f"WHERE m.group_id IN ({placeholders}) "
-            "ORDER BY g.sort_order, g.name, m.sort_order, m.created_at, m.id",
-            params,
+            "SELECT m.*, t.name AS team_name FROM members m "
+            "JOIN teams t ON t.id=m.team_id WHERE m.team_id=? "
+            "ORDER BY m.sort_order, m.created_at, m.id",
+            (team_id,),
         )
         work_rows = rows(
             conn,
-            "SELECT w.*, g.name AS group_name, g.team_id AS group_team_id, "
-            "tm.name AS team_name FROM works w "
-            "JOIN groups g ON g.id=w.group_id JOIN teams tm ON tm.id=g.team_id "
-            f"WHERE w.group_id IN ({placeholders}) "
-            "ORDER BY g.sort_order, g.name, w.member_id, w.sort_order, w.created_at",
-            params,
+            "SELECT w.*, t.name AS team_name FROM works w "
+            "JOIN teams t ON t.id=w.team_id WHERE w.team_id=? "
+            "ORDER BY w.member_id, w.sort_order, w.created_at",
+            (team_id,),
         )
         todo_rows = rows(
             conn,
-            "SELECT id, group_id, assignee_member_id, status FROM todos "
-            f"WHERE group_id IN ({placeholders})",
-            params,
+            "SELECT id, assignee_member_id, status FROM todos WHERE team_id=?",
+            (team_id,),
         )
         pinned = int(
             scalar(
                 conn,
-                "SELECT COUNT(*) FROM announcements "
-                f"WHERE group_id IN ({placeholders}) AND pinned=1",
-                params,
+                "SELECT COUNT(*) FROM announcements WHERE team_id=? AND pinned=1",
+                (team_id,),
                 default=0,
             )
             or 0
         )
-        activity = _recent_activity(conn, group_ids)
-        workload_section = build_workload_section(conn, group_ids)
+        activity = _recent_activity(conn, team)
+        workload_section = build_workload_section(conn, team_id)
+        avatars = account_avatar_map(conn)
 
     works_by_member: dict[str, list[dict[str, Any]]] = {}
     for work in work_rows:
@@ -394,22 +355,25 @@ def group_overview(
             open_todos_by_member[assignee] = open_todos_by_member.get(assignee, 0) + 1
 
     members: list[dict[str, Any]] = []
-    # Round 7: one account may own archive rows in several development groups. Aggregate
-    # scopes merge them into one member card (the first row, by group ordering, is the
-    # primary archive); group scope is unaffected because an account is unique there.
-    people = group_members(member_rows)
+    # One account may own several historical archive rows inside the same team after the
+    # round-8 migration: merge them into one card (the first row, by sort order, is the
+    # primary archive).
+    people = team_members(member_rows)
     for person in people:
         person_archive_ids = member_ids(person)
         person_works: list[dict[str, Any]] = []
-        for member_id in person_archive_ids:
-            person_works.extend(works_by_member.get(member_id, []))
+        for archive_id in person_archive_ids:
+            person_works.extend(works_by_member.get(archive_id, []))
         open_todos = sum(
-            open_todos_by_member.get(member_id, 0) for member_id in person_archive_ids
+            open_todos_by_member.get(archive_id, 0) for archive_id in person_archive_ids
         )
-        card = _member_payload(person["primary"], person_works, open_todos)
+        card = _member_payload(person["primary"], person_works, team, avatars, open_todos)
         card.update(identity_fields(person))
         members.append(card)
-    works = [_work_payload(work) for work in work_rows]
+    # Contract §3.3 / requirement #3: member cards are ordered by name ascending.
+    members.sort(key=lambda item: str(item.get("name") or "").casefold())
+
+    works = [_work_payload(work, team) for work in work_rows]
     done_todos = sum(1 for todo in todo_rows if todo.get("status") == "done")
     stats = {
         "members": len(people),
@@ -422,11 +386,9 @@ def group_overview(
         "doneTodos": done_todos,
         "pinned": pinned,
     }
-    group_payload = _group_detail(group, len(member_rows))
     return ok(
         {
-            "group": group_payload,
-            "scope": ctx,
+            "team": _team_detail(team, len(people)),
             "members": members,
             "works": works,
             "recentActivity": activity,
@@ -443,28 +405,27 @@ def group_overview(
 @router.get("/member-candidates")
 def list_member_candidates(
     team_id: str,
-    group_id: str,
     search: str = Query(default=""),
     user: CurrentUser = Depends(get_current_user),
 ):
-    """Registered accounts that can still join this development group's member list.
+    """Registered accounts that can still join this team's member list.
 
-    Round 6 §1.2: candidates are ``users`` rows (pre-created but unverified accounts
-    included) that have no member profile in this group yet. Accounts are matched to
-    existing member rows by e-mail *or* immutable account id, so both link styles are
-    recognised. The built-in device Admin is not a ``users`` row and can never appear.
+    Candidates are ``users`` rows (pre-created but unverified accounts included) that
+    have no member profile in this team yet. Accounts are matched to existing member rows
+    by e-mail *or* immutable account id, so both link styles are recognised. The built-in
+    device Admin is not a ``users`` row and can never appear.
     """
     with db() as conn:
-        get_group(conn, team_id, group_id)
-        require_admin(user, team_id, group_id)
+        get_team(conn, team_id)
+        require_team_admin(user, team_id)
 
         taken_emails: set[str] = set()
         taken_ids: set[str] = set()
         for existing in rows(
             conn,
             "SELECT lower(email) AS email, lower(external_id) AS external_id "
-            "FROM members WHERE group_id=?",
-            (group_id,),
+            "FROM members WHERE team_id=?",
+            (team_id,),
         ):
             if existing.get("email"):
                 taken_emails.add(str(existing["email"]))
@@ -510,27 +471,27 @@ def list_member_candidates(
 @router.patch("/members/{member_id}")
 def update_member(
     team_id: str,
-    group_id: str,
     member_id: str,
     payload: dict[str, Any] = Body(...),
     user: CurrentUser = Depends(get_current_user),
 ):
-    """Update one member of a development group.
+    """Update one member of a team.
 
     Personal fields (``name``/``email``/``bio``/``avatarColor``/``tags``/``skills``/
     ``avatar``) may only be changed by a super administrator or by the linked account
-    owner; in-scope team/group admins may still edit the organizational fields
-    (``title``/``role``/``status``). Accepted personal edits are mirrored onto the
-    linked ``users`` row so profile pages and member cards stay in sync.
+    owner; team administrators may still edit the organizational fields
+    (``title``/``role``). Accepted personal edits are mirrored onto the linked ``users``
+    row and every archive row of that account so avatars stay in sync everywhere.
+    Availability ``status`` no longer exists (round 8 requirement #1) and is ignored.
     """
     with db() as conn:
-        get_group(conn, team_id, group_id)
-        member = get_member(conn, member_id, group_id)
-        require_member_writer(user, team_id, group_id, member_id)
+        team = get_team(conn, team_id)
+        member = get_member(conn, team_id, member_id)
 
         personal_fields = [field for field in PERSONAL_FIELDS if field in payload]
         if personal_fields and not _can_edit_personal_info(user, member):
             raise fail(403, "个人信息仅超级管理员和本人可编辑", "personal_info_forbidden")
+        require_member_writer(user, team_id, member_id)
 
         updates: dict[str, Any] = {}
         if "name" in payload:
@@ -543,8 +504,6 @@ def update_member(
             updates["role"] = text(payload.get("role"), "角色", 40)
         if "bio" in payload:
             updates["bio"] = text(payload.get("bio"), "个人简介", 2000)
-        if "status" in payload:
-            updates["status"] = text(payload.get("status"), "状态", 20, required=True)
         if "avatarColor" in payload:
             updates["avatar_color"] = _hex_color(payload.get("avatarColor"), "头像颜色")
         if "tags" in payload:
@@ -558,11 +517,11 @@ def update_member(
             updates["updated_at"] = now_iso()
             assignments = ", ".join(f"{column}=?" for column in updates)
             conn.execute(
-                f"UPDATE members SET {assignments} WHERE id=? AND group_id=?",
-                (*updates.values(), member_id, group_id),
+                f"UPDATE members SET {assignments} WHERE id=? AND team_id=?",
+                (*updates.values(), member_id, team_id),
             )
             audit(conn, user, "member.update", "member", member_id, {"fields": sorted(payload)})
-        updated = get_member(conn, member_id, group_id)
+        updated = get_member(conn, team_id, member_id)
         if personal_fields:
             # Mirror onto the account that owned this member *before* the edit. When the
             # member e-mail itself is changed the row would otherwise resolve to another
@@ -572,27 +531,35 @@ def update_member(
                 sync_row["email"] = member.get("email", "")
                 sync_row["external_id"] = member.get("external_id", "")
             accounts.sync_user_from_member(conn, sync_row)
-        member_payload = _member_detail(conn, updated)
+            # Round 8 requirement #2: propagate the personal fields to every archive row
+            # of the account (other teams) so avatars are identical everywhere.
+            account = accounts.get_user_by_email(conn, str(updated.get("email") or ""))
+            if account is None and updated.get("external_id"):
+                account = accounts.get_user(conn, str(updated.get("external_id") or ""))
+            if account:
+                accounts.sync_members_from_user(conn, account)
+            updated = get_member(conn, team_id, member_id)
+        member_payload = _member_detail(conn, team, updated)
     return ok({"member": member_payload})
 
 
 @router.post("/members")
 def create_member(
     team_id: str,
-    group_id: str,
     payload: dict[str, Any] = Body(...),
     user: CurrentUser = Depends(get_current_user),
 ):
-    """Add a registered account to this development group's member profiles.
+    """Add a registered account to this team's member profiles.
 
-    Round 6 §1.3: the request only selects a person via ``userId`` (account id, or an
-    e-mail for manual callers). Every identity field is derived from the ``users`` row;
-    custom ``name`` / ``email`` / ``id`` / ``avatar`` values are deliberately ignored so
-    a member profile can never disagree with the account it represents.
+    The request only selects a person via ``userId`` (account id, or an e-mail for manual
+    callers). Every identity field is derived from the ``users`` row; custom
+    ``name`` / ``email`` / ``id`` / ``avatar`` values are deliberately ignored so a
+    member profile can never disagree with the account it represents. New writes keep at
+    most one archive row per account per team.
     """
     with db() as conn:
-        group = get_group(conn, team_id, group_id)
-        require_admin(user, team_id, group_id)
+        team = get_team(conn, team_id)
+        require_team_admin(user, team_id)
 
         raw_user_id = text(payload.get("userId"), "账号 ID", 190, required=True)
         account = accounts.get_user(conn, raw_user_id)
@@ -606,26 +573,25 @@ def create_member(
         account_email = str(account.get("email") or "")
         existing = row(
             conn,
-            "SELECT id FROM members WHERE group_id=? AND (lower(email)=? OR lower(external_id)=?) "
+            "SELECT id FROM members WHERE team_id=? AND (lower(email)=? OR lower(external_id)=?) "
             "LIMIT 1",
-            (group_id, account_email.lower(), account_id.lower()),
+            (team_id, account_email.lower(), account_id.lower()),
         )
         if existing:
-            raise fail(409, "该账号已在当前开发组的成员档案中", "member_exists")
+            raise fail(409, "该账号已在当前团队的成员档案中", "member_exists")
 
         member_id = new_id("member")
         name = str(account.get("name") or "").strip() or account_id
         title = text(payload.get("title"), "职位", 60)
         role = text(payload.get("role"), "角色", 40)
-        status = text(payload.get("status"), "状态", 20) or "available"
         sort_order = (
             int_value(payload.get("sortOrder"), "排序", 0, 100_000)
             if payload.get("sortOrder") is not None
             else int(
                 scalar(
                     conn,
-                    "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM members WHERE group_id=?",
-                    (group_id,),
+                    "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM members WHERE team_id=?",
+                    (team_id,),
                     default=1,
                 )
                 or 1
@@ -633,13 +599,12 @@ def create_member(
         )
         now = now_iso()
         conn.execute(
-            "INSERT INTO members (id,team_id,group_id,external_id,name,email,avatar_url,"
-            "title,role,avatar_color,bio,tags,skills,status,joined_at,sort_order,created_at,"
-            "updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO members (id,team_id,external_id,name,email,avatar_url,"
+            "title,role,avatar_color,bio,tags,skills,joined_at,sort_order,created_at,"
+            "updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 member_id,
-                group["team_id"],
-                group_id,
+                team_id,
                 account_id,
                 name,
                 account_email,
@@ -650,7 +615,6 @@ def create_member(
                 account.get("bio") or "",
                 "[]",
                 json_dumps(_parsed_list(account.get("skills"))),
-                status,
                 now,
                 sort_order,
                 now,
@@ -658,16 +622,17 @@ def create_member(
             ),
         )
         audit(conn, user, "member.create", "member", member_id, {"userId": account_id, "name": name})
-        member = _member_detail(conn, get_member(conn, member_id, group_id))
+        member = _member_detail(conn, team, get_member(conn, team_id, member_id))
     return ok({"member": member})
 
 
-def _prune_matrix_backups(conn, member_id: str) -> None:
+def _prune_matrix_backups(conn, team_id: str, member_id: str) -> None:
     """Remove a deleted member id from every responsibility area's backup JSON array."""
     for area in rows(
         conn,
-        "SELECT id, backup_member_ids FROM matrix_areas WHERE backup_member_ids LIKE ?",
-        (f"%{member_id}%",),
+        "SELECT id, backup_member_ids FROM matrix_areas "
+        "WHERE team_id=? AND backup_member_ids LIKE ?",
+        (team_id, f"%{member_id}%"),
     ):
         parsed = json_loads(area.get("backup_member_ids"), None)
         if not isinstance(parsed, list) or member_id not in parsed:
@@ -686,26 +651,32 @@ def _prune_matrix_backups(conn, member_id: str) -> None:
 @router.delete("/members/{member_id}")
 def delete_member(
     team_id: str,
-    group_id: str,
     member_id: str,
     user: CurrentUser = Depends(get_current_user),
 ):
     with db() as conn:
-        get_group(conn, team_id, group_id)
-        member = get_member(conn, member_id, group_id)
-        require_admin(user, team_id, group_id)
+        get_team(conn, team_id)
+        member = get_member(conn, team_id, member_id)
+        require_team_admin(user, team_id)
         if user.is_linked_member(member_id):
             raise fail(409, "不能删除与当前登录身份关联的成员", "cannot_delete_self")
         # Responsibility matrix columns have no FK; detach them before the cascade delete.
         conn.execute(
-            "UPDATE matrix_areas SET owner_member_id=NULL WHERE owner_member_id=?", (member_id,)
+            "UPDATE matrix_areas SET owner_member_id=NULL "
+            "WHERE team_id=? AND owner_member_id=?",
+            (team_id, member_id),
         )
         conn.execute(
-            "UPDATE matrix_areas SET backup_member_id=NULL WHERE backup_member_id=?", (member_id,)
+            "UPDATE matrix_areas SET backup_member_id=NULL "
+            "WHERE team_id=? AND backup_member_id=?",
+            (team_id, member_id),
         )
-        _prune_matrix_backups(conn, member_id)
-        conn.execute("UPDATE todos SET assignee_member_id=NULL WHERE assignee_member_id=?", (member_id,))
-        conn.execute("DELETE FROM members WHERE id=? AND group_id=?", (member_id, group_id))
+        _prune_matrix_backups(conn, team_id, member_id)
+        conn.execute(
+            "UPDATE todos SET assignee_member_id=NULL WHERE team_id=? AND assignee_member_id=?",
+            (team_id, member_id),
+        )
+        conn.execute("DELETE FROM members WHERE id=? AND team_id=?", (member_id, team_id))
         audit(conn, user, "member.delete", "member", member_id, {"name": member["name"]})
     return ok({"deleted": True, "id": member_id})
 
@@ -713,46 +684,32 @@ def delete_member(
 @router.get("/members/{member_id}/works")
 def list_member_works(
     team_id: str,
-    group_id: str,
     member_id: str,
-    scope: str = Query(default="group"),
-    user: CurrentUser = Depends(require_read_access),
+    user: CurrentUser = Depends(require_read_module("overview")),
 ):
     with db() as conn:
-        get_group(conn, team_id, group_id)
-        ctx = resolve_scope(conn, team_id, group_id, scope, user)
-        group_ids = ctx["groupIds"]
-        placeholders = _in_clause(group_ids)
-        member = row(
-            conn,
-            f"SELECT id FROM members WHERE id=? AND group_id IN ({placeholders})",
-            (member_id, *group_ids),
-        )
-        if not member:
-            raise fail(404, "成员不存在或不属于该开发组", "member_not_found")
+        team = get_team(conn, team_id)
+        get_member(conn, team_id, member_id)
         works = rows(
             conn,
-            "SELECT w.*, g.name AS group_name, g.team_id AS group_team_id, "
-            "tm.name AS team_name FROM works w "
-            "JOIN groups g ON g.id=w.group_id JOIN teams tm ON tm.id=g.team_id "
-            f"WHERE w.member_id=? AND w.group_id IN ({placeholders}) "
-            "ORDER BY w.sort_order, w.created_at",
-            (member_id, *group_ids),
+            "SELECT w.*, t.name AS team_name FROM works w "
+            "JOIN teams t ON t.id=w.team_id "
+            "WHERE w.member_id=? AND w.team_id=? ORDER BY w.sort_order, w.created_at",
+            (member_id, team_id),
         )
     return ok(
         {
             "memberId": member_id,
-            "works": [_work_payload(work) for work in works],
-            "scope": ctx,
+            "works": [_work_payload(work, team) for work in works],
         }
     )
 
 
-def _get_work(conn, work_id: str, member_id: str, group_id: str) -> dict[str, Any]:
+def _get_work(conn, work_id: str, member_id: str, team_id: str) -> dict[str, Any]:
     found = row(
         conn,
-        "SELECT * FROM works WHERE id=? AND member_id=? AND group_id=?",
-        (work_id, member_id, group_id),
+        "SELECT * FROM works WHERE id=? AND member_id=? AND team_id=?",
+        (work_id, member_id, team_id),
     )
     if not found:
         raise fail(404, "工作项不存在", "work_not_found")
@@ -762,15 +719,14 @@ def _get_work(conn, work_id: str, member_id: str, group_id: str) -> dict[str, An
 @router.post("/members/{member_id}/works")
 def create_work(
     team_id: str,
-    group_id: str,
     member_id: str,
     payload: dict[str, Any] = Body(...),
     user: CurrentUser = Depends(get_current_user),
 ):
     with db() as conn:
-        group = get_group(conn, team_id, group_id)
-        get_member(conn, member_id, group_id)
-        require_member_writer(user, team_id, group_id, member_id)
+        team = get_team(conn, team_id)
+        get_member(conn, team_id, member_id)
+        require_member_writer(user, team_id, member_id)
 
         status = _work_status(payload.get("status"))
         title = text(payload.get("title"), "工作标题", 120, required=True)
@@ -782,8 +738,8 @@ def create_work(
         sort_order = int(
             scalar(
                 conn,
-                "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM works WHERE member_id=?",
-                (member_id,),
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM works WHERE member_id=? AND team_id=?",
+                (member_id, team_id),
                 default=0,
             )
             or 0
@@ -791,12 +747,12 @@ def create_work(
         work_id = new_id("work")
         now = now_iso()
         conn.execute(
-            "INSERT INTO works (id,member_id,group_id,title,description,status,period,category,"
+            "INSERT INTO works (id,member_id,team_id,title,description,status,period,category,"
             "progress,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 work_id,
                 member_id,
-                group_id,
+                team_id,
                 title,
                 description,
                 status,
@@ -809,24 +765,23 @@ def create_work(
             ),
         )
         audit(conn, user, "work.create", "work", work_id, {"memberId": member_id, "title": title})
-        work = _work_payload(_get_work(conn, work_id, member_id, group_id), group)
+        work = _work_payload(_get_work(conn, work_id, member_id, team_id), team)
     return ok({"work": work})
 
 
 @router.patch("/members/{member_id}/works/{work_id}")
 def update_work(
     team_id: str,
-    group_id: str,
     member_id: str,
     work_id: str,
     payload: dict[str, Any] = Body(...),
     user: CurrentUser = Depends(get_current_user),
 ):
     with db() as conn:
-        group = get_group(conn, team_id, group_id)
-        get_member(conn, member_id, group_id)
-        work = _get_work(conn, work_id, member_id, group_id)
-        require_member_writer(user, team_id, group_id, member_id)
+        team = get_team(conn, team_id)
+        get_member(conn, team_id, member_id)
+        _get_work(conn, work_id, member_id, team_id)
+        require_member_writer(user, team_id, member_id)
 
         updates: dict[str, Any] = {}
         if "title" in payload:
@@ -848,30 +803,29 @@ def update_work(
             updates["updated_at"] = now_iso()
             assignments = ", ".join(f"{column}=?" for column in updates)
             conn.execute(
-                f"UPDATE works SET {assignments} WHERE id=? AND member_id=? AND group_id=?",
-                (*updates.values(), work_id, member_id, group_id),
+                f"UPDATE works SET {assignments} WHERE id=? AND member_id=? AND team_id=?",
+                (*updates.values(), work_id, member_id, team_id),
             )
             audit(conn, user, "work.update", "work", work_id, {"fields": sorted(payload)})
-        work = _work_payload(_get_work(conn, work_id, member_id, group_id), group)
+        work = _work_payload(_get_work(conn, work_id, member_id, team_id), team)
     return ok({"work": work})
 
 
 @router.delete("/members/{member_id}/works/{work_id}")
 def delete_work(
     team_id: str,
-    group_id: str,
     member_id: str,
     work_id: str,
     user: CurrentUser = Depends(get_current_user),
 ):
     with db() as conn:
-        get_group(conn, team_id, group_id)
-        get_member(conn, member_id, group_id)
-        _get_work(conn, work_id, member_id, group_id)
-        require_member_writer(user, team_id, group_id, member_id)
+        get_team(conn, team_id)
+        get_member(conn, team_id, member_id)
+        _get_work(conn, work_id, member_id, team_id)
+        require_member_writer(user, team_id, member_id)
         conn.execute(
-            "DELETE FROM works WHERE id=? AND member_id=? AND group_id=?",
-            (work_id, member_id, group_id),
+            "DELETE FROM works WHERE id=? AND member_id=? AND team_id=?",
+            (work_id, member_id, team_id),
         )
         audit(conn, user, "work.delete", "work", work_id, {"memberId": member_id})
     return ok({"deleted": True, "id": work_id})

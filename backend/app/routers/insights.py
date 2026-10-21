@@ -1,7 +1,8 @@
 """Data insights dashboard routes (``#12``).
 
-Base path: ``/api/teams/{team_id}/groups/{group_id}``. The endpoint is readable by guests
-(``require_read_access``) and honours the global browsing scope plus an analytics range.
+Base path: ``/api/teams/{team_id}``. Round 8 removed the browsing ``scope``: the dashboard
+always aggregates exactly one team. Guests may read it only while the ``insights`` module is
+enabled for guests (``Depends(require_read_module("insights"))``).
 """
 
 from __future__ import annotations
@@ -10,24 +11,20 @@ from fastapi import APIRouter, Depends, Query
 
 from ..auth import CurrentUser
 from ..db import db
-from ..http import get_group, ok
-from ..permissions import require_read_access
-from ..scope import resolve_scope
+from ..http import get_team, ok
+from ..permissions import require_read_module
 from ..services.insights_service import build_insights
 
-router = APIRouter(prefix="/api/teams/{team_id}/groups/{group_id}", tags=["insights"])
+router = APIRouter(prefix="/api/teams/{team_id}", tags=["insights"])
 
 
 @router.get("/insights")
-def group_insights(
+def team_insights(
     team_id: str,
-    group_id: str,
-    scope: str = Query(default="group"),
     range_key: str = Query(default="1m", alias="range"),
-    user: CurrentUser = Depends(require_read_access),
+    user: CurrentUser = Depends(require_read_module("insights")),
 ):
     with db() as conn:
-        get_group(conn, team_id, group_id)
-        ctx = resolve_scope(conn, team_id, group_id, scope, user)
-        data = build_insights(conn, ctx, range_key)
+        get_team(conn, team_id)
+        data = build_insights(conn, team_id, range_key)
     return ok(data)

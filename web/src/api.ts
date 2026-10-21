@@ -6,7 +6,6 @@ import type {
   AuthConfigData,
   BootstrapData,
   DomainSettingsData,
-  DomainGroupSettings,
   DomainTeamSettings,
   EmailCodeRequestResponse,
   EmailCodeVerifyResponse,
@@ -15,7 +14,6 @@ import type {
   InsightsData,
   InsightsRangeKey,
   LinkItem,
-  ManagedGroup,
   ManagedTeam,
   MatrixArea,
   Member,
@@ -25,7 +23,6 @@ import type {
   ProfileData,
   RedBlackBoard,
   RedBlackData,
-  ScopeKind,
   SettingsMeta,
   SettingsResponse,
   SystemResetInfo,
@@ -120,15 +117,14 @@ const q = (params: Record<string, string | number | undefined | null>) => {
   return text ? `?${text}` : "";
 };
 
-const groupBase = (teamId: string, groupId: string) =>
-  `/api/teams/${encodeURIComponent(teamId)}/groups/${encodeURIComponent(groupId)}`;
+/** Every business endpoint is scoped by team only (round 8: no development groups). */
+const teamBase = (teamId: string) => `/api/teams/${encodeURIComponent(teamId)}`;
 
 export const api = {
   /* ---------------------------------------------------------------- */
   /* Bootstrap / identity                                              */
   /* ---------------------------------------------------------------- */
-  bootstrap: (teamId?: string, groupId?: string) =>
-    request<BootstrapData>(`/api/bootstrap${q({ teamId, groupId })}`),
+  bootstrap: (teamId?: string) => request<BootstrapData>(`/api/bootstrap${q({ teamId })}`),
   me: () => request<BootstrapData["me"]>("/api/auth/me"),
   authConfig: () => request<AuthConfigData>("/api/auth/config"),
   requestEmailCode: (email: string) =>
@@ -160,7 +156,6 @@ export const api = {
     name?: string;
     role?: string;
     teamIds?: string[];
-    groupIds?: string[];
   }) =>
     request<{ user: UserAccount; activation: ActivationLink | null }>("/api/users", {
       method: "POST",
@@ -173,7 +168,7 @@ export const api = {
     ),
   updateUser: (
     userId: string,
-    body: { name?: string; role?: string; teamIds?: string[]; groupIds?: string[] },
+    body: { name?: string; role?: string; teamIds?: string[] },
   ) =>
     request<{ user: UserAccount }>(`/api/users/${encodeURIComponent(userId)}`, {
       method: "PATCH",
@@ -208,206 +203,181 @@ export const api = {
     request<{ user: UserAccount }>("/api/profile/avatar", { method: "DELETE" }),
 
   /* ---------------------------------------------------------------- */
-  /* Feature reads / writes                                           */
+  /* Team-scoped feature reads / writes                                */
   /* ---------------------------------------------------------------- */
-  overview: (teamId: string, groupId: string, scope: ScopeKind = "group") =>
-    request<OverviewData>(`${groupBase(teamId, groupId)}/overview${q({ scope })}`),
+  overview: (teamId: string) =>
+    request<OverviewData>(`${teamBase(teamId)}/overview`),
 
-  tasks: (teamId: string, groupId: string, scope: ScopeKind = "group") =>
-    request<TaskOverviewData>(`${groupBase(teamId, groupId)}/tasks${q({ scope })}`),
-  taskTags: (teamId: string, groupId: string, scope: ScopeKind = "group") =>
-    request<TagLibraryData>(`${groupBase(teamId, groupId)}/task-tags${q({ scope })}`),
-  createTaskTag: (
-    teamId: string,
-    groupId: string,
-    body: { name: string; color?: string },
-  ) =>
-    request<{ tag: import("./types").TaskTag }>(`${groupBase(teamId, groupId)}/task-tags`, {
+  tasks: (teamId: string) => request<TaskOverviewData>(`${teamBase(teamId)}/tasks`),
+  taskTags: (teamId: string) => request<TagLibraryData>(`${teamBase(teamId)}/task-tags`),
+  createTaskTag: (teamId: string, body: { name: string; color?: string }) =>
+    request<{ tag: import("./types").TaskTag }>(`${teamBase(teamId)}/task-tags`, {
       method: "POST",
       body,
     }),
   updateTaskTag: (
     teamId: string,
-    groupId: string,
     tagId: string,
     body: { name?: string; color?: string },
   ) =>
     request<{ tag: import("./types").TaskTag }>(
-      `${groupBase(teamId, groupId)}/task-tags/${tagId}`,
+      `${teamBase(teamId)}/task-tags/${tagId}`,
       { method: "PATCH", body },
     ),
-  deleteTaskTag: (teamId: string, groupId: string, tagId: string) =>
-    request<{ deleted: boolean }>(`${groupBase(teamId, groupId)}/task-tags/${tagId}`, {
+  deleteTaskTag: (teamId: string, tagId: string) =>
+    request<{ deleted: boolean }>(`${teamBase(teamId)}/task-tags/${tagId}`, {
       method: "DELETE",
     }),
-  createTask: (teamId: string, groupId: string, body: Partial<MemberTask>) =>
-    request<{ task: MemberTask }>(`${groupBase(teamId, groupId)}/tasks`, {
+  createTask: (teamId: string, body: Partial<MemberTask>) =>
+    request<{ task: MemberTask }>(`${teamBase(teamId)}/tasks`, {
       method: "POST",
       body,
     }),
-  updateTask: (teamId: string, groupId: string, taskId: string, body: Partial<MemberTask>) =>
-    request<{ task: MemberTask }>(`${groupBase(teamId, groupId)}/tasks/${taskId}`, {
+  updateTask: (teamId: string, taskId: string, body: Partial<MemberTask>) =>
+    request<{ task: MemberTask }>(`${teamBase(teamId)}/tasks/${taskId}`, {
       method: "PATCH",
       body,
     }),
-  deleteTask: (teamId: string, groupId: string, taskId: string) =>
-    request<{ deleted: boolean }>(`${groupBase(teamId, groupId)}/tasks/${taskId}`, {
+  deleteTask: (teamId: string, taskId: string) =>
+    request<{ deleted: boolean }>(`${teamBase(teamId)}/tasks/${taskId}`, {
       method: "DELETE",
     }),
 
-  updateMember: (teamId: string, groupId: string, memberId: string, body: Partial<Member>) =>
-    request<{ member: Member }>(`${groupBase(teamId, groupId)}/members/${memberId}`, {
+  updateMember: (teamId: string, memberId: string, body: Partial<Member>) =>
+    request<{ member: Member }>(`${teamBase(teamId)}/members/${memberId}`, {
       method: "PATCH",
       body,
     }),
-  /** Registered accounts that are not yet on this group's member roster. */
-  memberCandidates: (teamId: string, groupId: string, search?: string) =>
+  /** Registered accounts that are not yet on this team's member roster. */
+  memberCandidates: (teamId: string, search?: string) =>
     request<{ candidates: MemberCandidate[]; total: number }>(
-      `${groupBase(teamId, groupId)}/member-candidates${q({ search })}`,
+      `${teamBase(teamId)}/member-candidates${q({ search })}`,
     ),
   createMember: (
     teamId: string,
-    groupId: string,
-    body: { userId: string; title?: string; role?: string; status?: string },
+    body: { userId: string; title?: string; role?: string },
   ) =>
-    request<{ member: Member }>(`${groupBase(teamId, groupId)}/members`, {
+    request<{ member: Member }>(`${teamBase(teamId)}/members`, {
       method: "POST",
       body,
     }),
-  deleteMember: (teamId: string, groupId: string, memberId: string) =>
-    request<{ deleted: boolean }>(`${groupBase(teamId, groupId)}/members/${memberId}`, {
+  deleteMember: (teamId: string, memberId: string) =>
+    request<{ deleted: boolean }>(`${teamBase(teamId)}/members/${memberId}`, {
       method: "DELETE",
     }),
-  createWork: (teamId: string, groupId: string, memberId: string, body: Partial<WorkItem>) =>
-    request<{ work: WorkItem }>(`${groupBase(teamId, groupId)}/members/${memberId}/works`, {
+  createWork: (teamId: string, memberId: string, body: Partial<WorkItem>) =>
+    request<{ work: WorkItem }>(`${teamBase(teamId)}/members/${memberId}/works`, {
       method: "POST",
       body,
     }),
   updateWork: (
     teamId: string,
-    groupId: string,
     memberId: string,
     workId: string,
     body: Partial<WorkItem>,
   ) =>
     request<{ work: WorkItem }>(
-      `${groupBase(teamId, groupId)}/members/${memberId}/works/${workId}`,
+      `${teamBase(teamId)}/members/${memberId}/works/${workId}`,
       { method: "PATCH", body },
     ),
-  deleteWork: (teamId: string, groupId: string, memberId: string, workId: string) =>
+  deleteWork: (teamId: string, memberId: string, workId: string) =>
     request<{ deleted: boolean }>(
-      `${groupBase(teamId, groupId)}/members/${memberId}/works/${workId}`,
+      `${teamBase(teamId)}/members/${memberId}/works/${workId}`,
       { method: "DELETE" },
     ),
 
-  todos: (teamId: string, groupId: string, month?: string, scope: ScopeKind = "group") =>
-    request<{ todos: Todo[]; scope?: import("./types").ScopeMeta }>(
-      `${groupBase(teamId, groupId)}/todos${q({ month, scope })}`,
-    ),
-  createTodo: (teamId: string, groupId: string, body: Partial<Todo>) =>
-    request<{ todo: Todo }>(`${groupBase(teamId, groupId)}/todos`, {
+  todos: (teamId: string, month?: string) =>
+    request<{ todos: Todo[] }>(`${teamBase(teamId)}/todos${q({ month })}`),
+  createTodo: (teamId: string, body: Partial<Todo>) =>
+    request<{ todo: Todo }>(`${teamBase(teamId)}/todos`, {
       method: "POST",
       body,
     }),
-  updateTodo: (teamId: string, groupId: string, todoId: string, body: Partial<Todo>) =>
-    request<{ todo: Todo }>(`${groupBase(teamId, groupId)}/todos/${todoId}`, {
+  updateTodo: (teamId: string, todoId: string, body: Partial<Todo>) =>
+    request<{ todo: Todo }>(`${teamBase(teamId)}/todos/${todoId}`, {
       method: "PATCH",
       body,
     }),
-  deleteTodo: (teamId: string, groupId: string, todoId: string) =>
-    request<{ deleted: boolean }>(`${groupBase(teamId, groupId)}/todos/${todoId}`, {
+  deleteTodo: (teamId: string, todoId: string) =>
+    request<{ deleted: boolean }>(`${teamBase(teamId)}/todos/${todoId}`, {
       method: "DELETE",
     }),
 
-  redblack: (teamId: string, groupId: string, month?: string, scope: ScopeKind = "group") =>
-    request<RedBlackData>(`${groupBase(teamId, groupId)}/redblack${q({ month, scope })}`),
+  redblack: (teamId: string, month?: string) =>
+    request<RedBlackData>(`${teamBase(teamId)}/redblack${q({ month })}`),
   saveRedblack: (
     teamId: string,
-    groupId: string,
     body: { month: string; theme: string; red: unknown[]; black: unknown[] },
   ) =>
-    request<{ board: RedBlackBoard }>(`${groupBase(teamId, groupId)}/redblack`, {
+    request<{ board: RedBlackBoard }>(`${teamBase(teamId)}/redblack`, {
       method: "PUT",
       body,
     }),
-  rolloverRedblack: (teamId: string, groupId: string, month: string) =>
+  rolloverRedblack: (teamId: string, month: string) =>
     request<{ board?: RedBlackBoard; month: string }>(
-      `${groupBase(teamId, groupId)}/redblack/rollover`,
+      `${teamBase(teamId)}/redblack/rollover`,
       { method: "POST", body: { month } },
     ),
 
-  links: (teamId: string, groupId: string, scope: ScopeKind = "group") =>
-    request<{ links: LinkItem[]; scope?: import("./types").ScopeMeta }>(
-      `${groupBase(teamId, groupId)}/links${q({ scope })}`,
-    ),
-  createLink: (teamId: string, groupId: string, body: Partial<LinkItem>) =>
-    request<{ link: LinkItem }>(`${groupBase(teamId, groupId)}/links`, {
+  links: (teamId: string) =>
+    request<{ links: LinkItem[] }>(`${teamBase(teamId)}/links`),
+  createLink: (teamId: string, body: Partial<LinkItem>) =>
+    request<{ link: LinkItem }>(`${teamBase(teamId)}/links`, {
       method: "POST",
       body,
     }),
-  updateLink: (teamId: string, groupId: string, linkId: string, body: Partial<LinkItem>) =>
-    request<{ link: LinkItem }>(`${groupBase(teamId, groupId)}/links/${linkId}`, {
+  updateLink: (teamId: string, linkId: string, body: Partial<LinkItem>) =>
+    request<{ link: LinkItem }>(`${teamBase(teamId)}/links/${linkId}`, {
       method: "PATCH",
       body,
     }),
-  deleteLink: (teamId: string, groupId: string, linkId: string) =>
-    request<{ deleted: boolean }>(`${groupBase(teamId, groupId)}/links/${linkId}`, {
+  deleteLink: (teamId: string, linkId: string) =>
+    request<{ deleted: boolean }>(`${teamBase(teamId)}/links/${linkId}`, {
       method: "DELETE",
     }),
 
-  matrix: (teamId: string, groupId: string, scope: ScopeKind = "group") =>
-    request<{ areas: MatrixArea[]; scope?: import("./types").ScopeMeta }>(
-      `${groupBase(teamId, groupId)}/matrix${q({ scope })}`,
-    ),
-  createMatrix: (teamId: string, groupId: string, body: Partial<MatrixArea>) =>
-    request<{ area: MatrixArea }>(`${groupBase(teamId, groupId)}/matrix`, {
+  matrix: (teamId: string) =>
+    request<{ areas: MatrixArea[] }>(`${teamBase(teamId)}/matrix`),
+  createMatrix: (teamId: string, body: Partial<MatrixArea>) =>
+    request<{ area: MatrixArea }>(`${teamBase(teamId)}/matrix`, {
       method: "POST",
       body,
     }),
-  updateMatrix: (teamId: string, groupId: string, areaId: string, body: Partial<MatrixArea>) =>
-    request<{ area: MatrixArea }>(`${groupBase(teamId, groupId)}/matrix/${areaId}`, {
+  updateMatrix: (teamId: string, areaId: string, body: Partial<MatrixArea>) =>
+    request<{ area: MatrixArea }>(`${teamBase(teamId)}/matrix/${areaId}`, {
       method: "PATCH",
       body,
     }),
-  deleteMatrix: (teamId: string, groupId: string, areaId: string) =>
-    request<{ deleted: boolean }>(`${groupBase(teamId, groupId)}/matrix/${areaId}`, {
+  deleteMatrix: (teamId: string, areaId: string) =>
+    request<{ deleted: boolean }>(`${teamBase(teamId)}/matrix/${areaId}`, {
       method: "DELETE",
     }),
 
-  announcements: (teamId: string, groupId: string, scope: ScopeKind = "group") =>
-    request<AnnouncementsData>(`${groupBase(teamId, groupId)}/announcements${q({ scope })}`),
-  createAnnouncement: (teamId: string, groupId: string, body: Partial<Announcement>) =>
+  announcements: (teamId: string) =>
+    request<AnnouncementsData>(`${teamBase(teamId)}/announcements`),
+  createAnnouncement: (teamId: string, body: Partial<Announcement>) =>
     request<{ announcement: Announcement }>(
-      `${groupBase(teamId, groupId)}/announcements`,
+      `${teamBase(teamId)}/announcements`,
       { method: "POST", body },
     ),
   updateAnnouncement: (
     teamId: string,
-    groupId: string,
     announcementId: string,
     body: Partial<Announcement>,
   ) =>
     request<{ announcement: Announcement }>(
-      `${groupBase(teamId, groupId)}/announcements/${announcementId}`,
+      `${teamBase(teamId)}/announcements/${announcementId}`,
       { method: "PATCH", body },
     ),
-  deleteAnnouncement: (teamId: string, groupId: string, announcementId: string) =>
+  deleteAnnouncement: (teamId: string, announcementId: string) =>
     request<{ deleted: boolean }>(
-      `${groupBase(teamId, groupId)}/announcements/${announcementId}`,
+      `${teamBase(teamId)}/announcements/${announcementId}`,
       { method: "DELETE" },
     ),
 
-  insights: (params: {
-    teamId: string;
-    groupId: string;
-    scope?: ScopeKind;
-    range?: InsightsRangeKey;
-  }) =>
+  insights: (params: { teamId: string; range?: InsightsRangeKey }) =>
     request<InsightsData>(
-      `${groupBase(params.teamId, params.groupId)}/insights${q({
-        scope: params.scope ?? "group",
-        range: params.range ?? "1m",
-      })}`,
+      `${teamBase(params.teamId)}/insights${q({ range: params.range ?? "1m" })}`,
     ),
 
   /* ---------------------------------------------------------------- */
@@ -445,18 +415,9 @@ export const api = {
       `/api/settings/teams/${encodeURIComponent(teamId)}`,
       { method: "PATCH", body },
     ),
-  updateDomainGroup: (
-    teamId: string,
-    groupId: string,
-    body: { name?: string; description?: string; color?: string; icon?: string },
-  ) =>
-    request<{ group: DomainGroupSettings }>(
-      `/api/settings/teams/${encodeURIComponent(teamId)}/groups/${encodeURIComponent(groupId)}`,
-      { method: "PATCH", body },
-    ),
 
   /* ---------------------------------------------------------------- */
-  /* Workspace administration: create / delete teams and groups.      */
+  /* Workspace administration: create / delete teams                   */
   /* ---------------------------------------------------------------- */
   manageWorkspace: () => request<WorkspaceManageData>("/api/workspace/manage"),
   createTeam: (body: {
@@ -472,19 +433,6 @@ export const api = {
   deleteTeam: (teamId: string, confirmName: string) =>
     request<{ deleted: boolean; id: string }>(
       `/api/workspace/teams/${encodeURIComponent(teamId)}`,
-      { method: "DELETE", body: { confirmName } },
-    ),
-  createGroup: (
-    teamId: string,
-    body: { name: string; description?: string; color?: string; icon?: string },
-  ) =>
-    request<{ group: ManagedGroup }>(
-      `/api/workspace/teams/${encodeURIComponent(teamId)}/groups`,
-      { method: "POST", body },
-    ),
-  deleteGroup: (teamId: string, groupId: string, confirmName: string) =>
-    request<{ deleted: boolean; id: string }>(
-      `/api/workspace/teams/${encodeURIComponent(teamId)}/groups/${encodeURIComponent(groupId)}`,
       { method: "DELETE", body: { confirmName } },
     ),
 

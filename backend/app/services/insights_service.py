@@ -1,16 +1,21 @@
 """Data insights aggregation (``#12`` dashboard) shared by the insights router.
 
-The endpoint returns exactly the frontend ``InsightsData`` shape from ``web/src/types.ts``::
+Round 8 (team-only) payload — the endpoint returns exactly::
 
-    {scope, range, summary, members, groups, teams, trend}
+    {range, summary, members, trend}
+
+The ``groups`` and ``teams`` comparison tables were removed with the development-group
+concept: the dashboard is always scoped to one team, so cross-group / cross-team ranking is
+meaningless. Member rows carry the same team metadata and real avatar as the overview
+read model.
 
 Time-window semantics (see docs/OPTIMIZATION_ROUND2_CONTRACT.md §3):
 
 - a task is *active* in the window when it was created in it, completed in it, or is still
   open (``progress_status != "completed"``); ``range=all`` keeps everything;
 - todos count when they were created in the window (``all`` keeps everything);
-- member / group / team rows are only emitted when they hold at least one active task or
-  in-window todo, so aggregate scopes stay compact;
+- a member row is only emitted when that person holds at least one active task or in-window
+  todo, so empty teams stay compact;
 - every ``*Rate`` / ``averageLoadPercent`` is a 0-100 integer.
 
 Trend buckets: ``1w``/``2w`` use calendar days, the longer ranges use weeks, and ``all``
@@ -26,14 +31,14 @@ from typing import Any
 
 from ..db import rows
 from ..http import fail
-from .member_identity import group_members, member_ids
+from .member_identity import member_ids, team_members
 from .tasks_service import (
     CAPACITY_POINTS,
-    in_clause,
     is_overdue,
     load_points,
     local_now,
     parse_timestamp,
+    team_member_rows,
 )
 
 OPEN_PROGRESS_STATUSES = {"pending", "in_progress"}
@@ -189,9 +194,9 @@ def _build_trend(
 
 
 def build_insights(
-    conn: sqlite3.Connection, scope_ctx: dict[str, Any], range_key: str
+    conn: sqlite3.Connection, team_id: str, range_key: str
 ) -> dict[str, Any]:
-    """Aggregate the insights dashboard payload for one resolved browsing scope."""
+    """Aggregate the insights dashboard payload for one team."""
     selected_range = normalize_range(range_key)
     range_info = RANGES[selected_range]
     days = range_info["days"]
@@ -199,47 +204,19 @@ def build_insights(
     today = now.date()
     tz = now.tzinfo
     start = _local_midnight(today - timedelta(days=int(days)), tz) if days else None
-    group_ids = list(scope_ctx["groupIds"])
-    placeholders = in_clause(group_ids)
-    params = tuple(group_ids)
 
-    member_rows = (
-        rows(
-            conn,
-            "SELECT m.*, g.name AS group_name, g.team_id AS group_team_id, "
-            "g.sort_order AS group_sort_order, tm.name AS team_name FROM members m "
-            "JOIN groups g ON g.id=m.group_id JOIN teams tm ON tm.id=g.team_id "
-            f"WHERE m.group_id IN ({placeholders}) "
-            "ORDER BY g.sort_order, g.name, m.sort_order, m.created_at, m.id",
-            params,
-        )
-        if group_ids
-        else []
+    member_rows = team_member_rows(conn, team_id)
+    task_rows = rows(
+        conn,
+        "SELECT * FROM member_tasks WHERE team_id=?",
+        (team_id,),
     )
-    task_rows = (
-        rows(
-            conn,
-            "SELECT t.* FROM member_tasks t "
-            f"WHERE t.group_id IN ({placeholders})",
-            params,
-        )
-        if group_ids
-        else []
+    todo_rows = rows(
+        conn,
+        "SELECT id, team_id, status, assignee_member_id, created_at, completed_at "
+        "FROM todos WHERE team_id=?",
+        (team_id,),
     )
-    todo_rows = (
-        rows(
-            conn,
-            "SELECT id, group_id, status, assignee_member_id, created_at, completed_at "
-            f"FROM todos WHERE group_id IN ({placeholders})",
-            params,
-        )
-        if group_ids
-        else []
-    )
-    team_meta = {
-        item["id"]: item
-        for item in rows(conn, "SELECT id, name, color, sort_order FROM teams")
-    }
 
     active_tasks = [task for task in task_rows if _is_active_task(task, start)]
     window_todos = [todo for todo in todo_rows if _in_window_todo(todo, start)]
@@ -254,9 +231,9 @@ def build_insights(
             todos_by_member.setdefault(assignee, []).append(todo)
 
     members: list[dict[str, Any]] = []
-    # Round 7: merge one account's archive rows into one people row (statistics summed).
-    # The payload keeps the exact legacy field set; only the row count becomes deduped.
-    for person in group_members(member_rows):
+    # Historical data may hold several archive rows of one account inside the team; merge
+    # them into one people row (statistics summed) exactly like the overview read model.
+    for person in team_members(member_rows):
         primary = person["primary"]
         archive_ids = member_ids(person)
         member_tasks: list[dict[str, Any]] = []
@@ -273,11 +250,10 @@ def build_insights(
                 "memberId": primary["id"],
                 "memberName": primary.get("name", ""),
                 "memberTitle": primary.get("title", ""),
+                "avatar": primary.get("avatar") or "",
                 "avatarColor": primary.get("avatar_color", "#5865f2"),
-                "teamId": primary.get("group_team_id") or primary.get("team_id", ""),
+                "teamId": primary.get("team_id", ""),
                 "teamName": primary.get("team_name", ""),
-                "groupId": primary.get("group_id", ""),
-                "groupName": primary.get("group_name", ""),
                 "tasks": task_stats["tasks"],
                 "openTasks": task_stats["openTasks"],
                 "completedTasks": task_stats["completedTasks"],
@@ -290,101 +266,11 @@ def build_insights(
             }
         )
 
-    # ``groups[].members`` keeps the archive-row semantics (one person active in two
-    # groups still counts towards both groups), so it is built from the raw rows.
-    member_ids_by_group: dict[str, set[str]] = {}
-    for member in member_rows:
-        member_key = member["id"]
-        if tasks_by_member.get(member_key) or todos_by_member.get(member_key):
-            member_ids_by_group.setdefault(member.get("group_id", ""), set()).add(
-                member_key
-            )
-
-    tasks_by_group: dict[str, list[dict[str, Any]]] = {}
-    for task in active_tasks:
-        tasks_by_group.setdefault(task.get("group_id", ""), []).append(task)
-    todos_by_group: dict[str, list[dict[str, Any]]] = {}
-    for todo in window_todos:
-        todos_by_group.setdefault(todo.get("group_id", ""), []).append(todo)
-
-    groups: list[dict[str, Any]] = []
-    for group in scope_ctx.get("groups", []):
-        group_id = group["id"]
-        group_tasks = tasks_by_group.get(group_id, [])
-        group_todos = todos_by_group.get(group_id, [])
-        if not group_tasks and not group_todos:
-            continue
-        task_stats = _task_stats(group_tasks, today)
-        member_count = len(member_ids_by_group.get(group_id, []))
-        capacity = member_count * CAPACITY_POINTS
-        groups.append(
-            {
-                "groupId": group_id,
-                "groupName": group.get("name", ""),
-                "teamId": group.get("teamId", ""),
-                "teamName": group.get("teamName", ""),
-                "color": group.get("color", "#5865f2"),
-                "members": member_count,
-                "tasks": task_stats["tasks"],
-                "openTasks": task_stats["openTasks"],
-                "completedTasks": task_stats["completedTasks"],
-                "overdueTasks": task_stats["overdueTasks"],
-                "blockedTasks": task_stats["blockedTasks"],
-                "completionRate": task_stats["completionRate"],
-                "loadPoints": task_stats["loadPoints"],
-                "averageLoadPercent": _percent(task_stats["loadPoints"], capacity),
-                "todos": len(group_todos),
-                "completedTodos": sum(
-                    1 for todo in group_todos if todo.get("status") == "done"
-                ),
-            }
-        )
-
-    included_group_ids = {row["groupId"] for row in groups}
-    teams: list[dict[str, Any]] = []
-    for team_id in scope_ctx.get("teamIds", []):
-        team_groups = [
-            row for row in groups if row["teamId"] == team_id
-        ]
-        if not team_groups:
-            continue
-        team_tasks: list[dict[str, Any]] = []
-        team_overdue = 0
-        team_completed = 0
-        team_open = 0
-        team_load = 0
-        for group_id in {
-            row["groupId"] for row in team_groups if row["groupId"] in included_group_ids
-        }:
-            group_tasks = tasks_by_group.get(group_id, [])
-            stats = _task_stats(group_tasks, today)
-            team_tasks.extend(group_tasks)
-            team_completed += stats["completedTasks"]
-            team_open += stats["openTasks"]
-            team_overdue += stats["overdueTasks"]
-            team_load += stats["loadPoints"]
-        meta = team_meta.get(team_id, {})
-        teams.append(
-            {
-                "teamId": team_id,
-                "teamName": meta.get("name", team_groups[0].get("teamName", "")),
-                "color": meta.get("color", "#5865f2"),
-                "groups": len(team_groups),
-                "members": sum(row["members"] for row in team_groups),
-                "tasks": len(team_tasks),
-                "openTasks": team_open,
-                "completedTasks": team_completed,
-                "overdueTasks": team_overdue,
-                "completionRate": _percent(team_completed, len(team_tasks)),
-                "loadPoints": team_load,
-            }
-        )
-
     summary_stats = _task_stats(active_tasks, today)
     summary_todos = _todo_stats(window_todos)
+    capacity_points = len(members) * CAPACITY_POINTS
     summary = {
-        "teams": len(teams),
-        "groups": len(groups),
+        "teams": 1,
         "members": len(members),
         "tasks": summary_stats["tasks"],
         "openTasks": summary_stats["openTasks"],
@@ -396,14 +282,11 @@ def build_insights(
         "completedTodos": summary_todos["completedTodos"],
         "todoCompletionRate": summary_todos["todoCompletionRate"],
         "loadPoints": summary_stats["loadPoints"],
-        "capacityPoints": len(members) * CAPACITY_POINTS,
-        "averageLoadPercent": _percent(
-            summary_stats["loadPoints"], len(members) * CAPACITY_POINTS
-        ),
+        "capacityPoints": capacity_points,
+        "averageLoadPercent": _percent(summary_stats["loadPoints"], capacity_points),
     }
 
     return {
-        "scope": scope_ctx,
         "range": {
             "key": selected_range,
             "label": range_info["label"],
@@ -412,8 +295,6 @@ def build_insights(
         },
         "summary": summary,
         "members": members,
-        "groups": groups,
-        "teams": teams,
         "trend": _build_trend(
             selected_range, today, tz, active_tasks, window_todos
         ),

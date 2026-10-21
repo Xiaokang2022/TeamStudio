@@ -658,34 +658,6 @@
   font-weight: 700;
 }
 
-/* Group badges shown while browsing an aggregated scope. */
-.ov-member-groups {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
-  min-width: 0;
-}
-
-.ov-member-group {
-  --group-color: var(--accent);
-  max-width: 100%;
-  padding: 1px 7px;
-  background: color-mix(in srgb, var(--group-color) 9%, var(--surface-2));
-  border-color: color-mix(in srgb, var(--group-color) 30%, var(--border));
-  color: color-mix(in srgb, var(--group-color) 74%, var(--text));
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ov-member-group-more {
-  --group-color: var(--text-3);
-  flex: none;
-  color: var(--text-2);
-}
-
 .ov-member-title {
   margin-top: 1px;
   color: var(--text-2);
@@ -1680,7 +1652,7 @@
   padding: 3px 8px;
 }
 
-/* "所属团队 / 开发组" block: one row per development-group archive. */
+/* "所属团队" block: one row per team archive. */
 .md-memberships {
   display: flex;
   flex-direction: column;
@@ -1730,13 +1702,6 @@
   background: var(--surface);
   color: var(--text-2);
   border-color: var(--border-strong);
-}
-
-.md-membership-group {
-  --group-color: var(--accent);
-  background: color-mix(in srgb, var(--group-color) 10%, var(--surface));
-  border-color: color-mix(in srgb, var(--group-color) 32%, var(--border));
-  color: color-mix(in srgb, var(--group-color) 76%, var(--text));
 }
 
 .md-membership-meta {

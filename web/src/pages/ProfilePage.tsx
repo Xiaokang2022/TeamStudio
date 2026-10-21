@@ -5,10 +5,10 @@ import {
   Camera,
   Check,
   History,
-  Layers3,
   ListTodo,
   Loader2,
   Mail,
+  Palette,
   RotateCcw,
   Save,
   ShieldCheck,
@@ -20,18 +20,18 @@ import {
   X,
 } from "lucide-react";
 import { api, ApiError } from "../api";
-import { useApp } from "../store";
+import { useApp, type ThemePreference } from "../store";
 import { useToast } from "../components/Toast";
 import { Avatar } from "../components/Avatar";
 import { EmptyState, PageLoading } from "../components/Feedback";
 import {
   cn,
+  compareNames,
   dueLabel,
   formatDate,
   formatFullDate,
   hashRoute,
   PRIORITY_META as TODO_PRIORITY_META,
-  STATUS_META,
 } from "../lib/utils";
 import { PRIORITY_META as TASK_PRIORITY_META, TASK_PROGRESS_META } from "../lib/taskMeta";
 import type {
@@ -51,6 +51,12 @@ const AVATAR_SNIFF_BYTES = 16;
 const MAX_SKILLS = 20;
 const MAX_SKILL_LENGTH = 30;
 const MAX_BIO_LENGTH = 2000;
+/** Theme choices shown in the 个性化设置 card (defaults to follow-system). */
+const THEME_PREFERENCES: { value: ThemePreference; label: string }[] = [
+  { value: "auto", label: "跟随系统" },
+  { value: "light", label: "浅色" },
+  { value: "dark", label: "深色" },
+];
 
 /**
  * Magic-byte check used before uploading: the browser-reported MIME type is not
@@ -86,7 +92,6 @@ function errorMessage(error: unknown, fallback: string): string {
 function roleBadgeClass(role: string): string {
   if (role === "super") return "badge-green";
   if (role === "team_admin") return "badge-violet";
-  if (role === "group_admin") return "badge-blue";
   return "badge-gray";
 }
 
@@ -101,29 +106,21 @@ function uniqueNames(values: Array<string | undefined | null>): string[] {
   return Array.from(new Set(values.map((value) => (value || "").trim()).filter(Boolean)));
 }
 
-function GroupBadges({ teamName, groupName }: { teamName?: string | null; groupName?: string | null }) {
-  if (!teamName && !groupName) return null;
+/** Team label rendered on records / archive rows (teams are the only unit). */
+function TeamBadge({ teamName }: { teamName?: string | null }) {
+  if (!teamName) return null;
   return (
-    <span className="profile-group-badges">
-      {teamName ? (
-        <span className="badge badge-gray" title={`团队：${teamName}`}>
-          <Building2 size={11} /> {teamName}
-        </span>
-      ) : null}
-      {groupName ? (
-        <span className="badge badge-blue" title={`开发组：${groupName}`}>
-          <Layers3 size={11} /> {groupName}
-        </span>
-      ) : null}
+    <span className="badge badge-gray profile-team-badge" title={`团队：${teamName}`}>
+      <Building2 size={11} /> {teamName}
     </span>
   );
 }
 
 /**
- * Public administrator scope: which teams / development groups this account
- * administers. Super administrators intentionally get no extra chips (their
- * role badge already says everything); regular members get nothing either.
- * The data is public, so it renders on other people's profile pages too.
+ * Public administrator scope: which teams this account administers. Super
+ * administrators intentionally get no extra chips (their role badge already
+ * says everything); regular members get nothing either. The data is public,
+ * so it renders on other people's profile pages too.
  */
 function AdminScopeChips({ scope }: { scope: ProfileAdminScope }) {
   if (scope.role === "team_admin") {
@@ -138,34 +135,6 @@ function AdminScopeChips({ scope }: { scope: ProfileAdminScope }) {
             <Building2 size={11} />
             <span>{team.name}</span>
             <span className="profile-admin-scope-role">· 团队管理员</span>
-          </span>
-        ))}
-      </div>
-    );
-  }
-  if (scope.role === "group_admin") {
-    if (!scope.groups.length) return null;
-    return (
-      <div className="profile-admin-scope" role="group" aria-label="管理员管理范围">
-        <span className="profile-admin-scope-label">
-          <ShieldCheck size={12} /> 管理范围
-        </span>
-        {scope.groups.map((group) => (
-          <span
-            className="chip profile-admin-scope-chip"
-            key={group.id}
-            title={
-              group.teamName
-                ? `${group.name} · 开发组管理员（所属团队：${group.teamName}）`
-                : `${group.name} · 开发组管理员`
-            }
-          >
-            <Layers3 size={11} />
-            <span>{group.name}</span>
-            <span className="profile-admin-scope-role">· 开发组管理员</span>
-            {group.teamName ? (
-              <span className="profile-chip-muted">· 团队：{group.teamName}</span>
-            ) : null}
           </span>
         ))}
       </div>
@@ -202,92 +171,63 @@ function SectionCard({
 }
 
 /**
- * One `members` archive row per development group. The same account may own several
- * rows (one per group, possibly across teams); the personal home page lists them once
- * per development group.
+ * One `members` archive row per team. The same account may own several rows
+ * (one per team); the personal home page lists each team once, sorted by the
+ * member name (Chinese pinyin order via `compareNames`).
  */
 function uniqueMemberArchives(members: ProfileMember[]): ProfileMember[] {
   const seen = new Set<string>();
   const rows: ProfileMember[] = [];
   for (const member of members) {
-    const key =
-      member.groupId || `${member.teamId || ""}::${member.groupName || ""}` || member.id;
+    const key = member.teamId || member.id;
     if (seen.has(key)) continue;
     seen.add(key);
     rows.push(member);
   }
-  return rows;
-}
-
-/** Grouped "所属团队 / 开发组" summary (no per-archive chips, no duplicates). */
-function MembershipSummary({ teams, groups }: { teams: string[]; groups: string[] }) {
-  if (!teams.length && !groups.length) {
-    return <span className="chip">暂未关联成员档案</span>;
-  }
-  return (
-    <>
-      {teams.length ? (
-        <span className="chip profile-membership-chip" title={`所属团队：${teams.join("、")}`}>
-          <Building2 size={11} /> 所属团队：{teams.join("、")}
-        </span>
-      ) : null}
-      {groups.length ? (
-        <span className="chip profile-membership-chip" title={`所属开发组：${groups.join("、")}`}>
-          <Layers3 size={11} /> 开发组：{groups.join("、")}
-        </span>
-      ) : null}
-    </>
+  return rows.sort(
+    (left, right) => compareNames(left.name, right.name) || compareNames(left.teamName, right.teamName),
   );
 }
 
-/** Every member archive of this account, one row per development group. */
+/** Grouped "所属团队" summary (no per-archive chips, no duplicates). */
+function MembershipSummary({ teams }: { teams: string[] }) {
+  if (!teams.length) {
+    return <span className="chip">暂未关联成员档案</span>;
+  }
+  return (
+    <span className="chip profile-membership-chip" title={`所属团队：${teams.join("、")}`}>
+      <Building2 size={11} /> 所属团队：{teams.join("、")}
+    </span>
+  );
+}
+
+/** Every member archive of this account, one row per team. */
 function MemberArchiveList({ members }: { members: ProfileMember[] }) {
   if (!members.length) {
     return <div className="profile-empty">暂未关联成员档案</div>;
   }
   return (
     <div className="profile-member-list">
-      {members.map((member) => {
-        const statusLabel = member.status
-          ? STATUS_META[member.status]?.label ?? member.status
-          : "";
-        return (
-          <div className="profile-member-row" key={member.id}>
-            <Avatar
-              name={member.name}
-              src={member.avatar}
-              color={member.avatarColor}
-              size="sm"
-            />
-            <div className="profile-member-main">
-              <div className="profile-member-head">
-                <strong>{member.name}</strong>
-                {member.teamName ? (
-                  <span className="badge badge-gray" title={`团队：${member.teamName}`}>
-                    <Building2 size={10} /> {member.teamName}
-                  </span>
-                ) : null}
-                {member.groupName ? (
-                  <span className="badge badge-blue" title={`开发组：${member.groupName}`}>
-                    <Layers3 size={10} /> {member.groupName}
-                  </span>
-                ) : null}
-              </div>
-              <span className="profile-member-meta">
-                {[member.title || "未填写职位", member.role || "成员", statusLabel]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </span>
+      {members.map((member) => (
+        <div className="profile-member-row" key={member.id}>
+          <Avatar name={member.name} src={member.avatar} color={member.avatarColor} size="sm" />
+          <div className="profile-member-main">
+            <div className="profile-member-head">
+              <strong>{member.name}</strong>
+              <TeamBadge teamName={member.teamName} />
             </div>
+            <span className="profile-member-meta">
+              {[member.title || "未填写职位", member.role || "成员"].filter(Boolean).join(" · ")}
+            </span>
           </div>
-        );
-      })}
+        </div>
+      ))}
     </div>
   );
 }
 
 export default function ProfilePage() {
-  const { data, navigate, reload } = useApp();
+  const { data, navigate, reload, theme, themePreference, setThemePreference } = useApp();
   const { toast } = useToast();
   const [params, setParams] = useState<URLSearchParams>(() => hashRoute().params);
   const targetUserId = (params.get("userId") || "").trim();
@@ -338,8 +278,7 @@ export default function ProfilePage() {
   }, []);
 
   const teamNames = useMemo(() => uniqueNames(profile?.members.map((m) => m.teamName) ?? []), [profile]);
-  const groupNames = useMemo(() => uniqueNames(profile?.members.map((m) => m.groupName) ?? []), [profile]);
-  /** One row per development group; duplicate archives of the same group collapse. */
+  /** One row per team; duplicate archives of the same team collapse, sorted by name. */
   const memberArchives = useMemo(
     () => uniqueMemberArchives(profile?.members ?? []),
     [profile],
@@ -575,7 +514,7 @@ export default function ProfilePage() {
             </p>
             {profile.adminScope ? <AdminScopeChips scope={profile.adminScope} /> : null}
             <div className="profile-chip-row">
-              <MembershipSummary teams={teamNames} groups={groupNames} />
+              <MembershipSummary teams={teamNames} />
             </div>
             <p className="profile-joined">
               {user.createdAt
@@ -598,13 +537,13 @@ export default function ProfilePage() {
         <div className="profile-section-head">
           <div className="profile-section-title">
             <span className="profile-section-icon">
-              <Layers3 size={16} />
+              <Building2 size={16} />
             </span>
             <h2>成员档案</h2>
             <span className="badge badge-gray">{memberArchives.length}</span>
           </div>
           <span className="profile-members-note">
-            同一账号在多个开发组的档案，同一开发组只展示一次
+            同一账号在不同团队的档案，每个团队只展示一次，并按姓名排序
           </span>
         </div>
         <MemberArchiveList members={memberArchives} />
@@ -784,6 +723,45 @@ export default function ProfilePage() {
         </section>
       ) : null}
 
+      {isSelf ? (
+        <section className="card profile-personalization" id="profile-personalization">
+          <div className="profile-section-head">
+            <div className="profile-section-title">
+              <span className="profile-section-icon">
+                <Palette size={16} />
+              </span>
+              <h2>个性化设置</h2>
+              <span className="badge badge-gray">仅保存在当前浏览器</span>
+            </div>
+            <span className="profile-members-note">
+              当前生效：{theme === "dark" ? "深色" : "浅色"}
+            </span>
+          </div>
+          <div className="profile-personalization-body">
+            <div className="field">
+              <span className="field-label">主题偏好</span>
+              <div className="segmented profile-theme-switch" role="group" aria-label="主题偏好">
+                {THEME_PREFERENCES.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={themePreference === option.value ? "active" : undefined}
+                    aria-pressed={themePreference === option.value}
+                    onClick={() => setThemePreference(option.value)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <span className="field-hint">
+                默认「跟随系统」会实时响应操作系统 / 浏览器的明暗切换；选择「浅色」或「深色」后固定使用该主题。
+                主题偏好仅保存在当前浏览器，不影响其他成员。
+              </span>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
       <div className="profile-grid">
         <SectionCard icon={<Waypoints size={16} />} title="责任田" count={profile.duties.length}>
           {profile.duties.length ? (
@@ -804,7 +782,7 @@ export default function ProfilePage() {
                       </span>
                     ) : null}
                   </div>
-                  <GroupBadges teamName={duty.teamName} groupName={duty.groupName} />
+                  <TeamBadge teamName={duty.teamName} />
                 </div>
               ))}
             </div>
@@ -835,7 +813,7 @@ export default function ProfilePage() {
                       {memberTaskCount > 1 ? <span>{task.memberName}</span> : null}
                     </div>
                   </div>
-                  <GroupBadges teamName={task.teamName} groupName={task.groupName} />
+                  <TeamBadge teamName={task.teamName} />
                 </div>
               ))}
             </div>
@@ -871,7 +849,7 @@ export default function ProfilePage() {
                       {memberTaskCount > 1 ? <span>{task.memberName}</span> : null}
                     </div>
                   </div>
-                  <GroupBadges teamName={task.teamName} groupName={task.groupName} />
+                  <TeamBadge teamName={task.teamName} />
                 </div>
               ))}
             </div>
@@ -908,7 +886,7 @@ export default function ProfilePage() {
                         {todo.status === "done" ? <span className="badge badge-green">已完成</span> : null}
                       </div>
                     </div>
-                    <GroupBadges teamName={todo.teamName} groupName={todo.groupName} />
+                    <TeamBadge teamName={todo.teamName} />
                   </div>
                 );
               })}
@@ -934,7 +912,7 @@ export default function ProfilePage() {
                       <span className="profile-row-desc">{entry.reason || "暂无上榜理由"}</span>
                       <div className="profile-row-meta">
                         <span>{entry.memberName}</span>
-                        <GroupBadges teamName={entry.teamName} groupName={entry.groupName} />
+                        <TeamBadge teamName={entry.teamName} />
                       </div>
                     </div>
                   ))
@@ -955,7 +933,7 @@ export default function ProfilePage() {
                       <span className="profile-row-desc">{entry.reason || "暂无上榜理由"}</span>
                       <div className="profile-row-meta">
                         <span>{entry.memberName}</span>
-                        <GroupBadges teamName={entry.teamName} groupName={entry.groupName} />
+                        <TeamBadge teamName={entry.teamName} />
                       </div>
                     </div>
                   ))

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { AlertCircle, CalendarDays, Clock, Layers3, UserRound } from "lucide-react";
+import { AlertCircle, CalendarDays, Clock, UserRound } from "lucide-react";
 import { api, ApiError } from "../api";
 import { useToast } from "./Toast";
 import { Modal } from "./Modal";
@@ -14,9 +14,6 @@ export interface TodoDialogProps {
   open: boolean;
   todo: Todo | null;
   teamId: string;
-  groupId: string;
-  /** Aggregate scope: new todos are written to the current group; show it. */
-  createGroupName?: string;
   members: Member[];
   defaultDate: string;
   defaultAssigneeId: string | null;
@@ -34,8 +31,6 @@ export function TodoDialog({
   open,
   todo,
   teamId,
-  groupId,
-  createGroupName,
   members,
   defaultDate,
   defaultAssigneeId,
@@ -89,6 +84,7 @@ export function TodoDialog({
         label: member.name,
         description: member.title || undefined,
         color: member.avatarColor,
+        avatar: member.avatar,
       })),
     ],
     [canAssignOthers, selectableMembers],
@@ -125,11 +121,11 @@ export function TodoDialog({
     };
     try {
       if (todo) {
-        const result = await api.updateTodo(teamId, groupId, todo.id, payload);
+        const result = await api.updateTodo(teamId, todo.id, payload);
         toast("待办已更新", "success");
         onSaved(result.todo);
       } else {
-        const result = await api.createTodo(teamId, groupId, payload);
+        const result = await api.createTodo(teamId, payload);
         toast("待办已创建", "success");
         onSaved(result.todo);
       }
@@ -164,11 +160,6 @@ export function TodoDialog({
       }
     >
       <form id="td-todo-form" className="td-form" onSubmit={submit}>
-        {!isEditing && createGroupName ? (
-          <p className="td-target-hint" role="status">
-            <Layers3 size={13} /> 将创建到：<strong>{createGroupName}</strong>
-          </p>
-        ) : null}
         <div className="field">
           <label htmlFor="td-title">待办标题 *</label>
           <input

@@ -4,7 +4,6 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
-  Building2,
   Clock,
   Eye,
   Gauge,
@@ -31,12 +30,19 @@ import { ConfirmDialog } from "../components/Modal";
 import { TaskDialog } from "../components/TaskDialog";
 import type { TaskMemberOption } from "../components/TaskDialog";
 import { TagChips, TagLibraryDialog } from "../components/TagPicker";
-import type { TagLibraryGroupOption } from "../components/TagPicker";
 import { WorkloadMeter } from "../components/WorkloadMeter";
 import { WorkloadDetailDialog } from "../components/WorkloadDetailDialog";
 import { Select } from "../components/Select";
-import { cn, formatDate, formatDateTime, linkedMemberIdsOf } from "../lib/utils";
-import { TASK_RANGES, isWithinRange, rangeStartISO } from "../lib/scope";
+import {
+  TASK_RANGES,
+  cn,
+  compareNames,
+  formatDate,
+  formatDateTime,
+  isWithinRange,
+  linkedMemberIdsOf,
+  rangeStartISO,
+} from "../lib/utils";
 import {
   DIFFICULTY_META,
   HEALTH_STATUSES,
@@ -251,16 +257,15 @@ function SortableTh({
 }
 
 export default function TaskOverviewPage() {
-  const { data, currentTeam, currentGroup, canManageActiveGroup, reload, scope, navigate } = useApp();
+  const { data, currentTeam, canManageActiveTeam, reload, navigate } = useApp();
   const { toast } = useToast();
   const me = data?.me ?? null;
   const teamId = currentTeam?.id ?? "";
-  const groupId = currentGroup?.id ?? "";
-  /** Current development group's archive id (null when this group has no archive). */
+  /** Current team's archive id (null when this team has no archive). */
   const selfMemberId = me?.linkedMemberId ?? null;
-  /** Every archive id of the signed-in account across all development groups. */
+  /** Every archive id of the signed-in account across all teams. */
   const selfMemberIds = useMemo(() => linkedMemberIdsOf(me), [me]);
-  const canCreate = Boolean(me?.authenticated && (canManageActiveGroup || selfMemberId));
+  const canCreate = Boolean(me?.authenticated && (canManageActiveTeam || selfMemberId));
 
   const [payload, setPayload] = useState<TaskOverviewData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -292,25 +297,9 @@ export default function TaskOverviewPage() {
   );
   const rangeStart = useMemo(() => rangeStartISO(range.days), [range.days]);
 
-  /** groupId -> owning team/group metadata (for aggregate-scope write routing). */
-  const groupIndex = useMemo(() => {
-    const map = new Map<string, { teamId: string; teamName: string; groupName: string }>();
-    data?.teams.forEach((team) => {
-      team.groups.forEach((group) => {
-        map.set(group.id, { teamId: team.id, teamName: team.name, groupName: group.name });
-      });
-    });
-    return map;
-  }, [data?.teams]);
-
-  const resolveTeamId = useCallback(
-    (taskGroupId: string) => groupIndex.get(taskGroupId)?.teamId ?? teamId,
-    [groupIndex, teamId],
-  );
-
   const loadTasks = useCallback(
     async (silent = false) => {
-      if (!teamId || !groupId) {
+      if (!teamId) {
         setLoading(false);
         return;
       }
@@ -318,7 +307,7 @@ export default function TaskOverviewPage() {
       else setLoading(true);
       setError("");
       try {
-        const result = await api.tasks(teamId, groupId, scope);
+        const result = await api.tasks(teamId);
         setPayload(result);
       } catch (err) {
         setError(messageOf(err, "加载任务台账失败，请稍后重试。"));
@@ -327,7 +316,7 @@ export default function TaskOverviewPage() {
         setRefreshing(false);
       }
     },
-    [teamId, groupId, scope],
+    [teamId],
   );
 
   useEffect(() => {
@@ -335,7 +324,7 @@ export default function TaskOverviewPage() {
     void loadTasks();
   }, [loadTasks]);
 
-  // Switching development groups or browsing scope must never keep stale filters.
+  // Switching teams must never keep stale filters.
   useEffect(() => {
     setSearch("");
     setMemberFilter("all");
@@ -351,15 +340,13 @@ export default function TaskOverviewPage() {
     setBusyId(null);
     setTagLibraryOpen(false);
     setWorkloadDetail(null);
-  }, [groupId, scope]);
+  }, [teamId]);
 
   const tasks = payload?.tasks ?? EMPTY_TASKS;
   const workloads = payload?.workloads ?? EMPTY_WORKLOADS;
   const summary = payload?.summary ?? EMPTY_SUMMARY;
   const meta = payload?.meta ?? EMPTY_META;
   const windowLabel = meta.windowLabel || "近 4 周";
-  const aggregate = scope !== "group";
-  const showTeamBadge = scope === "all";
 
   /**
    * Archive id -> person id (the merged workload's main archive id). Tasks always
@@ -502,7 +489,7 @@ export default function TaskOverviewPage() {
       if (keyword) {
         const tagText = (task.tags ?? []).map((tag) => tag.name).join(" ");
         const haystack =
-          `${task.title} ${task.description} ${task.memberName} ${task.memberTitle} ${tagText} ${task.groupName ?? ""} ${task.teamName ?? ""}`.toLowerCase();
+          `${task.title} ${task.description} ${task.memberName} ${task.memberTitle} ${tagText}`.toLowerCase();
         if (!haystack.includes(keyword)) return false;
       }
       return true;
@@ -534,16 +521,8 @@ export default function TaskOverviewPage() {
     };
     workloads.forEach((workload) => add(workload.memberId, workload.memberName));
     windowTasks.forEach((task) => add(task.memberId, task.memberName));
-    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
+    return Array.from(map.values()).sort((a, b) => compareNames(a.name, b.name));
   }, [windowTasks, workloads, personIdByMemberId]);
-
-  /** Target group of the open dialog: task's own group when editing, current group when creating. */
-  const dialogGroupId = dialog.task ? dialog.task.groupId : groupId;
-  const dialogGroupMeta = groupIndex.get(dialog.task?.groupId ?? "");
-  const dialogTeamId = dialog.task ? resolveTeamId(dialog.task.groupId) : teamId;
-  const dialogGroupName = dialog.task
-    ? dialog.task.groupName ?? dialogGroupMeta?.groupName
-    : currentGroup?.name;
 
   const dialogMembers = useMemo<TaskMemberOption[]>(() => {
     const map = new Map<string, TaskMemberOption>();
@@ -551,70 +530,52 @@ export default function TaskOverviewPage() {
       if (!option.id || map.has(option.id)) return;
       map.set(option.id, option);
     };
-    // Task rows are authoritative for the archive ids of the target group.
-    tasks
-      .filter((task) => task.groupId === dialogGroupId)
-      .forEach((task) => {
-        add({
-          id: task.memberId,
-          name: task.memberName,
-          title: task.memberTitle,
-          avatarColor: task.memberAvatarColor,
-        });
+    // Task rows are authoritative for the archive ids in this team.
+    tasks.forEach((task) => {
+      add({
+        id: task.memberId,
+        name: task.memberName,
+        title: task.memberTitle,
+        avatar: task.memberAvatar,
+        avatarColor: task.memberAvatarColor,
       });
-    // Person-merged workloads: keep the archive row that lives in the target group,
-    // so assigning a task never writes into another group's member id.
+    });
     workloads.forEach((workload) => {
-      const membership = workload.memberships?.find((item) => item.groupId === dialogGroupId);
-      if (membership) {
-        add({
-          id: membership.memberId,
-          name: workload.memberName,
-          title: membership.title || workload.memberTitle,
-          avatarColor: workload.avatarColor,
-        });
-        return;
-      }
-      // Classic single-group payloads: the workload row is this group's archive.
-      if (scope === "group" && dialogGroupId === groupId) {
-        add({
-          id: workload.memberId,
-          name: workload.memberName,
-          title: workload.memberTitle,
-          avatarColor: workload.avatarColor,
-        });
-      }
+      add({
+        id: workload.memberId,
+        name: workload.memberName,
+        title: workload.memberTitle,
+        avatar: workload.avatar,
+        avatarColor: workload.avatarColor,
+      });
     });
     if (dialog.task) {
       add({
         id: dialog.task.memberId,
         name: dialog.task.memberName,
         title: dialog.task.memberTitle,
+        avatar: dialog.task.memberAvatar,
         avatarColor: dialog.task.memberAvatarColor,
       });
     }
-    // Aggregate scope: the current group's own archive is always assignable when it
-    // exists (`linkedMemberId` is resolved per active group by the backend).
-    if (!dialog.task && selfMemberId && dialogGroupId === groupId && scope !== "group") {
+    if (selfMemberId && !map.has(selfMemberId)) {
       const selfWorkload = workloads.find((workload) =>
         (workload.memberIds?.length ? workload.memberIds : [workload.memberId]).includes(
           selfMemberId,
         ),
       );
-      const selfMembership = selfWorkload?.memberships?.find(
-        (item) => item.groupId === groupId,
-      );
       add({
         id: selfMemberId,
         name: me?.name || selfWorkload?.memberName || selfMemberId,
-        title: selfMembership?.title || selfWorkload?.memberTitle || "",
+        title: selfWorkload?.memberTitle || "",
+        avatar: selfWorkload?.avatar || me?.avatar || "",
         avatarColor: selfWorkload?.avatarColor || me?.avatarColor || "#7c3aed",
       });
     }
     return Array.from(map.values());
-  }, [scope, tasks, workloads, dialogGroupId, groupId, dialog.task, selfMemberId, me]);
+  }, [tasks, workloads, dialog.task, selfMemberId, me]);
 
-  // Creating a task defaults to my current-group archive; editing keeps the task's owner.
+  // Creating a task defaults to my current-team archive; editing keeps the task's owner.
   const defaultMemberId = useMemo(() => {
     if (selfMemberId) {
       const direct = dialogMembers.find((option) => option.id === selfMemberId);
@@ -629,47 +590,9 @@ export default function TaskOverviewPage() {
   }, [selfMemberId, dialogMembers, personIdByMemberId]);
 
   // Non-admins may only manage their own tasks: fix the dialog to the task's own
-  // archive row, so a task that lives in another development group is still editable
-  // (the account owns archives in several groups).
+  // archive row.
   const dialogSelfMemberId =
-    !canManageActiveGroup && dialog.task ? dialog.task.memberId : selfMemberId;
-
-  /** Groups offered by the tag library manager (aggregate scope can manage every visible group). */
-  const tagGroupOptions = useMemo<TagLibraryGroupOption[]>(() => {
-    const list: TagLibraryGroupOption[] = [];
-    const seen = new Set<string>();
-    const push = (
-      nextTeamId: string,
-      groupIdValue: string,
-      groupNameValue: string,
-      label: string,
-    ) => {
-      if (!nextTeamId || !groupIdValue || seen.has(groupIdValue)) return;
-      seen.add(groupIdValue);
-      list.push({
-        teamId: nextTeamId,
-        groupId: groupIdValue,
-        groupName: groupNameValue,
-        label,
-      });
-    };
-    payload?.scope?.groups?.forEach((group) => {
-      push(
-        group.teamId,
-        group.id,
-        group.name,
-        `${group.teamShortName || group.teamName} / ${group.name}`,
-      );
-    });
-    if (!list.length) {
-      data?.teams.forEach((team) => {
-        team.groups.forEach((group) => {
-          push(team.id, group.id, group.name, `${team.shortName || team.name} / ${group.name}`);
-        });
-      });
-    }
-    return list;
-  }, [payload?.scope, data?.teams]);
+    !canManageActiveTeam && dialog.task ? dialog.task.memberId : selfMemberId;
 
   const filtersActive =
     Boolean(search.trim()) ||
@@ -684,9 +607,9 @@ export default function TaskOverviewPage() {
     (task: MemberTask) =>
       Boolean(
         me?.authenticated &&
-          (canManageActiveGroup || selfMemberIds.includes(task.memberId)),
+          (canManageActiveTeam || selfMemberIds.includes(task.memberId)),
       ),
-    [me?.authenticated, canManageActiveGroup, selfMemberIds],
+    [me?.authenticated, canManageActiveTeam, selfMemberIds],
   );
 
   const resetFilters = () => {
@@ -742,8 +665,7 @@ export default function TaskOverviewPage() {
     if (!deleting) return;
     setBusyId(deleting.id);
     try {
-      // Aggregate scope: write back to the group that actually owns the task.
-      await api.deleteTask(resolveTeamId(deleting.groupId), deleting.groupId, deleting.id);
+      await api.deleteTask(teamId, deleting.id);
       toast("任务已删除", "success");
       setDeleting(null);
       await loadTasks(true);
@@ -755,11 +677,11 @@ export default function TaskOverviewPage() {
     }
   };
 
-  if (!currentTeam || !currentGroup) {
+  if (!currentTeam) {
     return (
       <EmptyState
-        title="还没有可查看的开发组"
-        description="请先在左侧导航选择一个团队与开发组，然后再回来查看团队任务总览。"
+        title="还没有可查看的团队"
+        description="请先在左侧导航选择一个团队，然后再回来查看团队任务总览。"
       />
     );
   }
@@ -981,7 +903,6 @@ export default function TaskOverviewPage() {
 
   const listKey = [
     rangeKey,
-    scope,
     memberFilter,
     progressFilter,
     healthFilter,
@@ -1040,20 +961,10 @@ export default function TaskOverviewPage() {
               >
                 <td>
                   <div className="tasks-member-cell">
-                    <Avatar name={task.memberName} color={task.memberAvatarColor} size="xs" />
+                    <Avatar name={task.memberName} src={task.memberAvatar} color={task.memberAvatarColor} size="xs" />
                     <div className="tasks-member-copy">
                       <strong>{task.memberName}</strong>
-                      <small>{task.memberTitle || "开发组成员"}</small>
-                      {aggregate && task.groupName ? (
-                        <span
-                          className="tasks-group-badge"
-                          title={`${task.teamName ?? ""} ${task.groupName}`.trim()}
-                        >
-                          <Building2 size={9} />
-                          {task.groupName}
-                          {showTeamBadge && task.teamName ? ` · ${task.teamName}` : ""}
-                        </span>
-                      ) : null}
+                      <small>{task.memberTitle || "团队成员"}</small>
                     </div>
                   </div>
                 </td>
@@ -1190,17 +1101,10 @@ export default function TaskOverviewPage() {
           >
             <header className="tasks-card-head">
               <div className="tasks-member-cell">
-                <Avatar name={task.memberName} color={task.memberAvatarColor} size="sm" />
+                <Avatar name={task.memberName} src={task.memberAvatar} color={task.memberAvatarColor} size="sm" />
                 <div className="tasks-member-copy">
                   <strong>{task.memberName}</strong>
-                  <small>{task.memberTitle || "开发组成员"}</small>
-                  {aggregate && task.groupName ? (
-                    <span className="tasks-group-badge">
-                      <Building2 size={9} />
-                      {task.groupName}
-                      {showTeamBadge && task.teamName ? ` · ${task.teamName}` : ""}
-                    </span>
-                  ) : null}
+                  <small>{task.memberTitle || "团队成员"}</small>
                 </div>
               </div>
               <span className={cn("badge", progress.badge)}>{progress.label}</span>
@@ -1275,9 +1179,6 @@ export default function TaskOverviewPage() {
           <p className="page-subtitle">
             成员自主维护任务进度、健康状态与预期完成时间；任务负载由基础 1 分、优先级与难度加成计算，
             每人每周容量 15 分，帮助团队在过载前及时调整节奏。
-            {aggregate
-              ? ` 当前按「${scope === "all" ? "所有团队" : currentTeam.name}」聚合浏览。`
-              : ""}
           </p>
         </div>
         <div className="page-actions">
@@ -1337,7 +1238,7 @@ export default function TaskOverviewPage() {
               compact
               icon={<Users size={22} />}
               title="暂时没有成员数据"
-              description="当前开发组还没有成员，添加成员后即可查看每个人的任务负载。"
+              description="当前团队还没有成员，添加成员后即可查看每个人的任务负载。"
             />
           )}
         </div>
@@ -1363,7 +1264,7 @@ export default function TaskOverviewPage() {
               type="button"
               className="btn btn-secondary btn-sm tasks-tag-library-btn"
               onClick={() => setTagLibraryOpen(true)}
-              title="管理当前开发组的标签库"
+              title="管理当前团队的标签库"
             >
               <Tags size={13} /> 标签库
             </button>
@@ -1449,12 +1350,9 @@ export default function TaskOverviewPage() {
       <TaskDialog
         open={dialog.open}
         task={dialog.task}
-        teamId={dialogTeamId}
-        groupId={dialogGroupId}
-        targetGroupName={dialogGroupName}
-        aggregate={aggregate}
+        teamId={teamId}
         members={dialogMembers}
-        canAssignOthers={canManageActiveGroup}
+        canAssignOthers={canManageActiveTeam}
         selfMemberId={dialogSelfMemberId}
         defaultMemberId={defaultMemberId}
         onClose={() => setDialog({ open: false, task: null })}
@@ -1465,9 +1363,7 @@ export default function TaskOverviewPage() {
         open={tagLibraryOpen}
         onClose={() => setTagLibraryOpen(false)}
         teamId={teamId}
-        groupId={groupId}
-        groupName={currentGroup.name}
-        groupOptions={aggregate && tagGroupOptions.length > 1 ? tagGroupOptions : []}
+        teamName={currentTeam.name}
         onChanged={() => {
           void loadTasks(true);
         }}
@@ -1480,7 +1376,6 @@ export default function TaskOverviewPage() {
         windowLabel={windowLabel}
         capacityPoints={meta.capacityPoints}
         scoring={meta.scoring}
-        showGroupBadge={aggregate}
         onClose={() => setWorkloadDetail(null)}
         onFilterMember={(memberId) => setMemberFilter(memberId)}
         onOpenProfile={(memberId) => navigate("overview", { member: memberId })}

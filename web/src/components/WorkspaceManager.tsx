@@ -11,7 +11,6 @@ import {
   AlertTriangle,
   Building2,
   Check,
-  Layers3,
   Loader2,
   Plus,
   RefreshCw,
@@ -25,7 +24,7 @@ import { useToast } from "./Toast";
 import { ConfirmInputDialog, Modal } from "./Modal";
 import { EmptyState } from "./Feedback";
 import { cn } from "../lib/utils";
-import type { ManagedGroup, ManagedTeam, WorkspaceManageData } from "../types";
+import type { ManagedTeam, WorkspaceManageData } from "../types";
 import "./WorkspaceManager.css";
 
 /* ------------------------------------------------------------------ */
@@ -44,18 +43,7 @@ interface CreateTeamPayload {
   color?: string;
 }
 
-interface CreateGroupPayload {
-  name: string;
-  description?: string;
-  color?: string;
-}
-
-type DeleteTarget =
-  | { kind: "team"; team: ManagedTeam }
-  | { kind: "group"; team: ManagedTeam; group: ManagedGroup };
-
 const TEAM_COLORS = ["#0a59f7", "#7c3aed", "#0ea5e9", "#16a34a", "#f59e0b", "#ef4444", "#64748b"];
-const GROUP_COLORS = ["#7c3aed", "#0a59f7", "#0ea5e9", "#16a34a", "#f59e0b", "#ec4899", "#64748b"];
 
 function messageOf(error: unknown, fallback: string): string {
   return error instanceof ApiError ? error.message : fallback;
@@ -105,7 +93,7 @@ function LoadingSkeleton() {
     <div className="wm-loading" aria-busy="true" aria-label="正在加载工作区数据">
       <div className="wm-loading-label">
         <Loader2 size={15} className="spin" />
-        <span>正在加载团队与开发组…</span>
+        <span>正在加载团队数据…</span>
       </div>
       {[0, 1].map((index) => (
         <div className="wm-skeleton-card" key={index}>
@@ -123,7 +111,7 @@ function LoadingSkeleton() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Inline create forms                                                 */
+/* Inline create form                                                  */
 /* ------------------------------------------------------------------ */
 
 function CreateTeamForm({
@@ -164,7 +152,7 @@ function CreateTeamForm({
         </span>
         <div>
           <strong>新建团队</strong>
-          <span>团队是工作区最外层容器，创建后可继续在团队下添加开发组。</span>
+          <span>团队是工作区的唯一组织单位，成员、任务、日历与责任田都按团队隔离。</span>
         </div>
       </header>
       <div className="form-grid wm-form-grid">
@@ -224,91 +212,6 @@ function CreateTeamForm({
   );
 }
 
-function CreateGroupForm({
-  team,
-  onCancel,
-  onSubmit,
-}: {
-  team: ManagedTeam;
-  onCancel: () => void;
-  onSubmit: (payload: CreateGroupPayload) => Promise<boolean>;
-}) {
-  const uid = useId();
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [color, setColor] = useState(team.color || GROUP_COLORS[0]);
-  const [saving, setSaving] = useState(false);
-  const trimmedName = name.trim();
-  const canSubmit = trimmedName.length > 0 && !saving;
-
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!canSubmit) return;
-    setSaving(true);
-    const ok = await onSubmit({
-      name: trimmedName,
-      description: description.trim() || undefined,
-      color,
-    });
-    if (!ok) setSaving(false);
-  };
-
-  return (
-    <form className="wm-create-form wm-create-group" onSubmit={submit}>
-      <header className="wm-form-head">
-        <span className="wm-form-icon">
-          <Layers3 size={17} />
-        </span>
-        <div>
-          <strong>在「{team.name}」下新建开发组</strong>
-          <span>每个开发组拥有独立的成员、任务、日历与责任田数据。</span>
-        </div>
-      </header>
-      <div className="form-grid wm-form-grid">
-        <div className="field">
-          <label htmlFor={`${uid}-name`}>开发组名称 *</label>
-          <input
-            id={`${uid}-name`}
-            className="input"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="例如：前端体验组"
-            maxLength={40}
-            required
-            autoFocus
-            disabled={saving}
-          />
-        </div>
-        <div className="field">
-          <span className="field-label">开发组标识色</span>
-          <ColorSwatches colors={GROUP_COLORS} value={color} onChange={setColor} disabled={saving} />
-        </div>
-        <div className="field span-2">
-          <label htmlFor={`${uid}-desc`}>开发组简介</label>
-          <textarea
-            id={`${uid}-desc`}
-            className="textarea"
-            value={description}
-            onChange={(event) => setDescription(event.target.value)}
-            placeholder="说明这个开发组负责的模块或协作范围（可选）。"
-            maxLength={120}
-            rows={2}
-            disabled={saving}
-          />
-        </div>
-      </div>
-      <div className="wm-form-actions">
-        <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel} disabled={saving}>
-          取消
-        </button>
-        <button type="submit" className="btn btn-primary btn-sm" disabled={!canSubmit}>
-          {saving ? "创建中…" : "创建开发组"}
-        </button>
-      </div>
-    </form>
-  );
-}
-
 /* ------------------------------------------------------------------ */
 /* Workspace manager modal                                             */
 /* ------------------------------------------------------------------ */
@@ -321,8 +224,7 @@ export function WorkspaceManager({ open, onClose }: WorkspaceManagerProps) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [teamFormOpen, setTeamFormOpen] = useState(false);
-  const [groupFormTeamId, setGroupFormTeamId] = useState<string | null>(null);
-  const [pendingDelete, setPendingDelete] = useState<DeleteTarget | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<ManagedTeam | null>(null);
   const [deleting, setDeleting] = useState(false);
   const requestId = useRef(0);
 
@@ -355,14 +257,13 @@ export function WorkspaceManager({ open, onClose }: WorkspaceManagerProps) {
   useEffect(() => {
     if (!open) {
       setTeamFormOpen(false);
-      setGroupFormTeamId(null);
       setPendingDelete(null);
       return;
     }
     void load(false);
   }, [open, load]);
 
-  // A mutation invalidates both the manager payload and the sidebar team/group tree.
+  // A mutation invalidates both the manager payload and the sidebar team list.
   const refreshAll = useCallback(async () => {
     await Promise.all([load(true), reload(true)]);
   }, [load, reload]);
@@ -380,39 +281,14 @@ export function WorkspaceManager({ open, onClose }: WorkspaceManagerProps) {
     }
   };
 
-  const handleCreateGroup = async (
-    team: ManagedTeam,
-    payload: CreateGroupPayload,
-  ): Promise<boolean> => {
-    try {
-      const result = await api.createGroup(team.id, payload);
-      setGroupFormTeamId(null);
-      toast(`开发组「${result.group.name}」已创建`, "success");
-      await refreshAll();
-      return true;
-    } catch (err) {
-      toast(messageOf(err, "创建开发组失败，请稍后重试。"), "error");
-      return false;
-    }
-  };
-
   const handleConfirmDelete = async () => {
     if (!pendingDelete || deleting) return;
     setDeleting(true);
     try {
-      if (pendingDelete.kind === "team") {
-        await api.deleteTeam(pendingDelete.team.id, pendingDelete.team.name);
-        toast(`团队「${pendingDelete.team.name}」已删除`, "success");
-      } else {
-        await api.deleteGroup(
-          pendingDelete.team.id,
-          pendingDelete.group.id,
-          pendingDelete.group.name,
-        );
-        toast(`开发组「${pendingDelete.group.name}」已删除`, "success");
-      }
+      await api.deleteTeam(pendingDelete.id, pendingDelete.name);
+      toast(`团队「${pendingDelete.name}」已删除`, "success");
       setPendingDelete(null);
-      // The backend resolves a fallback team/group when the active one was deleted,
+      // The backend resolves a fallback team when the active one was deleted,
       // so the bootstrap reload keeps the sidebar selection pointing at real data.
       await refreshAll();
     } catch (err) {
@@ -424,46 +300,18 @@ export function WorkspaceManager({ open, onClose }: WorkspaceManagerProps) {
 
   const teams = data?.teams ?? [];
   const permissions = data?.permissions;
-  const groupTotal = teams.reduce((total, team) => total + team.groups.length, 0);
   const memberTotal = teams.reduce((total, team) => total + team.memberCount, 0);
   const initialLoading = loading && !data;
 
-  let deleteTitle = "确认删除";
-  let deleteExpected = "";
-  let deleteInputLabel = "输入名称以确认";
-  let deleteConfirmLabel = "永久删除";
   let deleteMessage: ReactNode = null;
-  if (pendingDelete?.kind === "team") {
-    const { team } = pendingDelete;
-    deleteTitle = `删除团队「${team.name}」？`;
-    deleteExpected = team.name;
-    deleteInputLabel = "请输入团队名称以确认";
-    deleteConfirmLabel = "删除团队";
+  if (pendingDelete) {
     deleteMessage = (
       <>
         <p>
-          即将删除团队 <strong>{team.name}</strong>，其下 {team.groupCount} 个开发组、
-          {team.memberCount} 位成员会一并移除。
+          即将删除团队 <strong>{pendingDelete.name}</strong>，其下 {pendingDelete.memberCount} 位成员会一并移除。
         </p>
         <p className="wm-cascade-warning">
-          删除团队会同时删除其下所有开发组、成员、任务、日历、责任田等内容，且无法恢复。
-        </p>
-      </>
-    );
-  } else if (pendingDelete) {
-    const { team, group } = pendingDelete;
-    deleteTitle = `删除开发组「${group.name}」？`;
-    deleteExpected = group.name;
-    deleteInputLabel = "请输入开发组名称以确认";
-    deleteConfirmLabel = "删除开发组";
-    deleteMessage = (
-      <>
-        <p>
-          即将从团队 <strong>{team.name}</strong> 中删除开发组{" "}
-          <strong>{group.name}</strong>（{group.memberCount} 位成员）。
-        </p>
-        <p className="wm-cascade-warning">
-          删除开发组会同时删除其下所有成员、任务、日历、责任田等内容，且无法恢复。
+          删除团队会同时删除该团队下的成员、任务、日历、责任田等内容，且无法恢复。
         </p>
       </>
     );
@@ -475,15 +323,13 @@ export function WorkspaceManager({ open, onClose }: WorkspaceManagerProps) {
         open={open}
         onClose={onClose}
         title="工作区管理"
-        description="创建或删除团队与开发组；删除操作不可恢复，需要输入名称二次确认。"
+        description="创建或删除团队；删除操作不可恢复，需要输入名称二次确认。"
         size="lg"
         className="wm-modal"
         footer={
           <>
             {data ? (
-              <span className="wm-footer-note">
-                共 {teams.length} 个团队 · {groupTotal} 个开发组
-              </span>
+              <span className="wm-footer-note">共 {teams.length} 个团队</span>
             ) : null}
             <button className="btn btn-secondary" onClick={onClose}>
               关闭
@@ -515,11 +361,6 @@ export function WorkspaceManager({ open, onClose }: WorkspaceManagerProps) {
                     <span>个团队</span>
                   </span>
                   <span className="wm-stat">
-                    <Layers3 size={14} />
-                    <strong>{groupTotal}</strong>
-                    <span>个开发组</span>
-                  </span>
-                  <span className="wm-stat">
                     <UsersRound size={14} />
                     <strong>{memberTotal}</strong>
                     <span>位成员</span>
@@ -539,10 +380,7 @@ export function WorkspaceManager({ open, onClose }: WorkspaceManagerProps) {
                     <button
                       type="button"
                       className="btn btn-primary btn-sm"
-                      onClick={() => {
-                        setTeamFormOpen(true);
-                        setGroupFormTeamId(null);
-                      }}
+                      onClick={() => setTeamFormOpen(true)}
                     >
                       <Plus size={15} /> 新建团队
                     </button>
@@ -550,11 +388,13 @@ export function WorkspaceManager({ open, onClose }: WorkspaceManagerProps) {
                 </div>
               </div>
 
-              <p className="wm-scope-note">
+              <p className="wm-permission-note">
                 <ShieldCheck size={13} />
                 {permissions?.canCreateTeam
-                  ? "系统内置管理员视图：可创建/删除任意团队与开发组。"
-                  : "团队管理员视图：可在所属团队内创建/删除开发组，删除团队需系统内置管理员操作。"}
+                  ? "系统内置管理员视图：可创建或删除任意团队。"
+                  : permissions?.canManageAnyTeam
+                    ? "团队管理员视图：可编辑所属团队，创建或删除团队需系统内置管理员操作。"
+                    : "当前身份仅可查看团队信息。"}
               </p>
 
               {teamFormOpen ? (
@@ -570,7 +410,7 @@ export function WorkspaceManager({ open, onClose }: WorkspaceManagerProps) {
                   title="暂无团队"
                   description={
                     permissions?.canCreateTeam
-                      ? "当前工作区还没有团队。创建第一个团队后，即可在团队下添加开发组与成员。"
+                      ? "当前工作区还没有团队。创建第一个团队后，即可添加成员与协作内容。"
                       : "当前权限范围内还没有可管理的团队，请联系系统内置管理员创建团队。"
                   }
                   action={
@@ -598,92 +438,22 @@ export function WorkspaceManager({ open, onClose }: WorkspaceManagerProps) {
                           <p className="wm-team-desc">{team.description || "暂无团队简介"}</p>
                           <div className="wm-team-meta">
                             <span>
-                              <Layers3 size={12} /> {team.groupCount} 个开发组
-                            </span>
-                            <span>
                               <UsersRound size={12} /> {team.memberCount} 位成员
                             </span>
                           </div>
                         </div>
                         <div className="wm-team-actions">
-                          {team.canCreateGroup ? (
-                            <button
-                              type="button"
-                              className="btn btn-secondary btn-sm"
-                              onClick={() => {
-                                setTeamFormOpen(false);
-                                setGroupFormTeamId((current) =>
-                                  current === team.id ? null : team.id,
-                                );
-                              }}
-                            >
-                              <Plus size={14} />
-                              {groupFormTeamId === team.id ? "收起表单" : "新建开发组"}
-                            </button>
-                          ) : null}
                           {team.canDelete ? (
                             <button
                               type="button"
                               className="btn btn-ghost btn-sm wm-delete"
-                              onClick={() => setPendingDelete({ kind: "team", team })}
+                              onClick={() => setPendingDelete(team)}
                             >
                               <Trash2 size={14} /> 删除团队
                             </button>
                           ) : null}
                         </div>
                       </header>
-
-                      {groupFormTeamId === team.id ? (
-                        <CreateGroupForm
-                          team={team}
-                          onCancel={() => setGroupFormTeamId(null)}
-                          onSubmit={(payload) => handleCreateGroup(team, payload)}
-                        />
-                      ) : null}
-
-                      <div className="wm-groups">
-                        {team.groups.length === 0 ? (
-                          <p className="wm-groups-empty">
-                            该团队下还没有开发组
-                            {team.canCreateGroup ? "，点击上方「新建开发组」创建。" : "。"}
-                          </p>
-                        ) : (
-                          <ul className="wm-group-list" aria-label={`${team.name} 的开发组`}>
-                            {team.groups.map((group) => (
-                              <li className="wm-group" key={group.id}>
-                                <span
-                                  className="wm-group-dot"
-                                  style={{ background: group.color }}
-                                  aria-hidden="true"
-                                />
-                                <div className="wm-group-copy">
-                                  <div className="wm-group-title">
-                                    <Layers3 size={13} />
-                                    <strong>{group.name}</strong>
-                                  </div>
-                                  <p>{group.description || "暂无开发组简介"}</p>
-                                </div>
-                                <span className="wm-group-count">
-                                  <UsersRound size={11} /> {group.memberCount}
-                                </span>
-                                {group.canDelete ? (
-                                  <button
-                                    type="button"
-                                    className="icon-button wm-group-delete"
-                                    onClick={() =>
-                                      setPendingDelete({ kind: "group", team, group })
-                                    }
-                                    aria-label={`删除开发组 ${group.name}`}
-                                    title="删除开发组"
-                                  >
-                                    <Trash2 size={14} />
-                                  </button>
-                                ) : null}
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
                     </section>
                   ))}
                 </div>
@@ -695,12 +465,12 @@ export function WorkspaceManager({ open, onClose }: WorkspaceManagerProps) {
 
       <ConfirmInputDialog
         open={Boolean(pendingDelete)}
-        title={deleteTitle}
+        title={pendingDelete ? `删除团队「${pendingDelete.name}」？` : "确认删除"}
         description="请仔细核对名称，该操作不可撤销。"
         message={deleteMessage}
-        expected={deleteExpected}
-        inputLabel={deleteInputLabel}
-        confirmLabel={deleteConfirmLabel}
+        expected={pendingDelete?.name ?? ""}
+        inputLabel="请输入团队名称以确认"
+        confirmLabel="删除团队"
         loading={deleting}
         onClose={() => {
           if (!deleting) setPendingDelete(null);

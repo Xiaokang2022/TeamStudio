@@ -1,9 +1,10 @@
 """Account helpers shared by the e-mail login flow and the user administration API.
 
 The ``users`` table is the source of truth for an account's login identity and
-personal profile. Group-scoped ``members`` rows are linked by e-mail; personal
-fields are synchronised so member cards, the personal home page and account
-settings always agree.
+personal profile. Team-scoped ``members`` rows are linked by e-mail / account id;
+personal fields are synchronised so member cards, the personal home page and account
+settings always agree. Round 8 removed development groups: an account is scoped by
+``team_ids`` only and roles are ``member`` / ``team_admin`` / ``super``.
 """
 
 from __future__ import annotations
@@ -18,10 +19,9 @@ from typing import Any
 from ..config import EMAIL_PATTERN, settings_service
 from ..db import json_loads, new_id, now_iso, row
 
-USER_ROLES = ("member", "group_admin", "team_admin", "super")
+USER_ROLES = ("member", "team_admin", "super")
 ROLE_LABELS = {
     "member": "成员",
-    "group_admin": "开发组管理员",
     "team_admin": "团队管理员",
     "super": "超级管理员",
 }
@@ -86,7 +86,6 @@ def user_payload(user: dict[str, Any]) -> dict[str, Any]:
         "role": user.get("role", "member"),
         "roleLabel": role_label(user.get("role", "member")),
         "teamIds": _list(user.get("team_ids")),
-        "groupIds": _list(user.get("group_ids")),
         "emailVerified": bool(user.get("email_verified")),
         "createdBy": user.get("created_by", ""),
         "createdAt": user.get("created_at", ""),
@@ -109,7 +108,6 @@ def create_user(
     name: str = "",
     role: str = "member",
     team_ids: list[str] | None = None,
-    group_ids: list[str] | None = None,
     email_verified: bool = False,
     created_by: str = "",
 ) -> dict[str, Any]:
@@ -131,8 +129,8 @@ def create_user(
         raise AccountError("用户名不能超过 60 个字符", "invalid_name")
     conn.execute(
         "INSERT INTO users (id,email,name,avatar,avatar_color,bio,skills,role,team_ids,"
-        "group_ids,email_verified,created_by,created_at,updated_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "email_verified,created_by,created_at,updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             user_id,
             email,
@@ -143,7 +141,6 @@ def create_user(
             "[]",
             role,
             json_dumps(sorted(set(team_ids or []))),
-            json_dumps(sorted(set(group_ids or []))),
             1 if email_verified else 0,
             created_by,
             now,
@@ -176,7 +173,6 @@ def update_user(
     skills: list[str] | None = None,
     role: str | None = None,
     team_ids: list[str] | None = None,
-    group_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     from ..db import json_dumps
 
@@ -209,8 +205,6 @@ def update_user(
         updates["role"] = role
     if team_ids is not None:
         updates["team_ids"] = json_dumps(sorted(set(team_ids)))
-    if group_ids is not None:
-        updates["group_ids"] = json_dumps(sorted(set(group_ids)))
     if not updates:
         return existing
     updates["updated_at"] = now_iso()
@@ -225,7 +219,7 @@ def update_user(
 
 
 def sync_members_from_user(conn: sqlite3.Connection, user: dict[str, Any]) -> None:
-    """Mirror personal-profile fields onto every linked group member row."""
+    """Mirror personal-profile fields onto every linked team member row."""
     members = conn.execute(
         "SELECT id FROM members WHERE lower(email)=? OR lower(external_id)=?",
         (str(user.get("email") or "").lower(), str(user.get("id") or "").lower()),
@@ -324,15 +318,13 @@ def consume_activation_token(conn: sqlite3.Connection, token_hash: str) -> None:
     )
 
 
-def account_role_scope(role: str) -> tuple[str | None, list[str], list[str]]:
-    """Return the admin role plus default empty team/group scopes for a role."""
+def account_role_scope(role: str) -> tuple[str | None, list[str]]:
+    """Return the admin role plus its (initially empty) team scope for a role."""
     if role == "super":
-        return "super", [], []
+        return "super", []
     if role == "team_admin":
-        return "team_admin", [], []
-    if role == "group_admin":
-        return "group_admin", [], []
-    return None, [], []
+        return "team_admin", []
+    return None, []
 
 
 def account_session_identity(user: dict[str, Any]) -> Any:

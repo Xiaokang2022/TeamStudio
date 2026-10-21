@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   AlertCircle,
   AlertTriangle,
-  ArrowRight,
   CalendarDays,
   CheckCheck,
   Flag,
@@ -43,6 +42,7 @@ export interface TaskMemberOption {
   id: string;
   name: string;
   title: string;
+  avatar?: string;
   avatarColor: string;
 }
 
@@ -50,14 +50,9 @@ export interface TaskDialogProps {
   open: boolean;
   /** Existing task when editing, null when creating. */
   task: MemberTask | null;
-  /** Team/group the save request targets: task's own group when editing, current group when creating. */
+  /** Team the save request targets. */
   teamId: string;
-  groupId: string;
-  /** Display name of the target group (used for the aggregate-scope hint). */
-  targetGroupName?: string;
-  /** True when the sidebar browsing scope is team/all. */
-  aggregate?: boolean;
-  /** Every member of the active group (workload rail source). */
+  /** Every member of the active team (workload rail source). */
   members: TaskMemberOption[];
   /** Admins may assign any member; ordinary linked members are fixed to themselves. */
   canAssignOthers: boolean;
@@ -78,9 +73,6 @@ export function TaskDialog({
   open,
   task,
   teamId,
-  groupId,
-  targetGroupName,
-  aggregate = false,
   members,
   canAssignOthers,
   selfMemberId,
@@ -192,11 +184,11 @@ export function TaskDialog({
     };
     try {
       if (task) {
-        const result = await api.updateTask(teamId, groupId, task.id, payload);
+        const result = await api.updateTask(teamId, task.id, payload);
         toast("任务已更新", "success");
         onSaved(result.task);
       } else {
-        const result = await api.createTask(teamId, groupId, payload);
+        const result = await api.createTask(teamId, payload);
         toast("任务已创建", "success");
         onSaved(result.task);
       }
@@ -231,19 +223,6 @@ export function TaskDialog({
       }
     >
       <form id="tasks-dialog-form" className="td-form tasks-dialog-form" onSubmit={submit}>
-        {aggregate && targetGroupName ? (
-          <div className="tasks-dialog-group-hint" role="note">
-            <ArrowRight size={13} />
-            <span>
-              {isEditing ? "该任务属于" : "将创建到"}：
-              <strong>{targetGroupName}</strong>
-              {isEditing
-                ? "。标签库与成员均按任务所属开发组加载，保存会写回该组。"
-                : "。聚合视角下新建任务总是写入当前选中的开发组。"}
-            </span>
-          </div>
-        ) : null}
-
         <div className="field">
           <label htmlFor="tasks-title">任务标题 *</label>
           <input
@@ -288,26 +267,32 @@ export function TaskDialog({
                   label: member.name,
                   description: member.title || undefined,
                   color: member.avatarColor,
+                  avatar: member.avatar,
                 }))}
               />
               <span className="field-hint">
-                管理员可以将任务指派给开发组内任意成员；普通成员只能管理自己的任务。
+                管理员可以将任务指派给团队内任意成员；普通成员只能管理自己的任务。
               </span>
             </>
           ) : (
             <div className="tasks-dialog-member" aria-label="任务所属成员">
               {fixedMember ? (
                 <>
-                  <Avatar name={fixedMember.name} color={fixedMember.avatarColor} size="sm" />
+                  <Avatar
+                    name={fixedMember.name}
+                    src={fixedMember.avatar}
+                    color={fixedMember.avatarColor}
+                    size="sm"
+                  />
                   <div>
                     <strong>{fixedMember.name}</strong>
-                    <small>{fixedMember.title || "开发组成员"}</small>
+                    <small>{fixedMember.title || "团队成员"}</small>
                   </div>
                 </>
               ) : (
                 <div>
                   <strong>{selfMemberId ? "我的任务" : "未关联成员"}</strong>
-                  <small>当前身份还没有关联开发组成员档案，请联系管理员。</small>
+                  <small>当前身份还没有关联团队成员档案，请联系管理员。</small>
                 </div>
               )}
               <span className="badge badge-gray">仅本人</span>
@@ -321,14 +306,12 @@ export function TaskDialog({
           </span>
           <TagPicker
             teamId={teamId}
-            groupId={groupId}
-            groupName={targetGroupName}
             value={tagIds}
             onChange={setTagIds}
             disabled={saving}
           />
           <span className="field-hint">
-            标签按开发组共享，最多选择 8 个；可在选择面板中直接新建、改名、换色或删除。
+            标签按团队共享，最多选择 8 个；可在选择面板中直接新建、改名、换色或删除。
           </span>
         </div>
 

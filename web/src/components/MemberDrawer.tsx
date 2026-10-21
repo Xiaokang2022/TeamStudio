@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import {
   AtSign,
@@ -9,7 +9,6 @@ import {
   Clock,
   Gauge,
   History,
-  Layers3,
   ListTodo,
   Mail,
   Pencil,
@@ -28,16 +27,12 @@ import { ConfirmDialog, Modal } from "./Modal";
 import { EmptyState } from "./Feedback";
 import { Select } from "./Select";
 import {
-  canEditOrganizationalInfo,
   canEditPersonalInfo,
-  canManageGroup,
   cn,
   formatDate,
   formatDateTime,
   isLinkedMember,
-  memberGroupRefs,
   relativeTime,
-  STATUS_META,
 } from "../lib/utils";
 import { formatPercent, formatPoints, WORKLOAD_LEVEL_META, workloadLevel } from "../lib/taskMeta";
 import type { Member, MemberMembership, WorkItem, WorkStatus, Workload } from "../types";
@@ -51,7 +46,6 @@ const WORK_STATUS_META: Record<WorkStatus, { label: string; badge: string }> = {
 const WORK_STATUS_OPTIONS: WorkStatus[] = ["current", "planned", "done"];
 
 const AVATAR_COLORS = ["#7c3aed", "#2563eb", "#0ea5e9", "#16a34a", "#ea8a14", "#dc2626", "#db2777"];
-const MEMBER_STATUS_OPTIONS = ["available", "busy", "remote", "offline"];
 
 /** Exit animation budget (#5): keep the drawer mounted for a short slide/fade. */
 const CLOSE_ANIMATION_MS = 190;
@@ -75,7 +69,6 @@ export interface MemberDrawerProps {
   open: boolean;
   member: Member | null;
   teamId: string;
-  groupId: string;
   workload?: Workload | null;
   onClose: () => void;
   onChanged: () => Promise<void> | void;
@@ -85,12 +78,11 @@ export function MemberDrawer({
   open,
   member: memberProp,
   teamId,
-  groupId,
   workload: workloadProp = null,
   onClose,
   onChanged,
 }: MemberDrawerProps) {
-  const { data, navigate } = useApp();
+  const { data, navigate, canManageActiveTeam, currentTeam } = useApp();
   const { toast } = useToast();
   const user = data?.me ?? null;
 
@@ -177,7 +169,7 @@ export function MemberDrawer({
     if (!workToDelete) return;
     setDeleting(true);
     try {
-      await api.deleteWork(teamId, groupId, workToDelete.memberId, workToDelete.id);
+      await api.deleteWork(teamId, workToDelete.memberId, workToDelete.id);
       toast("工作项已删除", "success");
       setWorkToDelete(null);
       await onChanged();
@@ -186,13 +178,13 @@ export function MemberDrawer({
     } finally {
       setDeleting(false);
     }
-  }, [workToDelete, teamId, groupId, toast, onChanged]);
+  }, [workToDelete, teamId, toast, onChanged]);
 
   const handleDeleteMember = useCallback(async () => {
     if (!memberProp) return;
     setDeleting(true);
     try {
-      await api.deleteMember(teamId, groupId, memberProp.id);
+      await api.deleteMember(teamId, memberProp.id);
       toast(`成员「${memberProp.name}」已删除`, "success");
       setDeleteMemberOpen(false);
       onClose();
@@ -202,7 +194,7 @@ export function MemberDrawer({
     } finally {
       setDeleting(false);
     }
-  }, [memberProp, teamId, groupId, toast, onClose, onChanged]);
+  }, [memberProp, teamId, toast, onClose, onChanged]);
 
   // Keep the last member/workload snapshot rendered while the drawer slides out.
   const shownMember = (open ? memberProp : null) ?? visibleMember;
@@ -210,59 +202,37 @@ export function MemberDrawer({
 
   const member = shownMember;
   const workload = (open ? workloadProp : null) ?? visibleWorkload;
-  const isAdmin = canManageGroup(user, teamId, groupId);
+  const isAdmin = canManageActiveTeam;
   const canEditPersonal = canEditPersonalInfo(user, member);
-  const canEditOrg = canEditOrganizationalInfo(user, teamId, groupId);
-  // Work items are maintained by organizational admins or the linked owner.
+  const canEditOrg = canManageActiveTeam;
+  // Work items are maintained by team admins or the linked owner.
   const canEdit = canEditOrg || canEditPersonal;
   const isSelf = isLinkedMember(user, member);
 
-  // Every development group of this person. The backend returns `memberships` in the
-  // aggregate scopes; fall back to the flat/single group fields so the drawer still
-  // shows the current development group with classic payloads.
-  const groupColorById = new Map<string, string>();
-  const groupNameById = new Map<string, string>();
-  const teamNameById = new Map<string, string>();
-  for (const team of data?.teams ?? []) {
-    teamNameById.set(team.id, team.name);
-    for (const item of team.groups) {
-      groupColorById.set(item.id, item.color);
-      groupNameById.set(item.id, item.name);
-      teamNameById.set(item.id, team.name);
-    }
-  }
+  // Every team archive of this person. The backend returns `memberships` for the
+  // team read model; fall back to the member's own team fields.
   const memberships: MemberMembership[] = member.memberships?.length
     ? member.memberships
-    : memberGroupRefs(member).length
-      ? memberGroupRefs(member).map((ref) => ({ memberId: member.id, ...ref }))
-      : groupId
-        ? [
-            {
-              memberId: member.id,
-              groupId,
-              groupName: groupNameById.get(groupId) ?? "",
-              teamId,
-              teamName: teamNameById.get(teamId) ?? "",
-            },
-          ]
-        : [];
-  const uniqueGroupNames = Array.from(
-    new Set(memberships.map((item) => item.groupName).filter(Boolean)),
-  );
-  const uniqueTeamNames = Array.from(
-    new Set(memberships.map((item) => item.teamName).filter(Boolean)),
-  );
+    : member.teamId || member.teamName
+      ? [
+          {
+            memberId: member.id,
+            teamId: member.teamId ?? teamId,
+            teamName: member.teamName ?? currentTeam?.name ?? "",
+            title: member.title,
+            role: member.role,
+            joinedAt: member.joinedAt,
+          },
+        ]
+      : [];
   const primaryMembership = memberships[0] ?? null;
   const membershipsTitle = memberships.length
-    ? `所属团队 / 开发组：${memberships
-        .map((item) => [item.teamName, item.groupName].filter(Boolean).join(" / "))
-        .join("、")}`
+    ? `所属团队：${memberships.map((item) => item.teamName).filter(Boolean).join("、")}`
     : undefined;
   const membershipMeta = (item: MemberMembership) => {
     const title = item.title || (item.memberId === member.id ? member.title : "");
     const role = item.role || (item.memberId === member.id ? member.role : "");
-    const status = item.status ? STATUS_META[item.status]?.label ?? item.status : "";
-    return [title, role, status].filter(Boolean).join(" · ") || "开发组成员";
+    return [title, role].filter(Boolean).join(" · ") || "团队成员";
   };
 
   const workloadLevelMeta = workload
@@ -319,22 +289,9 @@ export function MemberDrawer({
                 {member.role ? ` · ${member.role}` : ""}
               </p>
               <div className="md-hero-badges">
-                {primaryMembership?.groupName ? (
+                {primaryMembership?.teamName ? (
                   <span className="badge" title={membershipsTitle}>
-                    <Layers3 size={11} /> {primaryMembership.groupName}
-                  </span>
-                ) : null}
-                {uniqueTeamNames.length ? (
-                  <span className="badge" title={uniqueTeamNames.join("、")}>
-                    <Building2 size={11} />{" "}
-                    {uniqueTeamNames.length > 1
-                      ? `${uniqueTeamNames.length} 个团队`
-                      : uniqueTeamNames[0]}
-                  </span>
-                ) : null}
-                {uniqueGroupNames.length > 1 ? (
-                  <span className="badge" title={uniqueGroupNames.join("、")}>
-                    共 {uniqueGroupNames.length} 个开发组
+                    <Building2 size={11} /> {primaryMembership.teamName}
                   </span>
                 ) : null}
                 {isSelf ? <span className="badge">这是我</span> : null}
@@ -407,40 +364,24 @@ export function MemberDrawer({
 
           <section className="md-section">
             <h3 className="md-section-title">
-              <Building2 size={15} /> 所属团队 / 开发组
+              <Building2 size={15} /> 所属团队
               <span className="md-section-count">{memberships.length}</span>
             </h3>
             {memberships.length ? (
-              <ul className="md-memberships" aria-label="所属团队与开发组">
+              <ul className="md-memberships" aria-label="所属团队">
                 {memberships.map((item, index) => {
-                  const color = groupColorById.get(item.groupId) ?? "#7c3aed";
                   const isPrimary = index === 0;
                   return (
                     <li
                       className="md-membership"
-                      key={`${item.groupId || item.memberId || "group"}-${index}`}
+                      key={`${item.teamId || item.memberId || "team"}-${index}`}
                     >
-                      <span
-                        className="md-membership-dot"
-                        style={{ background: color }}
-                        aria-hidden="true"
-                      />
+                      <span className="md-membership-dot" aria-hidden="true" />
                       <div className="md-membership-main">
                         <div className="md-membership-head">
-                          {item.teamName ? (
-                            <span className="badge md-membership-team">
-                              <Building2 size={10} /> {item.teamName}
-                            </span>
-                          ) : null}
-                          {item.groupName ? (
-                            <span
-                              className="badge md-membership-group"
-                              style={{ "--group-color": color } as CSSProperties}
-                              title={`所属开发组：${item.groupName}`}
-                            >
-                              <Layers3 size={10} /> {item.groupName}
-                            </span>
-                          ) : null}
+                          <span className="badge md-membership-team">
+                            <Building2 size={10} /> {item.teamName || "未命名团队"}
+                          </span>
                           {isPrimary ? <span className="badge">主档案</span> : null}
                         </div>
                         <span className="md-membership-meta">{membershipMeta(item)}</span>
@@ -450,7 +391,7 @@ export function MemberDrawer({
                 })}
               </ul>
             ) : (
-              <p className="md-bio">暂未关联任何团队 / 开发组档案。</p>
+              <p className="md-bio">暂未关联任何团队档案。</p>
             )}
           </section>
 
@@ -675,7 +616,7 @@ export function MemberDrawer({
                   : "你可以维护自己的个人资料、当前工作与历史工作。"
                 : canEditPersonal
                   ? "超级管理员可以维护该成员的全部档案信息。"
-                  : "你可以维护该成员的职位、团队角色与状态。"
+                  : "你可以维护该成员的职位与团队角色。"
               : "只读视图，仅本人或管理员可以编辑。"}
           </p>
           <div className="md-footer-actions">
@@ -707,7 +648,6 @@ export function MemberDrawer({
         open={open && profileOpen && Boolean(member)}
         member={member}
         teamId={teamId}
-        groupId={groupId}
         personalEditable={canEditPersonal}
         orgEditable={canEditOrg}
         onClose={() => setProfileOpen(false)}
@@ -719,7 +659,6 @@ export function MemberDrawer({
         work={workDialog.work}
         memberId={member.id}
         teamId={teamId}
-        groupId={groupId}
         onClose={() => setWorkDialog({ open: false, work: null })}
         onSaved={handleWorkSaved}
       />
@@ -807,10 +746,9 @@ interface ProfileEditDialogProps {
   open: boolean;
   member: Member;
   teamId: string;
-  groupId: string;
   /** Personal fields (name / email / bio / tags / skills / avatar color). */
   personalEditable: boolean;
-  /** Organizational fields (title / role / status). */
+  /** Organizational fields (title / role). */
   orgEditable: boolean;
   onClose: () => void;
   onSaved: () => Promise<void> | void;
@@ -820,7 +758,6 @@ function ProfileEditDialog({
   open,
   member,
   teamId,
-  groupId,
   personalEditable,
   orgEditable,
   onClose,
@@ -830,7 +767,6 @@ function ProfileEditDialog({
   const [name, setName] = useState(member.name);
   const [title, setTitle] = useState(member.title);
   const [role, setRole] = useState(member.role);
-  const [status, setStatus] = useState(member.status || "available");
   const [email, setEmail] = useState(member.email);
   const [bio, setBio] = useState(member.bio);
   const [tags, setTags] = useState(member.tags.join(", "));
@@ -844,7 +780,6 @@ function ProfileEditDialog({
     setName(member.name);
     setTitle(member.title);
     setRole(member.role);
-    setStatus(member.status || "available");
     setEmail(member.email);
     setBio(member.bio);
     setTags(member.tags.join(", "));
@@ -874,7 +809,6 @@ function ProfileEditDialog({
     if (orgEditable) {
       payload.title = title.trim();
       payload.role = role.trim();
-      payload.status = status;
     }
     if (!Object.keys(payload).length) {
       setError("当前身份没有可编辑的字段。");
@@ -883,7 +817,7 @@ function ProfileEditDialog({
     setSaving(true);
     setError("");
     try {
-      await api.updateMember(teamId, groupId, member.id, payload);
+      await api.updateMember(teamId, member.id, payload);
       toast("成员资料已更新", "success");
       await onSaved();
       onClose();
@@ -902,7 +836,7 @@ function ProfileEditDialog({
       description={
         personalEditable
           ? `正在编辑 ${member.name} 的个人档案与组织信息。`
-          : `正在编辑 ${member.name} 的职位、团队角色与状态。`
+          : `正在编辑 ${member.name} 的职位与团队角色。`
       }
       size="md"
       footer={
@@ -923,7 +857,7 @@ function ProfileEditDialog({
             <span>
               {!personalEditable
                 ? "姓名、邮箱、个人简介、标签、技能与头像颜色属于个人信息，仅本人或超级管理员可以修改。"
-                : "职位、团队角色与状态由团队 / 开发组管理员维护。"}
+                : "职位与团队角色由团队管理员维护。"}
             </span>
           </p>
         ) : null}
@@ -1028,20 +962,6 @@ function ProfileEditDialog({
             disabled={!orgEditable}
           />
         </div>
-        <div className="field span-2">
-          <label htmlFor="md-profile-status">状态</label>
-          <Select
-            id="md-profile-status"
-            value={status}
-            onChange={(next) => setStatus(next || "available")}
-            options={MEMBER_STATUS_OPTIONS.map((value) => ({
-              value,
-              label: STATUS_META[value]?.label ?? value,
-            }))}
-            disabled={!orgEditable}
-            ariaLabel="成员状态"
-          />
-        </div>
 
         {error ? (
           <p className="md-form-error" role="alert">
@@ -1058,12 +978,11 @@ interface WorkEditDialogProps {
   work: WorkItem | null;
   memberId: string;
   teamId: string;
-  groupId: string;
   onClose: () => void;
   onSaved: () => Promise<void> | void;
 }
 
-function WorkEditDialog({ open, work, memberId, teamId, groupId, onClose, onSaved }: WorkEditDialogProps) {
+function WorkEditDialog({ open, work, memberId, teamId, onClose, onSaved }: WorkEditDialogProps) {
   const { toast } = useToast();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -1104,10 +1023,10 @@ function WorkEditDialog({ open, work, memberId, teamId, groupId, onClose, onSave
     };
     try {
       if (work) {
-        await api.updateWork(teamId, groupId, memberId, work.id, payload);
+        await api.updateWork(teamId, memberId, work.id, payload);
         toast("工作项已更新", "success");
       } else {
-        await api.createWork(teamId, groupId, memberId, payload);
+        await api.createWork(teamId, memberId, payload);
         toast("工作项已添加", "success");
       }
       await onSaved();

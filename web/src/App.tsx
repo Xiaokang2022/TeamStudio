@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect } from "react";
-import { EyeOff, RefreshCw, ShieldAlert, WifiOff } from "lucide-react";
+import { EyeOff, LogIn, RefreshCw, ShieldAlert, WifiOff } from "lucide-react";
 import { AppShell } from "./components/AppShell";
 import { PageLoading } from "./components/Feedback";
 import { useApp } from "./store";
@@ -28,6 +28,18 @@ const PAGE_MODULES: Record<string, keyof ModuleFlags> = {
   matrix: "matrix",
   announcements: "announcements",
   settings: "settings",
+};
+
+const PAGE_LABELS: Record<string, string> = {
+  overview: "团队概览",
+  tasks: "任务总览",
+  insights: "数据洞察",
+  calendar: "协作日历",
+  redblack: "红黑榜",
+  links: "常用链接",
+  matrix: "责任田矩阵",
+  announcements: "公告栏",
+  settings: "系统设置",
 };
 
 const PAGES: Record<string, React.LazyExoticComponent<() => React.JSX.Element | null>> = {
@@ -98,6 +110,7 @@ function AccessDenied() {
 
 function HiddenModule({ module }: { module: string }) {
   const { navigate, isAdmin } = useApp();
+  const label = PAGE_LABELS[module] ?? module;
   return (
     <div className="state-screen compact">
       <div className="state-card">
@@ -105,7 +118,7 @@ function HiddenModule({ module }: { module: string }) {
           <EyeOff size={26} />
         </span>
         <h1>该模块已被隐藏</h1>
-        <p>管理员在工作室设置中关闭了「{module}」模块的展示。内容仍然安全保留，重新开启后即可访问。</p>
+        <p>管理员在工作室设置中关闭了「{label}」模块的展示。内容仍然安全保留，重新开启后即可访问。</p>
         <div className="state-actions">
           <button className="btn btn-primary" onClick={() => navigate("overview")}>
             返回团队概览
@@ -115,6 +128,33 @@ function HiddenModule({ module }: { module: string }) {
               去设置中开启
             </button>
           ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** A module the admin did not open up to anonymous guests. */
+function GuestModuleBlocked({ module }: { module: string }) {
+  const { navigate } = useApp();
+  const label = PAGE_LABELS[module] ?? module;
+  return (
+    <div className="state-screen compact">
+      <div className="state-card">
+        <span className="state-icon violet">
+          <EyeOff size={26} />
+        </span>
+        <h1>模块未对访客开放</h1>
+        <p>
+          「{label}」仅对已登录成员开放。访客可以继续浏览其他公开模块，登录后即可查看本模块。
+        </p>
+        <div className="state-actions">
+          <button className="btn btn-primary" onClick={() => navigate("login")}>
+            <LogIn size={16} /> 登录 / 注册
+          </button>
+          <button className="btn btn-secondary" onClick={() => navigate("overview")}>
+            返回团队概览
+          </button>
         </div>
       </div>
     </div>
@@ -136,7 +176,7 @@ function PageFallback() {
 }
 
 export default function App() {
-  const { data, config, loading, error, route, reload, isAdmin } = useApp();
+  const { data, config, loading, error, route, reload, isAdmin, moduleVisible } = useApp();
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -156,14 +196,23 @@ export default function App() {
 
   const normalizedRoute = PAGES[route] ? route : "overview";
   const module = PAGE_MODULES[normalizedRoute];
-  const moduleHidden = module ? !config.modules[module] : false;
+  const moduleEnabled = module ? Boolean(config.modules[module]) : true;
+  const visible = module ? moduleVisible(module) : true;
   const requiresAdmin = normalizedRoute === "settings" && !isAdmin;
+  const isGuest = !data.me.authenticated || data.me.source === "guest";
 
   let content: React.ReactNode;
   if (requiresAdmin) {
     content = <AccessDenied />;
-  } else if (moduleHidden && !isAdmin) {
-    content = <HiddenModule module={normalizedRoute} />;
+  } else if (!visible) {
+    // A guest is blocked by guestModules while the module itself is enabled;
+    // otherwise the module was switched off site-wide.
+    content =
+      isGuest && moduleEnabled && module ? (
+        <GuestModuleBlocked module={module} />
+      ) : (
+        <HiddenModule module={normalizedRoute} />
+      );
   } else {
     const Component = PAGES[normalizedRoute] ?? OverviewPage;
     content = (

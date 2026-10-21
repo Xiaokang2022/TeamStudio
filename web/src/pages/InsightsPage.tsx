@@ -1,15 +1,14 @@
 /**
- * Data insights board (#12).
+ * Data insights board.
  *
- * Renders `InsightsData` from `GET .../insights`:
+ * Renders `InsightsData` from `GET /api/teams/{team}/insights`:
  *  - KPI cards (members / tasks / completion / overdue / blocked / load / todos)
  *  - range picker (1w, 2w, 1m, 3m, all)
  *  - pure CSS trend chart for created / completed / todos buckets
- *  - three sortable tables (members, development groups, teams)
+ *  - one sortable member table with real avatars
  *
- * Everything reads the active browsing scope from the app store, so the board
- * follows the sidebar scope switcher and displays the scope badge returned by
- * the API (falling back to `scopeLabel` while the payload loads).
+ * Everything reads the active team from the app store; comparison tables for
+ * development groups / teams were removed with the team-only refactor.
  */
 import {
   useCallback,
@@ -31,7 +30,6 @@ import {
   CheckCircle2,
   Clock,
   Gauge,
-  Globe2,
   ListChecks,
   ListTodo,
   RefreshCw,
@@ -41,18 +39,15 @@ import {
 } from "lucide-react";
 import { api, ApiError } from "../api";
 import { useApp } from "../store";
+import { Avatar } from "../components/Avatar";
 import { EmptyState, LoadingBlock } from "../components/Feedback";
-import { cn } from "../lib/utils";
-import { INSIGHTS_RANGES } from "../lib/scope";
+import { INSIGHTS_RANGES, cn } from "../lib/utils";
 import { formatPercent, formatPoints } from "../lib/taskMeta";
 import type {
   InsightsData,
-  InsightsGroupRow,
   InsightsMemberRow,
   InsightsRangeKey,
   InsightsSummary,
-  InsightsTeamRow,
-  ScopeMeta,
 } from "../types";
 import "./InsightsPage.css";
 
@@ -67,7 +62,6 @@ const DEFAULT_RANGE_KEY: InsightsRangeKey = "1m";
 
 const EMPTY_SUMMARY: InsightsSummary = {
   teams: 0,
-  groups: 0,
   members: 0,
   tasks: 0,
   openTasks: 0,
@@ -219,23 +213,17 @@ function CountCell({ value, tone }: { value: number; tone?: "danger" | "warn" | 
 function MemberCell({ row }: { row: InsightsMemberRow }) {
   return (
     <div className="ins-person">
-      <span className="ins-avatar" style={{ background: row.avatarColor || "var(--accent)" }}>
-        {(row.memberName || "?").slice(-2)}
-      </span>
+      <Avatar
+        name={row.memberName || "成员"}
+        src={row.avatar}
+        color={row.avatarColor || "var(--accent)"}
+        size="sm"
+      />
       <span className="ins-person-copy">
         <strong>{row.memberName}</strong>
-        <small>{row.memberTitle || "开发组成员"}</small>
+        <small>{row.memberTitle || "团队成员"}</small>
       </span>
     </div>
-  );
-}
-
-function GroupCell({ name, color }: { name: string; color?: string }) {
-  return (
-    <span className="ins-group-cell">
-      <i style={{ background: color || "var(--accent)" }} aria-hidden="true" />
-      {name}
-    </span>
   );
 }
 
@@ -279,9 +267,8 @@ function KpiStrip({ kpis }: { kpis: KpiItem[] }) {
 }
 
 export default function InsightsPage() {
-  const { data, currentTeam, currentGroup, scope, scopeLabel } = useApp();
+  const { data, currentTeam } = useApp();
   const teamId = currentTeam?.id ?? "";
-  const groupId = currentGroup?.id ?? "";
 
   const [payload, setPayload] = useState<InsightsData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -291,8 +278,6 @@ export default function InsightsPage() {
   const [rangeKey, setRangeKey] = useState<InsightsRangeKey>(DEFAULT_RANGE_KEY);
 
   const [memberSort, setMemberSort] = useState<SortState>({ key: "tasks", direction: "desc" });
-  const [groupSort, setGroupSort] = useState<SortState>({ key: "tasks", direction: "desc" });
-  const [teamSort, setTeamSort] = useState<SortState>({ key: "tasks", direction: "desc" });
   const [chartTip, setChartTip] = useState<{
     bucket: InsightsData["trend"]["buckets"][number];
     x: number;
@@ -306,7 +291,7 @@ export default function InsightsPage() {
 
   const load = useCallback(
     async (silent = false) => {
-      if (!teamId || !groupId) {
+      if (!teamId) {
         setLoading(false);
         return;
       }
@@ -318,7 +303,7 @@ export default function InsightsPage() {
       setError("");
       setErrorStatus(0);
       try {
-        const result = await api.insights({ teamId, groupId, scope, range: rangeKey });
+        const result = await api.insights({ teamId, range: rangeKey });
         setPayload(result);
       } catch (err) {
         setError(messageOf(err, "加载数据洞察失败，请稍后重试。"));
@@ -328,7 +313,7 @@ export default function InsightsPage() {
         setRefreshing(false);
       }
     },
-    [teamId, groupId, scope, rangeKey],
+    [teamId, rangeKey],
   );
 
   useEffect(() => {
@@ -336,8 +321,7 @@ export default function InsightsPage() {
   }, [load]);
 
   const summary = payload?.summary ?? EMPTY_SUMMARY;
-  const scopeMeta: ScopeMeta | null = payload?.scope ?? null;
-  const scopeLabelText = scopeMeta?.label || scopeLabel;
+  const teamLabel = currentTeam?.name ?? "当前团队";
   const buckets = payload?.trend?.buckets ?? [];
   const granularity = payload?.trend?.granularity ?? "day";
 
@@ -377,13 +361,7 @@ export default function InsightsPage() {
   const isEmpty = useMemo(() => {
     if (!payload) return false;
     const membersEmpty = !(payload.members ?? []).length;
-    return (
-      summary.tasks === 0 &&
-      summary.todos === 0 &&
-      membersEmpty &&
-      !(payload.groups ?? []).length &&
-      !(payload.teams ?? []).length
-    );
+    return summary.tasks === 0 && summary.todos === 0 && membersEmpty;
   }, [payload, summary.tasks, summary.todos]);
 
   const kpis = useMemo<KpiItem[]>(
@@ -393,7 +371,7 @@ export default function InsightsPage() {
         label: "成员",
         value: String(summary.members),
         unit: "人",
-        hint: `${summary.groups} 个开发组 · ${summary.teams} 个团队`,
+        hint: `${summary.teams} 个团队 · ${teamLabel}`,
         icon: Users,
         tone: "neutral",
       },
@@ -454,35 +432,17 @@ export default function InsightsPage() {
         tone: summary.todoCompletionRate >= 60 ? "green" : "amber",
       },
     ],
-    [summary],
+    [summary, teamLabel],
   );
 
-  const memberColumns = useMemo<Column<InsightsMemberRow>[]>(() => {
-    const columns: Column<InsightsMemberRow>[] = [
+  const memberColumns = useMemo<Column<InsightsMemberRow>[]>(
+    () => [
       {
         key: "memberName",
         label: "成员",
         value: (row) => row.memberName,
         render: (row) => <MemberCell row={row} />,
       },
-    ];
-    if (scope !== "group") {
-      columns.push({
-        key: "groupName",
-        label: "开发组",
-        value: (row) => row.groupName || "",
-        render: (row) => <GroupCell name={row.groupName || "—"} />,
-      });
-    }
-    if (scope === "all") {
-      columns.push({
-        key: "teamName",
-        label: "团队",
-        value: (row) => row.teamName || "",
-        render: (row) => <span className="ins-muted">{row.teamName || "—"}</span>,
-      });
-    }
-    columns.push(
       {
         key: "tasks",
         label: "任务",
@@ -541,162 +501,6 @@ export default function InsightsPage() {
           </span>
         ),
       },
-    );
-    return columns;
-  }, [scope]);
-
-  const groupColumns = useMemo<Column<InsightsGroupRow>[]>(() => {
-    const columns: Column<InsightsGroupRow>[] = [
-      {
-        key: "groupName",
-        label: "开发组",
-        value: (row) => row.groupName,
-        render: (row) => <GroupCell name={row.groupName} color={row.color} />,
-      },
-    ];
-    if (scope === "all") {
-      columns.push({
-        key: "teamName",
-        label: "团队",
-        value: (row) => row.teamName || "",
-        render: (row) => <span className="ins-muted">{row.teamName || "—"}</span>,
-      });
-    }
-    columns.push(
-      {
-        key: "members",
-        label: "成员",
-        value: (row) => row.members,
-        numeric: true,
-        render: (row) => <CountCell value={row.members} />,
-      },
-      {
-        key: "tasks",
-        label: "任务",
-        value: (row) => row.tasks,
-        numeric: true,
-        render: (row) => <CountCell value={row.tasks} />,
-      },
-      {
-        key: "completedTasks",
-        label: "已完成",
-        value: (row) => row.completedTasks,
-        numeric: true,
-        render: (row) => <CountCell value={row.completedTasks} />,
-      },
-      {
-        key: "completionRate",
-        label: "完成率",
-        value: (row) => row.completionRate,
-        numeric: true,
-        render: (row) => <RateCell rate={row.completionRate} />,
-      },
-      {
-        key: "overdueTasks",
-        label: "逾期",
-        value: (row) => row.overdueTasks,
-        numeric: true,
-        render: (row) => (
-          <CountCell value={row.overdueTasks} tone={row.overdueTasks ? "danger" : "muted"} />
-        ),
-      },
-      {
-        key: "blockedTasks",
-        label: "阻塞",
-        value: (row) => row.blockedTasks,
-        numeric: true,
-        render: (row) => (
-          <CountCell value={row.blockedTasks} tone={row.blockedTasks ? "warn" : "muted"} />
-        ),
-      },
-      {
-        key: "loadPoints",
-        label: "负载",
-        value: (row) => row.loadPoints,
-        numeric: true,
-        render: (row) => <span className="ins-num">{formatPoints(row.loadPoints)}</span>,
-      },
-      {
-        key: "averageLoadPercent",
-        label: "平均负载",
-        value: (row) => row.averageLoadPercent,
-        numeric: true,
-        render: (row) => <span className="ins-num">{formatPercent(row.averageLoadPercent)}</span>,
-      },
-      {
-        key: "todos",
-        label: "待办",
-        value: (row) => row.todos,
-        numeric: true,
-        render: (row) => (
-          <span className="ins-num">
-            {row.completedTodos}/{row.todos}
-          </span>
-        ),
-      },
-    );
-    return columns;
-  }, [scope]);
-
-  const teamColumns = useMemo<Column<InsightsTeamRow>[]>(
-    () => [
-      {
-        key: "teamName",
-        label: "团队",
-        value: (row) => row.teamName,
-        render: (row) => <GroupCell name={row.teamName} color={row.color} />,
-      },
-      {
-        key: "groups",
-        label: "开发组",
-        value: (row) => row.groups,
-        numeric: true,
-        render: (row) => <CountCell value={row.groups} />,
-      },
-      {
-        key: "members",
-        label: "成员",
-        value: (row) => row.members,
-        numeric: true,
-        render: (row) => <CountCell value={row.members} />,
-      },
-      {
-        key: "tasks",
-        label: "任务",
-        value: (row) => row.tasks,
-        numeric: true,
-        render: (row) => <CountCell value={row.tasks} />,
-      },
-      {
-        key: "completedTasks",
-        label: "已完成",
-        value: (row) => row.completedTasks,
-        numeric: true,
-        render: (row) => <CountCell value={row.completedTasks} />,
-      },
-      {
-        key: "completionRate",
-        label: "完成率",
-        value: (row) => row.completionRate,
-        numeric: true,
-        render: (row) => <RateCell rate={row.completionRate} />,
-      },
-      {
-        key: "overdueTasks",
-        label: "逾期",
-        value: (row) => row.overdueTasks,
-        numeric: true,
-        render: (row) => (
-          <CountCell value={row.overdueTasks} tone={row.overdueTasks ? "danger" : "muted"} />
-        ),
-      },
-      {
-        key: "loadPoints",
-        label: "负载",
-        value: (row) => row.loadPoints,
-        numeric: true,
-        render: (row) => <span className="ins-num">{formatPoints(row.loadPoints)}</span>,
-      },
     ],
     [],
   );
@@ -712,11 +516,11 @@ export default function InsightsPage() {
     );
   };
 
-  if (!currentTeam || !currentGroup) {
+  if (!currentTeam) {
     return (
       <EmptyState
-        title="还没有可查看的开发组"
-        description="请先在左侧导航选择一个团队与开发组，然后再回来查看数据洞察。"
+        title="还没有可查看的团队"
+        description="请先在左侧导航选择一个团队，然后再回来查看数据洞察。"
       />
     );
   }
@@ -729,13 +533,10 @@ export default function InsightsPage() {
         </span>
         <h1 className="page-title">数据统计与分析</h1>
         <p className="page-subtitle">
-          汇总{scopeLabelText}的成员、开发组与团队数据，结合时间范围观察任务完成、逾期与负载趋势。
+          汇总{teamLabel}的成员数据，结合时间范围观察任务完成、逾期与负载趋势。
         </p>
       </div>
       <div className="page-actions ins-page-actions">
-        <span className="badge badge-blue ins-scope-badge" title="当前浏览视角">
-          <Globe2 size={11} /> {scopeLabelText}
-        </span>
         <div className="ins-ranges" role="group" aria-label="数据范围">
           {INSIGHTS_RANGES.map((option) => (
             <button
@@ -800,7 +601,7 @@ export default function InsightsPage() {
           <EmptyState
             icon={<ChartNoAxesColumn size={24} />}
             title="当前范围内还没有数据"
-            description="切换更长的时间范围或浏览视角，或者先在任务台账中登记任务与待办。"
+            description="切换更长的时间范围，或者先在任务台账中登记任务与待办。"
           />
         </div>
       </>
@@ -926,56 +727,6 @@ export default function InsightsPage() {
             />
           </div>
         </section>
-
-        <section className="panel ins-table-panel" aria-labelledby="ins-groups-title">
-          <header className="panel-header ins-panel-head">
-            <div className="ins-panel-heading">
-              <h2 id="ins-groups-title">
-                <Gauge size={15} /> 开发组对比
-              </h2>
-              <p className="ins-panel-sub">按开发组汇总任务完成、逾期、阻塞与负载</p>
-            </div>
-            <span className="badge badge-gray ins-table-count">
-              {payload?.groups?.length ?? 0} 行
-            </span>
-          </header>
-          <div className="panel-body ins-table-body">
-            <SortableTable
-              rows={payload?.groups ?? []}
-              columns={groupColumns}
-              sort={groupSort}
-              onSort={(key) => toggleSort(setGroupSort, key)}
-              rowKey={(row) => row.groupId}
-              emptyTitle="没有开发组数据"
-              emptyDescription="当前范围内没有开发组包含活跃任务或待办。"
-            />
-          </div>
-        </section>
-
-        <section className="panel ins-table-panel" aria-labelledby="ins-teams-title">
-          <header className="panel-header ins-panel-head">
-            <div className="ins-panel-heading">
-              <h2 id="ins-teams-title">
-                <Globe2 size={15} /> 团队汇总
-              </h2>
-              <p className="ins-panel-sub">跨团队对比总任务量与完成率</p>
-            </div>
-            <span className="badge badge-gray ins-table-count">
-              {payload?.teams?.length ?? 0} 行
-            </span>
-          </header>
-          <div className="panel-body ins-table-body">
-            <SortableTable
-              rows={payload?.teams ?? []}
-              columns={teamColumns}
-              sort={teamSort}
-              onSort={(key) => toggleSort(setTeamSort, key)}
-              rowKey={(row) => row.teamId}
-              emptyTitle="没有团队数据"
-              emptyDescription="当前范围内没有团队包含活跃任务或待办。"
-            />
-          </div>
-        </section>
       </>
     );
 
@@ -1006,7 +757,7 @@ export default function InsightsPage() {
         : null}
       <p className="ins-page-note">
         <ChartNoAxesColumn size={12} /> 完成率 = 已完成任务 / 范围内任务；待办完成率 = 已完成待办 /
-        范围内待办。数据随浏览视角「{scopeLabelText}」与时间范围「{range.label}」变化
+        范围内待办。数据随时间范围「{range.label}」变化
         {data?.stats?.serverDate ? ` · 服务器日期 ${data.stats.serverDate}` : ""}。
       </p>
     </div>

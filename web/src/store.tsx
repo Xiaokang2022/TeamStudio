@@ -13,15 +13,13 @@ import { useToast } from "./components/Toast";
 import type {
   BootstrapData,
   CurrentUser,
+  ModuleFlags,
   PublicConfig,
   TeamRef,
-  GroupRef,
-  ModuleFlags,
-  ScopeKind,
 } from "./types";
-import { canManageGroup, hashRoute, navigate as navigateHash } from "./lib/utils";
-import { scopeOptionsFor, type ScopeOption } from "./lib/scope";
+import { canManageTeam, hashRoute, navigate as navigateHash } from "./lib/utils";
 
+export type ThemePreference = "auto" | "light" | "dark";
 type ThemeMode = "light" | "dark";
 
 interface AppContextValue {
@@ -31,59 +29,53 @@ interface AppContextValue {
   refreshing: boolean;
   error: string;
   route: string;
+  /** The theme actually applied to the document. */
   theme: ThemeMode;
-  scope: ScopeKind;
-  scopeLabel: string;
-  scopeOptions: ScopeOption[];
-  canManageActiveGroup: boolean;
+  /** The user's saved preference (defaults to "auto"). */
+  themePreference: ThemePreference;
+  setThemePreference: (pref: ThemePreference) => void;
+  canManageActiveTeam: boolean;
   canEditSelf: boolean;
   isAdmin: boolean;
   isSuperAdmin: boolean;
   permissions: CurrentUser["permissions"] | null;
   currentTeam: TeamRef | null;
-  currentGroup: GroupRef | null;
   moduleVisible: (module: keyof ModuleFlags) => boolean;
   reload: (silent?: boolean) => Promise<void>;
-  selectTeam: (teamId: string, groupId?: string) => Promise<void>;
-  selectGroup: (groupId: string) => Promise<void>;
-  setScope: (scope: ScopeKind) => void;
-  toggleTheme: () => void;
+  selectTeam: (teamId: string) => Promise<void>;
   navigate: (page: string, params?: Record<string, string>) => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
 const STORAGE_TEAM = "teamstudio.team";
-const STORAGE_GROUP = "teamstudio.group";
-const STORAGE_THEME = "teamstudio.theme";
-const STORAGE_SCOPE = "teamstudio.scope";
-
-function readScope(): ScopeKind {
-  try {
-    const saved = localStorage.getItem(STORAGE_SCOPE);
-    if (saved === "group" || saved === "team" || saved === "all") return saved;
-  } catch {
-    // ignore storage failures
-  }
-  return "group";
-}
+const STORAGE_THEME_PREFERENCE = "teamstudio.theme.preference";
+/** Legacy key from earlier rounds ("light" | "dark"), migrated to a preference. */
+const STORAGE_THEME_LEGACY = "teamstudio.theme";
 
 function systemTheme(): ThemeMode {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") return "light";
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-function resolveTheme(preferred: PublicConfig["site"]["theme"] | undefined): ThemeMode {
+function themeForPreference(preference: ThemePreference): ThemeMode {
+  return preference === "auto" ? systemTheme() : preference;
+}
+
+function readThemePreference(): ThemePreference {
   try {
-    const saved = localStorage.getItem(STORAGE_THEME);
-    if (saved === "light" || saved === "dark") return saved;
+    const saved = localStorage.getItem(STORAGE_THEME_PREFERENCE);
+    if (saved === "auto" || saved === "light" || saved === "dark") return saved;
+    // First run after the round-8 upgrade: migrate the old explicit choice once.
+    const legacy = localStorage.getItem(STORAGE_THEME_LEGACY);
+    if (legacy === "light" || legacy === "dark") {
+      localStorage.setItem(STORAGE_THEME_PREFERENCE, legacy);
+      localStorage.removeItem(STORAGE_THEME_LEGACY);
+      return legacy;
+    }
   } catch {
     // ignore storage failures
   }
-  // The site default is "auto": follow the operating system when the visitor has
-  // never picked an explicit theme on this browser.
-  const mode = preferred?.mode ?? "auto";
-  if (mode === "auto") return systemTheme();
-  return mode;
+  return "auto";
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -93,51 +85,45 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [route, setRoute] = useState(() => hashRoute().page);
+  const [themePreference, setThemePreferenceState] = useState<ThemePreference>(
+    readThemePreference,
+  );
   const [theme, setTheme] = useState<ThemeMode>(() => {
-    const resolved = resolveTheme(undefined);
     // Apply before the first paint so "follow the system" never flashes a
     // different palette than the one the visitor's OS asks for.
+    const resolved = themeForPreference(readThemePreference());
     document.documentElement.dataset.theme = resolved;
     return resolved;
   });
-  const [scope, setScopeState] = useState<ScopeKind>(readScope);
   const selectionRef = useRef({
     teamId: localStorage.getItem(STORAGE_TEAM) ?? "",
-    groupId: localStorage.getItem(STORAGE_GROUP) ?? "",
   });
   const requestId = useRef(0);
 
-  const fetchBootstrap = useCallback(
-    async (silent = false) => {
-      const id = ++requestId.current;
-      if (silent) setRefreshing(true);
-      else setLoading(true);
-      setError("");
-      try {
-        const result = await api.bootstrap(selectionRef.current.teamId, selectionRef.current.groupId);
-        if (id !== requestId.current) return;
-        setData(result);
-        if (result.active.team) {
-          selectionRef.current.teamId = result.active.team.id;
-          localStorage.setItem(STORAGE_TEAM, result.active.team.id);
-        }
-        if (result.active.group) {
-          selectionRef.current.groupId = result.active.group.id;
-          localStorage.setItem(STORAGE_GROUP, result.active.group.id);
-        }
-      } catch (err) {
-        if (id !== requestId.current) return;
-        const message = err instanceof ApiError ? err.message : "加载工作区失败";
-        setError(message);
-      } finally {
-        if (id === requestId.current) {
-          setLoading(false);
-          setRefreshing(false);
-        }
+  const fetchBootstrap = useCallback(async (silent = false) => {
+    const id = ++requestId.current;
+    if (silent) setRefreshing(true);
+    else setLoading(true);
+    setError("");
+    try {
+      const result = await api.bootstrap(selectionRef.current.teamId || undefined);
+      if (id !== requestId.current) return;
+      setData(result);
+      if (result.active.team) {
+        selectionRef.current.teamId = result.active.team.id;
+        localStorage.setItem(STORAGE_TEAM, result.active.team.id);
       }
-    },
-    [],
-  );
+    } catch (err) {
+      if (id !== requestId.current) return;
+      const message = err instanceof ApiError ? err.message : "加载工作区失败";
+      setError(message);
+    } finally {
+      if (id === requestId.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    }
+  }, []);
 
   useEffect(() => {
     void fetchBootstrap();
@@ -168,74 +154,63 @@ export function AppProvider({ children }: { children: ReactNode }) {
     window.history.replaceState({}, "", `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`);
   }, [toast]);
 
+  // Theme resolution: the user preference always wins. "auto" follows the
+  // operating system and keeps a live `prefers-color-scheme` listener — the
+  // site-level `theme.mode` never decides light/dark in round 8.
+  useEffect(() => {
+    const root = document.documentElement;
+    if (themePreference !== "auto") {
+      root.dataset.theme = themePreference;
+      setTheme(themePreference);
+      return undefined;
+    }
+    if (typeof window.matchMedia !== "function") {
+      root.dataset.theme = "light";
+      setTheme("light");
+      return undefined;
+    }
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      const next: ThemeMode = media.matches ? "dark" : "light";
+      root.dataset.theme = next;
+      setTheme(next);
+    };
+    apply();
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [themePreference]);
+
+  // Accent / radius / title still come from the site config.
   useEffect(() => {
     const config = data?.config;
     if (!config) return;
-    const mode = resolveTheme(config.site.theme);
-    setTheme(mode);
     const root = document.documentElement;
-    root.dataset.theme = mode;
     root.style.setProperty("--accent", config.site.theme.accent);
     root.style.setProperty("--accent-secondary", config.site.theme.accentSecondary);
     root.style.setProperty("--radius-card", `${config.site.theme.radius}px`);
     document.title = `${config.site.name} · TeamStudio`;
-    if (config.site.theme.mode !== "auto" || localStorage.getItem(STORAGE_THEME)) return;
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = (event: MediaQueryListEvent) => {
-      const next = event.matches ? "dark" : "light";
-      setTheme(next);
-      root.dataset.theme = next;
-    };
-    media.addEventListener("change", onChange);
-    return () => media.removeEventListener("change", onChange);
   }, [data?.config]);
 
-  const selectTeam = useCallback(
-    async (teamId: string, groupId?: string) => {
-      const team = data?.teams.find((item) => item.id === teamId);
-      const targetGroup = groupId || team?.groups[0]?.id || "";
-      selectionRef.current = { teamId, groupId: targetGroup };
-      localStorage.setItem(STORAGE_TEAM, teamId);
-      if (targetGroup) localStorage.setItem(STORAGE_GROUP, targetGroup);
-      await fetchBootstrap(true);
-    },
-    [data?.teams, fetchBootstrap],
-  );
-
-  const selectGroup = useCallback(
-    async (groupId: string) => {
-      const team =
-        data?.teams.find((item) => item.groups.some((group) => group.id === groupId)) ??
-        data?.active.team;
-      if (!team) return;
-      selectionRef.current = { teamId: team.id, groupId };
-      localStorage.setItem(STORAGE_TEAM, team.id);
-      localStorage.setItem(STORAGE_GROUP, groupId);
-      await fetchBootstrap(true);
-    },
-    [data?.active.team, data?.teams, fetchBootstrap],
-  );
-
-  const toggleTheme = useCallback(() => {
-    setTheme((current) => {
-      const next = current === "dark" ? "light" : "dark";
-      localStorage.setItem(STORAGE_THEME, next);
-      document.documentElement.dataset.theme = next;
-      return next;
-    });
-  }, []);
-
-  // Browsing scope is a view preference, not a permission boundary: every identity
-  // (guest included) may pick 开发组 / 团队 / 所有团队. The backend already allows
-  // `?scope=all` for everyone, so store the requested scope verbatim and persist it.
-  const setScope = useCallback((next: ScopeKind) => {
-    setScopeState(next);
+  const setThemePreference = useCallback((preference: ThemePreference) => {
+    setThemePreferenceState(preference);
     try {
-      localStorage.setItem(STORAGE_SCOPE, next);
+      localStorage.setItem(STORAGE_THEME_PREFERENCE, preference);
+      localStorage.removeItem(STORAGE_THEME_LEGACY);
     } catch {
       // ignore storage failures
     }
   }, []);
+
+  const selectTeam = useCallback(
+    async (teamId: string) => {
+      if (!teamId) return;
+      if (teamId === selectionRef.current.teamId && data?.active.team?.id === teamId) return;
+      selectionRef.current = { teamId };
+      localStorage.setItem(STORAGE_TEAM, teamId);
+      await fetchBootstrap(true);
+    },
+    [data?.active.team?.id, fetchBootstrap],
+  );
 
   const navigate = useCallback((page: string, params?: Record<string, string>) => {
     navigateHash(page, params);
@@ -243,67 +218,59 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const me = data?.me ?? null;
   const currentTeam = data?.active.team ?? null;
-  const currentGroup = data?.active.group ?? null;
+  const isGuest = !me || !me.authenticated || me.source === "guest";
   const isSuperAdmin = Boolean(me?.isSuperAdmin || me?.isDeviceAdmin);
   const permissions = me?.permissions ?? null;
   const isAdmin = Boolean(me?.isDeviceAdmin || me?.isSuperAdmin || me?.admin.role);
-  const scopeOptions = useMemo<ScopeOption[]>(() => scopeOptionsFor(isSuperAdmin), [isSuperAdmin]);
-  const canManageActiveGroup = canManageGroup(me, currentTeam?.id, currentGroup?.id);
-  const scopeLabel =
-    scope === "all"
-      ? "所有团队"
-      : scope === "team"
-        ? currentTeam?.name ?? "当前团队"
-        : currentGroup?.name ?? "当前开发组";
+  const canManageActiveTeam = canManageTeam(me, currentTeam?.id ?? null);
+  const config = data?.config ?? null;
+  const moduleVisible = useCallback(
+    (module: keyof ModuleFlags) =>
+      Boolean(config?.modules[module]) &&
+      (!isGuest || Boolean(config?.guestModules[module])),
+    [config, isGuest],
+  );
 
   const value = useMemo<AppContextValue>(
     () => ({
       data,
-      config: data?.config ?? null,
+      config,
       loading,
       refreshing,
       error,
       route,
       theme,
-      scope,
-      scopeLabel,
-      scopeOptions,
-      canManageActiveGroup,
-      canEditSelf: Boolean(data?.me.permissions.canEditSelf),
+      themePreference,
+      setThemePreference,
+      canManageActiveTeam,
+      canEditSelf: Boolean(permissions?.canEditSelf),
       isAdmin,
       isSuperAdmin,
       permissions,
       currentTeam,
-      currentGroup,
-      moduleVisible: (module) => Boolean(data?.config.modules[module]),
+      moduleVisible,
       reload: fetchBootstrap,
       selectTeam,
-      selectGroup,
-      setScope,
-      toggleTheme,
       navigate,
     }),
     [
       data,
+      config,
       loading,
       refreshing,
       error,
       route,
       theme,
-      scope,
-      scopeLabel,
-      scopeOptions,
-      canManageActiveGroup,
+      themePreference,
+      setThemePreference,
+      canManageActiveTeam,
+      permissions,
       isAdmin,
       isSuperAdmin,
-      permissions,
       currentTeam,
-      currentGroup,
+      moduleVisible,
       fetchBootstrap,
       selectTeam,
-      selectGroup,
-      setScope,
-      toggleTheme,
       navigate,
     ],
   );

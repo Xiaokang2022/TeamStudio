@@ -7,18 +7,10 @@ interface AvatarProps {
   src?: string | null;
   color?: string;
   size?: "xs" | "sm" | "md" | "lg" | "xl";
-  status?: string;
   className?: string;
 }
 
-const STATUS_TONE: Record<string, string> = {
-  available: "green",
-  busy: "orange",
-  remote: "blue",
-  offline: "gray",
-};
-
-export function Avatar({ name, src, color = "#5865f2", size = "md", status, className }: AvatarProps) {
+export function Avatar({ name, src, color = "#5865f2", size = "md", className }: AvatarProps) {
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
@@ -54,7 +46,6 @@ export function Avatar({ name, src, color = "#5865f2", size = "md", status, clas
       ) : (
         <span>{initials(name)}</span>
       )}
-      {status ? <i className={cn("avatar-status", `status-${STATUS_TONE[status] ?? "gray"}`)} /> : null}
     </span>
   );
 }

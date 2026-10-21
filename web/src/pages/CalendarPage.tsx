@@ -56,37 +56,10 @@ function priorityBadgeClass(priority: TodoPriority): string {
 }
 
 export default function CalendarPage() {
-  const { data, config, currentTeam, currentGroup, canManageActiveGroup, navigate, scope, scopeLabel } = useApp();
+  const { data, config, currentTeam, canManageActiveTeam, navigate } = useApp();
   const { toast } = useToast();
   const me = data?.me ?? null;
   const teamId = currentTeam?.id ?? "";
-  const groupId = currentGroup?.id ?? "";
-  const aggregate = scope !== "group";
-
-  // Group metadata lookup: aggregate payloads carry `groupId`; resolve its
-  // team/name/color to render badges and route item-level writes correctly.
-  const groupIndex = useMemo(() => {
-    const map = new Map<string, { teamId: string; name: string; color: string }>();
-    data?.teams.forEach((team) =>
-      team.groups.forEach((group) =>
-        map.set(group.id, { teamId: team.id, name: group.name, color: group.color }),
-      ),
-    );
-    return map;
-  }, [data?.teams]);
-
-  const targetOf = useCallback(
-    (todo: Todo) => {
-      const meta = todo.groupId ? groupIndex.get(todo.groupId) : undefined;
-      return {
-        teamId: meta?.teamId || teamId,
-        groupId: todo.groupId || groupId,
-        groupName: meta?.name || currentGroup?.name || "",
-        groupColor: meta?.color || "#8b8c88",
-      };
-    },
-    [groupIndex, teamId, groupId, currentGroup?.name],
-  );
 
   const weekStartsOn: 0 | 1 = config?.calendar.weekStartsOn ?? 1;
   const showWeekends = config?.calendar.showWeekends !== false;
@@ -105,12 +78,12 @@ export default function CalendarPage() {
 
   const loadTodos = useCallback(
     async (silent = false) => {
-      if (!teamId || !groupId) return;
+      if (!teamId) return;
       if (silent) setRefreshing(true);
       else setLoading(true);
       setError("");
       try {
-        const result = await api.todos(teamId, groupId, month, scope);
+        const result = await api.todos(teamId, month);
         setTodos(result.todos);
       } catch (err) {
         setError(messageOf(err, "加载协作日历失败，请稍后重试。"));
@@ -119,7 +92,7 @@ export default function CalendarPage() {
         setRefreshing(false);
       }
     },
-    [teamId, groupId, month, scope],
+    [teamId, month],
   );
 
   useEffect(() => {
@@ -128,10 +101,10 @@ export default function CalendarPage() {
   }, [loadTodos]);
 
   useEffect(() => {
-    if (!teamId || !groupId) return;
+    if (!teamId) return;
     let cancelled = false;
     api
-      .overview(teamId, groupId, scope)
+      .overview(teamId)
       .then((result) => {
         if (!cancelled) setMembers(result.members);
       })
@@ -141,7 +114,7 @@ export default function CalendarPage() {
     return () => {
       cancelled = true;
     };
-  }, [teamId, groupId, scope]);
+  }, [teamId]);
 
   // `#/calendar?new=1` (topbar quick-create) opens the create dialog once.
   useEffect(() => {
@@ -164,13 +137,13 @@ export default function CalendarPage() {
     [members, me?.linkedMemberId],
   );
   const guestCreate = Boolean(!me?.authenticated && config?.features.allowGuestTodoCreate);
-  const canCreate = Boolean(canManageActiveGroup || myMember || guestCreate);
+  const canCreate = Boolean(canManageActiveTeam || myMember || guestCreate);
   const defaultAssigneeId = myMember?.id ?? null;
 
   const canEditTodo = useCallback(
     (todo: Todo) => {
       if (!me) return false;
-      if (canManageActiveGroup) return true;
+      if (canManageActiveTeam) return true;
       if (todo.createdBy && todo.createdBy === me.id) return true;
       return Boolean(
         me.permissions.canEditSelf &&
@@ -178,21 +151,10 @@ export default function CalendarPage() {
           todo.assigneeMemberId === me.linkedMemberId,
       );
     },
-    [me, canManageActiveGroup],
+    [me, canManageActiveTeam],
   );
 
   const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
-
-  // In aggregate scope, a new todo lands in the current group: only offer the
-  // members of the group the dialog is actually writing to.
-  const dialogMembers = useMemo(() => {
-    if (!aggregate) return members;
-    const targetGroupId = dialog.todo ? targetOf(dialog.todo).groupId : currentGroup?.id;
-    const scoped = members.filter(
-      (member) => (member.groupId ?? currentGroup?.id ?? "") === (targetGroupId ?? ""),
-    );
-    return scoped.length ? scoped : members;
-  }, [aggregate, members, dialog.todo, targetOf, currentGroup?.id]);
 
   const [yearText, monthText] = month.split("-");
   const year = Number(yearText);
@@ -260,10 +222,9 @@ export default function CalendarPage() {
 
   const toggleTodo = async (todo: Todo) => {
     if (!canEditTodo(todo)) return;
-    const target = targetOf(todo);
     setBusyId(todo.id);
     try {
-      const result = await api.updateTodo(target.teamId, target.groupId, todo.id, {
+      const result = await api.updateTodo(teamId, todo.id, {
         status: todo.status === "done" ? "todo" : "done",
       });
       setTodos((current) => current.map((item) => (item.id === todo.id ? result.todo : item)));
@@ -277,10 +238,9 @@ export default function CalendarPage() {
 
   const removeTodo = async () => {
     if (!deleting) return;
-    const target = targetOf(deleting);
     setBusyId(deleting.id);
     try {
-      await api.deleteTodo(target.teamId, target.groupId, deleting.id);
+      await api.deleteTodo(teamId, deleting.id);
       setTodos((current) => current.filter((item) => item.id !== deleting.id));
       setDeleting(null);
       toast("待办已删除", "success");
@@ -303,11 +263,11 @@ export default function CalendarPage() {
     [month, loadTodos],
   );
 
-  if (!currentTeam || !currentGroup) {
+  if (!currentTeam) {
     return (
       <EmptyState
-        title="还没有可查看的开发组"
-        description="请先在左侧导航选择一个团队与开发组，然后再回来查看协作日历。"
+        title="还没有可查看的团队"
+        description="请先在左侧导航选择一个团队，然后再回来查看协作日历。"
       />
     );
   }
@@ -439,14 +399,6 @@ export default function CalendarPage() {
                   selected={cell.iso === selectedDate}
                   onSelect={setSelectedDate}
                   onOpenTodo={openTodo}
-                  groupOf={
-                    aggregate
-                      ? (todo) => {
-                          const target = targetOf(todo);
-                          return { name: target.groupName, color: target.groupColor };
-                        }
-                      : undefined
-                  }
                 />
               ))}
             </div>
@@ -474,7 +426,6 @@ export default function CalendarPage() {
                 {selectedTodos.length
                   ? `${selectedTodos.length} 条安排 · 点击左侧圆点可切换完成`
                   : "这一天暂时空闲"}
-                {aggregate ? ` · 聚合视角：${scopeLabel}` : ""}
               </p>
             </div>
             {canCreate ? (
@@ -496,11 +447,6 @@ export default function CalendarPage() {
                     canEdit={canEditTodo(todo)}
                     busy={busyId === todo.id}
                     member={todo.assigneeMemberId ? memberById.get(todo.assigneeMemberId) : undefined}
-                    group={
-                      aggregate
-                        ? { name: targetOf(todo).groupName, color: targetOf(todo).groupColor }
-                        : null
-                    }
                     onToggle={(item) => void toggleTodo(item)}
                     onEdit={openTodo}
                     onDelete={setDeleting}
@@ -544,13 +490,11 @@ export default function CalendarPage() {
       <TodoDialog
         open={dialog.open}
         todo={dialog.todo}
-        teamId={dialog.todo ? targetOf(dialog.todo).teamId : teamId}
-        groupId={dialog.todo ? targetOf(dialog.todo).groupId : groupId}
-        createGroupName={aggregate ? currentGroup?.name : undefined}
-        members={dialogMembers}
+        teamId={teamId}
+        members={members}
         defaultDate={selectedDate}
         defaultAssigneeId={defaultAssigneeId}
-        canAssignOthers={canManageActiveGroup}
+        canAssignOthers={canManageActiveTeam}
         allowPastDue={allowPastDue}
         onClose={() => setDialog({ open: false, todo: null })}
         onSaved={(saved) => {
@@ -578,25 +522,15 @@ export default function CalendarPage() {
   );
 }
 
-function GroupBadge({ name, color }: { name: string; color: string }) {
-  return (
-    <span className="badge badge-gray cal-group-badge" title={`所属开发组：${name}`}>
-      <i className="dot" style={{ background: color }} />
-      {name}
-    </span>
-  );
-}
-
 interface CalendarDayCellProps {
   cell: CalendarCell;
   todos: Todo[];
   selected: boolean;
   onSelect: (iso: string) => void;
   onOpenTodo: (todo: Todo) => void;
-  groupOf?: (todo: Todo) => { name: string; color: string } | null;
 }
 
-function CalendarDayCell({ cell, todos, selected, onSelect, onOpenTodo, groupOf }: CalendarDayCellProps) {
+function CalendarDayCell({ cell, todos, selected, onSelect, onOpenTodo }: CalendarDayCellProps) {
   const visibleTodos = todos.slice(0, 3);
   const doneCount = todos.filter((todo) => todo.status === "done").length;
   const handleKey = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -647,16 +581,6 @@ function CalendarDayCell({ cell, todos, selected, onSelect, onOpenTodo, groupOf 
           >
             <i className="cal-chip-dot" />
             <span className="cal-chip-title">{todo.title}</span>
-            {groupOf
-              ? (() => {
-                  const group = groupOf(todo);
-                  return group ? (
-                    <span className="cal-chip-group" title={`所属开发组：${group.name}`}>
-                      {group.name}
-                    </span>
-                  ) : null;
-                })()
-              : null}
             {todo.assigneeName ? <span className="cal-chip-assignee">{todo.assigneeName}</span> : null}
           </button>
         ))}
@@ -673,16 +597,18 @@ interface TodoRowProps {
   canEdit: boolean;
   busy: boolean;
   member?: Member;
-  group?: { name: string; color: string } | null;
   onToggle: (todo: Todo) => void;
   onEdit: (todo: Todo) => void;
   onDelete: (todo: Todo) => void;
 }
 
-function TodoRow({ todo, canEdit, busy, member, group, onToggle, onEdit, onDelete }: TodoRowProps) {
+function TodoRow({ todo, canEdit, busy, member, onToggle, onEdit, onDelete }: TodoRowProps) {
   const priority = PRIORITY_META[todo.priority] ?? PRIORITY_META.normal;
   const due = dueLabel(todo);
   const done = todo.status === "done";
+  const assigneeName = member?.name ?? todo.assigneeName ?? "";
+  const assigneeAvatar = member?.avatar ?? todo.assigneeAvatar ?? "";
+  const assigneeColor = member?.avatarColor ?? todo.assigneeColor ?? "#7c3aed";
   return (
     <li className={cn("cal-todo", `priority-${todo.priority}`, done && "is-done")}>
       <button
@@ -707,11 +633,10 @@ function TodoRow({ todo, canEdit, busy, member, group, onToggle, onEdit, onDelet
           <span className={cn("badge", priorityBadgeClass(todo.priority))}>{priority.label}</span>
         </div>
         <div className="cal-todo-meta">
-          {group && group.name ? <GroupBadge name={group.name} color={group.color} /> : null}
-          {member ? (
+          {assigneeName ? (
             <span className="cal-todo-assignee">
-              <Avatar name={member.name} color={member.avatarColor} size="xs" />
-              {member.name}
+              <Avatar name={assigneeName} src={assigneeAvatar} color={assigneeColor} size="xs" />
+              {assigneeName}
             </span>
           ) : (
             <span className="cal-todo-assignee is-muted">

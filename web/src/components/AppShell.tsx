@@ -4,14 +4,13 @@ import {
   Building2,
   CalendarDays,
   ChartNoAxesColumn,
+  Check,
   ChevronDown,
   ChevronsUpDown,
   CircleUserRound,
   Command,
   FolderCog,
-  Globe2,
   Info,
-  Layers3,
   LayoutDashboard,
   Link2,
   ListTodo,
@@ -19,6 +18,7 @@ import {
   LogOut,
   Megaphone,
   Menu,
+  Monitor,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
@@ -29,12 +29,11 @@ import {
   Sun,
   Trophy,
   UserRound,
-  UsersRound,
   Waypoints,
   X,
 } from "lucide-react";
 import { api } from "../api";
-import { useApp } from "../store";
+import { useApp, type ThemePreference } from "../store";
 import { useToast } from "./Toast";
 import { Avatar } from "./Avatar";
 import { AboutDialog } from "./AboutDialog";
@@ -43,10 +42,14 @@ import { cn, formatFullDate } from "../lib/utils";
 import type { ModuleFlags } from "../types";
 import "./ShellScope.css";
 
-const NAV_GROUPS: {
+interface NavItem {
+  key: string;
   label: string;
-  items: { key: string; label: string; icon: typeof LayoutDashboard; module: keyof ModuleFlags; adminOnly?: boolean }[];
-}[] = [
+  icon: typeof LayoutDashboard;
+  module: keyof ModuleFlags;
+}
+
+const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   {
     label: "工作台",
     items: [
@@ -81,6 +84,12 @@ const PAGE_LABELS: Record<string, string> = {
   login: "登录",
 };
 
+const THEME_OPTIONS: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
+  { value: "auto", label: "跟随系统", icon: Monitor },
+  { value: "light", label: "浅色", icon: Sun },
+  { value: "dark", label: "深色", icon: Moon },
+];
+
 const SIDEBAR_STORAGE = "teamstudio.sidebar.collapsed";
 
 function readSidebarCollapsed(): boolean {
@@ -101,9 +110,11 @@ function roleLabel(
   if (isGuest) return "访客";
   if (isSuper || role === "super") return "超级管理员";
   if (role === "team_admin") return "团队管理员";
-  if (role === "group_admin") return "开发组管理员";
   return "成员";
 }
+
+const themePreferenceLabel = (preference: ThemePreference): string =>
+  THEME_OPTIONS.find((option) => option.value === preference)?.label ?? "跟随系统";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const {
@@ -111,15 +122,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     config,
     route,
     currentTeam,
-    currentGroup,
     selectTeam,
-    selectGroup,
-    scope,
-    scopeLabel,
-    scopeOptions,
-    setScope,
-    toggleTheme,
     theme,
+    themePreference,
+    setThemePreference,
     moduleVisible,
     isAdmin,
     isSuperAdmin,
@@ -132,21 +138,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== "undefined" ? window.matchMedia("(max-width: 960px)").matches : false,
   );
-  const [groupMenuOpen, setGroupMenuOpen] = useState(false);
   const [teamMenuOpen, setTeamMenuOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
-  const groupMenuRef = useRef<HTMLDivElement>(null);
   const teamMenuRef = useRef<HTMLDivElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
+  const themeMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const close = (event: MouseEvent) => {
-      if (!groupMenuRef.current?.contains(event.target as Node)) setGroupMenuOpen(false);
       if (!teamMenuRef.current?.contains(event.target as Node)) setTeamMenuOpen(false);
       if (!userMenuRef.current?.contains(event.target as Node)) setUserMenuOpen(false);
+      if (!themeMenuRef.current?.contains(event.target as Node)) setThemeMenuOpen(false);
     };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
@@ -161,9 +167,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     setSidebarOpen(false);
-    setGroupMenuOpen(false);
     setTeamMenuOpen(false);
-  }, [route, currentGroup?.id]);
+    setUserMenuOpen(false);
+    setThemeMenuOpen(false);
+  }, [route, currentTeam?.id]);
 
   const effectiveCollapsed = collapsed && !isMobile;
 
@@ -177,22 +184,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       }
       return next;
     });
-    setGroupMenuOpen(false);
     setTeamMenuOpen(false);
-  };
-
-  const openGroupMenu = () => {
-    if (effectiveCollapsed) {
-      setCollapsed(false);
-      try {
-        localStorage.setItem(SIDEBAR_STORAGE, "0");
-      } catch {
-        // ignore
-      }
-      setGroupMenuOpen(true);
-      return;
-    }
-    setGroupMenuOpen((value) => !value);
   };
 
   const openTeamMenu = () => {
@@ -219,6 +211,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const role = roleLabel(me.admin.role, me.isDeviceAdmin, isGuest, me.isSuperAdmin);
   const avatarColor = me.isDeviceAdmin ? "#0ea5e9" : me.avatarColor || "#7c3aed";
   const emailLoginReady = config.auth.emailLogin.enabled && config.email.configured;
+  const quickThemeIcon = theme === "dark" ? Sun : Moon;
+  const QuickThemeIcon = quickThemeIcon;
+  const preferenceIcon =
+    themePreference === "auto" ? Monitor : theme === "dark" ? Moon : Sun;
+  const PreferenceIcon = preferenceIcon;
+  const selectThemePreference = (preference: ThemePreference) => {
+    setThemeMenuOpen(false);
+    setThemePreference(preference);
+  };
 
   const handleLogout = async () => {
     setLoggingOut(true);
@@ -239,8 +240,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   /**
    * Deep-link the signed-in account's own member card. `linkedMemberId` is resolved
-   * per active development group by the backend, so the button is hidden when the
-   * current group has no archive (the menu entry keeps the backend contract
+   * per active team by the backend, so the button is hidden when the current team
+   * has no archive (the menu entry keeps the backend contract
    * `me.linkedMemberId === null` -> no dead link).
    *
    * Assigning an already identical hash does not emit `hashchange`, which would leave
@@ -284,92 +285,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </button>
         </div>
 
-        <div className="group-switcher" ref={groupMenuRef}>
-          <button
-            className={cn("group-switcher-button", groupMenuOpen && "is-open")}
-            onClick={openGroupMenu}
-            aria-expanded={groupMenuOpen}
-            aria-label="切换开发组"
-            title={effectiveCollapsed ? currentGroup?.name ?? "切换开发组" : undefined}
-          >
-            <span
-              className="group-badge"
-              style={{ background: currentGroup?.color ?? config.site.theme.accent }}
-            >
-              <Layers3 size={17} />
-            </span>
-            <span className="group-copy">
-              <small>当前开发组</small>
-              <strong>{currentGroup?.name ?? "开发组"}</strong>
-            </span>
-            <ChevronsUpDown size={15} />
-          </button>
-          {groupMenuOpen ? (
-            <div className="popover group-popover">
-              <div className="popover-label">切换开发组</div>
-              {currentTeam?.groups.map((group) => {
-                const active = group.id === currentGroup?.id;
-                return (
-                  <button
-                    key={group.id}
-                    className={cn("group-option", active && "active")}
-                    onClick={() => {
-                      setGroupMenuOpen(false);
-                      if (group.id !== currentGroup?.id) void selectGroup(group.id);
-                    }}
-                  >
-                    <span className="group-option-dot" style={{ background: group.color }} />
-                    <span className="group-option-copy">
-                      <strong>{group.name}</strong>
-                      <small>{group.description || "暂无简介"}</small>
-                    </span>
-                    <span className="group-option-count">{group.memberCount}</span>
-                    {active ? <span className="group-option-current">当前</span> : null}
-                  </button>
-                );
-              })}
-              <div className="popover-note">
-                <Layers3 size={13} /> 开发组内数据独立；切换后所有模块同步刷新
-              </div>
-            </div>
-          ) : null}
-        </div>
-
-        <div className="scope-switcher" role="group" aria-label="浏览视角">
-          <div className="scope-switcher-label">
-            <Globe2 size={13} /> 浏览视角
-          </div>
-          <div className="scope-switcher-options">
-            {scopeOptions.map((option) => (
-              <button
-                key={option.key}
-                type="button"
-                className={cn("scope-option", scope === option.key && "is-active")}
-                aria-pressed={scope === option.key}
-                title={option.description}
-                onClick={() => setScope(option.key)}
-              >
-                {option.key === "group" ? (
-                  <Layers3 size={14} />
-                ) : option.key === "team" ? (
-                  <UsersRound size={14} />
-                ) : (
-                  <Globe2 size={14} />
-                )}
-                <span>{option.shortLabel}</span>
-              </button>
-            ))}
-          </div>
-          <p className="scope-switcher-hint">
-            正在浏览：<strong>{scopeLabel}</strong>
-          </p>
-        </div>
-
         <nav className="main-nav">
           {NAV_GROUPS.map((group) => {
-            const items = group.items.filter(
-              (item) => moduleVisible(item.module) && (!item.adminOnly || isAdmin),
-            );
+            const items = group.items.filter((item) => moduleVisible(item.module));
             if (!items.length) return null;
             return (
               <div className="nav-group" key={group.label}>
@@ -428,6 +346,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <span className="team-copy">
                 <small>当前团队</small>
                 <strong>{currentTeam?.name ?? "团队工作室"}</strong>
+                <small className="team-member-count">
+                  {currentTeam ? `${currentTeam.memberCount} 位成员` : "尚未创建团队"}
+                </small>
               </span>
               <ChevronsUpDown size={15} />
             </button>
@@ -446,13 +367,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     <span className="team-option-dot" style={{ background: team.color }} />
                     <span>
                       <strong>{team.name}</strong>
-                      <small>{team.groups.length} 个开发组</small>
+                      <small>{team.memberCount} 位成员</small>
                     </span>
                     {team.id === currentTeam?.id ? <span className="team-current">当前</span> : null}
                   </button>
                 ))}
                 <div className="popover-note">
-                  <Command size={13} /> 数据按团队与开发组自动隔离
+                  <Command size={13} /> 数据按团队隔离
                 </div>
               </div>
             ) : null}
@@ -493,21 +414,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <Menu size={20} />
             </button>
             <div className="breadcrumb">
-              {scope === "group" ? (
-                <>
-                  <span>{currentTeam?.name}</span>
-                  <i>/</i>
-                  <strong>{currentGroup?.name}</strong>
-                </>
-              ) : scope === "all" ? (
-                <strong className="breadcrumb-scope">
-                  <Globe2 size={13} /> 所有团队
-                </strong>
-              ) : (
-                <strong className="breadcrumb-scope">
-                  <UsersRound size={13} /> {currentTeam?.name ?? "当前团队"}
-                </strong>
-              )}
+              <span>{currentTeam?.name ?? "团队工作室"}</span>
               <i>/</i>
               <span className="breadcrumb-page">{PAGE_LABELS[route] ?? "团队工作室"}</span>
             </div>
@@ -523,8 +430,51 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <Bell size={18} />
               {data.stats.pinned > 0 ? <span className="dot-badge" /> : null}
             </button>
-            <button className="icon-button" onClick={toggleTheme} aria-label="切换主题" title="切换明暗主题">
-              {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+            <div className="theme-menu-wrap" ref={themeMenuRef}>
+              <button
+                className="icon-button theme-menu-trigger"
+                onClick={() => setThemeMenuOpen((value) => !value)}
+                aria-label="主题偏好"
+                aria-expanded={themeMenuOpen}
+                aria-haspopup="menu"
+                title={`主题偏好：${themePreferenceLabel(themePreference)}`}
+              >
+                <PreferenceIcon size={18} />
+              </button>
+              {themeMenuOpen ? (
+                <div className="popover theme-popover" role="menu" aria-label="主题偏好">
+                  <div className="popover-label">外观主题</div>
+                  {THEME_OPTIONS.map((option) => {
+                    const OptionIcon = option.icon;
+                    const active = themePreference === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={active}
+                        className={cn("theme-option", active && "active")}
+                        onClick={() => selectThemePreference(option.value)}
+                      >
+                        <OptionIcon size={15} />
+                        <span>{option.label}</span>
+                        {active ? <Check size={14} className="theme-check" /> : null}
+                      </button>
+                    );
+                  })}
+                  <div className="popover-note">
+                    <Monitor size={13} /> 跟随系统时随操作系统明暗实时切换
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            <button
+              className="icon-button quick-theme-toggle"
+              onClick={() => setThemePreference(theme === "dark" ? "light" : "dark")}
+              aria-label="切换明暗主题"
+              title={theme === "dark" ? "切换到浅色" : "切换到深色"}
+            >
+              <QuickThemeIcon size={18} />
             </button>
             {me.authenticated && (isAdmin || me.linkedMemberId) ? (
               <button
@@ -560,7 +510,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                         <span>
                           {me.email ||
                             (me.isDeviceAdmin
-                              ? "本机始终拥有管理权限"
+                              ? "部署设备身份，始终拥有管理权限"
                               : me.source === "ip"
                                 ? "IP 白名单身份"
                                 : "已通过身份验证")}

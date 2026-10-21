@@ -31,8 +31,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
 for (const viewport of viewports) {
   const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
   await context.addInitScript(() => {
-    localStorage.setItem("teamstudio.theme", "light");
-    localStorage.setItem("teamstudio.scope", "all");
+    localStorage.setItem("teamstudio.theme.preference", "light");
   });
   const page = await context.newPage();
   const errors = [];
@@ -73,8 +72,7 @@ for (const viewport of viewports) {
 {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   await context.addInitScript(() => {
-    localStorage.setItem("teamstudio.theme", "dark");
-    localStorage.setItem("teamstudio.scope", "all");
+    localStorage.setItem("teamstudio.theme.preference", "dark");
   });
   const page = await context.newPage();
   const errors = [];

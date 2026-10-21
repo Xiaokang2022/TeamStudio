@@ -26,7 +26,6 @@ function roleText(isDeviceAdmin: boolean, isSuperAdmin: boolean, userRole: strin
   // role itself stays the plain "超级管理员" to avoid repeating the same information.
   if (isDeviceAdmin || isSuperAdmin) return "超级管理员";
   if (userRole === "team_admin") return "团队管理员";
-  if (userRole === "group_admin") return "开发组管理员";
   return "成员";
 }
 
@@ -121,7 +120,9 @@ export default function LoginPage() {
       setCode("");
       setCountdown(result.resendAfterSeconds || resendSeconds);
       toast(
-        result.registered ? "验证码已发送，请查收邮箱" : "验证码已发送，验证通过后将自动注册成员账号",
+        result.registered
+          ? "验证码已发送，请查收邮箱"
+          : "验证码已发送，验证通过后将自动激活或创建账号",
         "success",
       );
     } catch (err) {
@@ -221,7 +222,7 @@ export default function LoginPage() {
           {deviceLoggingIn ? "正在切换…" : "以系统内置管理员身份登录"}
         </button>
         <span className="login-device-hint">
-          已检测到系统内置管理员：本机可直接使用该身份登录，无需邮箱。退出后可使用其他账号登录，其他账号不会获得管理权限。
+          在部署设备上访问（本机地址，或与部署设备一致的真实 IP）时，可直接以系统内置管理员身份登录，无需邮箱。远程 IP 无法使用该身份。
         </span>
       </div>
     ) : null;
@@ -273,7 +274,7 @@ export default function LoginPage() {
             </span>
             <div>
               <strong>清晰的分级权限</strong>
-              <span>超级管理员、团队管理员与开发组管理员各司其职。</span>
+              <span>超级管理员、团队管理员与成员各司其职。</span>
             </div>
           </div>
         </div>
@@ -385,7 +386,7 @@ export default function LoginPage() {
                       <div className="login-purpose">
                         {requestInfo?.registered
                           ? "该邮箱已有账号，验证通过后直接登录。"
-                          : "该邮箱尚未注册，验证通过后将自动创建成员账号。"}
+                          : "验证通过后将自动完成注册或激活，并登录团队工作室。"}
                       </div>
                       <div className="field">
                         <label htmlFor="login-code">邮箱验证码</label>

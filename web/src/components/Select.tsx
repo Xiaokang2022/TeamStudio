@@ -29,6 +29,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronsUpDown, Search } from "lucide-react";
+import { Avatar } from "./Avatar";
 import { cn } from "../lib/utils";
 import "./Select.css";
 
@@ -36,6 +37,9 @@ export interface SelectOption {
   value: string;
   label: string;
   description?: string;
+  /** Real avatar image URL (members / assignees) rendered in the trigger & list. */
+  avatar?: string;
+  /** Fallback avatar colour when no image is available. */
   color?: string;
   disabled?: boolean;
 }
@@ -399,7 +403,14 @@ export function Select({
       >
         {selected ? (
           <span className="ts-select-value">
-            {selected.color ? (
+            {selected.avatar ? (
+              <Avatar
+                name={selected.label}
+                src={selected.avatar}
+                color={selected.color}
+                size="xs"
+              />
+            ) : selected.color ? (
               <span className="ts-select-dot" style={{ background: selected.color }} aria-hidden="true" />
             ) : null}
             <span className="ts-select-value-label">{selected.label}</span>
@@ -466,7 +477,14 @@ export function Select({
                         }}
                         onClick={() => chooseOption(option)}
                       >
-                        {option.color ? (
+                        {option.avatar ? (
+                          <Avatar
+                            name={option.label}
+                            src={option.avatar}
+                            color={option.color}
+                            size="xs"
+                          />
+                        ) : option.color ? (
                           <span className="ts-select-option-dot" style={{ background: option.color }} aria-hidden="true" />
                         ) : null}
                         <span className="ts-select-option-main">

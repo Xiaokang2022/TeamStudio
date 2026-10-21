@@ -229,7 +229,7 @@ try {
   check(
     "reset info reports an empty system",
     zeroStats.teams === 0 &&
-      zeroStats.groups === 0 &&
+      !("groups" in zeroStats) &&
       zeroStats.members === 0 &&
       zeroStats.tasks === 0 &&
       zeroStats.todos === 0 &&

@@ -1,4 +1,4 @@
-"""Bootstrap payload, workspace tree and health endpoints."""
+"""Bootstrap payload, team tree and health endpoints (round 8: teams only)."""
 
 from __future__ import annotations
 
@@ -11,165 +11,110 @@ from ..auth import CurrentUser, get_current_user, refresh_session_cookie
 from ..config import settings_service
 from ..db import db, rows, scalar
 from ..http import ok
-from ..services.member_identity import first_member_in_group
-
+from ..services.member_identity import first_member_in_team, person_key
 
 router = APIRouter(prefix="/api", tags=["bootstrap"])
 
 
-def _workspace_tree(conn) -> list[dict[str, Any]]:
-    teams = rows(conn, "SELECT * FROM teams ORDER BY sort_order, name")
-    groups = rows(conn, "SELECT * FROM groups ORDER BY sort_order, name")
-    member_counts = {
-        item["group_id"]: item["count"]
-        for item in rows(
-            conn, "SELECT group_id, COUNT(*) AS count FROM members GROUP BY group_id"
-        )
+def _team_ref(team: dict[str, Any], member_count: int, pinned_count: int) -> dict[str, Any]:
+    return {
+        "id": team["id"],
+        "name": team["name"],
+        "shortName": team.get("short_name", ""),
+        "description": team.get("description", ""),
+        "color": team.get("color", "#5865f2"),
+        "memberCount": int(member_count or 0),
+        "pinnedCount": int(pinned_count or 0),
     }
+
+
+def _team_tree(conn) -> list[dict[str, Any]]:
+    """Every team with its (de-duplicated) member and pinned-announcement counts."""
+    teams = rows(conn, "SELECT * FROM teams ORDER BY sort_order, name")
+    member_keys: dict[str, set[str]] = {}
+    for member in rows(conn, "SELECT team_id, id, external_id, email FROM members"):
+        member_keys.setdefault(str(member["team_id"]), set()).add(person_key(member))
     pinned_counts = {
-        item["group_id"]: item["count"]
+        str(item["team_id"]): int(item["count"] or 0)
         for item in rows(
             conn,
-            "SELECT group_id, COUNT(*) AS count FROM announcements WHERE pinned=1 GROUP BY group_id",
+            "SELECT team_id, COUNT(*) AS count FROM announcements "
+            "WHERE pinned=1 GROUP BY team_id",
         )
     }
-    result = []
-    for team in teams:
-        team_groups = []
-        for group in groups:
-            if group["team_id"] != team["id"]:
-                continue
-            team_groups.append(
-                {
-                    "id": group["id"],
-                    "teamId": group["team_id"],
-                    "name": group["name"],
-                    "description": group["description"],
-                    "color": group["color"],
-                    "icon": group["icon"],
-                    "memberCount": member_counts.get(group["id"], 0),
-                    "pinnedCount": pinned_counts.get(group["id"], 0),
-                }
-            )
-        result.append(
-            {
-                "id": team["id"],
-                "name": team["name"],
-                "shortName": team["short_name"],
-                "description": team["description"],
-                "color": team["color"],
-                "groups": team_groups,
-            }
+    return [
+        _team_ref(
+            team,
+            len(member_keys.get(str(team["id"]), set())),
+            pinned_counts.get(str(team["id"]), 0),
         )
-    return result
+        for team in teams
+    ]
 
 
-def _resolve_active(
-    teams: list[dict[str, Any]], team_id: str | None, group_id: str | None
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    active_team = next((team for team in teams if team["id"] == team_id), None)
-    if not active_team and team_id:
-        active_team = next(
-            (
-                team
-                for team in teams
-                if any(group["id"] == group_id for group in team["groups"])
-            ),
-            None,
-        )
-    if not active_team:
-        active_team = teams[0] if teams else None
-    active_group = None
-    if active_team:
-        active_group = next(
-            (group for group in active_team["groups"] if group["id"] == group_id), None
-        )
-        if not active_group:
-            active_group = active_team["groups"][0] if active_team["groups"] else None
-    return active_team, active_group
+def _resolve_active_team(
+    teams: list[dict[str, Any]], team_id: str | None
+) -> dict[str, Any] | None:
+    requested = next((team for team in teams if team["id"] == team_id), None)
+    if requested is not None:
+        return requested
+    # An unknown teamId falls back to the first team; no teams at all means no active team.
+    return teams[0] if teams else None
 
 
-def _resolve_active_linked_member(conn, user: CurrentUser, active_group: dict | None) -> None:
-    """Point ``me.linkedMemberId`` at the archive row of the **active** development group.
+def _resolve_active_linked_member(
+    conn, user: CurrentUser, active_team: dict[str, Any] | None
+) -> None:
+    """Point ``me.linkedMemberId`` at the archive row of the **active** team.
 
-    Round 7: one account may own archive rows in several groups. The global first row is
-    kept on ``/api/auth/me``, but the workspace top-right "my member card" must always
-    address the current group — and fall back to ``null`` when this group has no profile
-    (so the UI can hide the entry instead of rendering a dead link).
+    One account may own archive rows in several teams (and historical duplicates inside
+    one team). The workspace top-right "my member card" must address the current team and
+    fall back to ``null`` when this team has no profile, so the UI can hide the entry
+    instead of rendering a dead link.
     """
     linked_ids = user.linked_member_id_list()
     resolved = (
-        first_member_in_group(conn, active_group["id"], linked_ids)
-        if active_group
-        else None
+        first_member_in_team(conn, active_team["id"], linked_ids) if active_team else None
     )
     user.linked_member_id = resolved["id"] if resolved else None
     user.linked_member_name = resolved["name"] if resolved else None
+
+
+def _bootstrap_stats(conn, teams: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "teams": len(teams),
+        "members": sum(int(team["memberCount"] or 0) for team in teams),
+        "todos": int(scalar(conn, "SELECT COUNT(*) FROM todos WHERE status='todo'", default=0) or 0),
+        "pinned": int(
+            scalar(conn, "SELECT COUNT(*) FROM announcements WHERE pinned=1", default=0) or 0
+        ),
+        "currentWorks": int(
+            scalar(conn, "SELECT COUNT(*) FROM works WHERE status='current'", default=0) or 0
+        ),
+        "serverDate": date.today().isoformat(),
+    }
 
 
 @router.get("/bootstrap")
 def bootstrap(
     response: Response,
     teamId: str | None = Query(default=None),
-    groupId: str | None = Query(default=None),
     user: CurrentUser = Depends(get_current_user),
 ):
-    cfg = settings_service.get()
-    # Sliding session: every visit re-signs the cookie so the configured idle
-    # window (default 7 days) counts from the most recent request.
+    # Sliding session: every visit re-signs the cookie so the configured idle window
+    # (default 7 days) counts from the most recent request.
     refresh_session_cookie(response, user)
     with db() as conn:
-        teams = _workspace_tree(conn)
-        active_team, active_group = _resolve_active(teams, teamId, groupId)
-        _resolve_active_linked_member(conn, user, active_group)
-        stats = {
-            "teams": len(teams),
-            "groups": sum(len(team["groups"]) for team in teams),
-            "members": scalar(conn, "SELECT COUNT(*) FROM members", default=0),
-            "todos": scalar(
-                conn,
-                "SELECT COUNT(*) FROM todos WHERE status='todo'",
-                default=0,
-            ),
-            "pinned": scalar(
-                conn,
-                "SELECT COUNT(*) FROM announcements WHERE pinned=1",
-                default=0,
-            ),
-        }
-        if active_group:
-            stats["members"] = scalar(
-                conn,
-                "SELECT COUNT(*) FROM members WHERE group_id=?",
-                (active_group["id"],),
-                default=0,
-            )
-            stats["todos"] = scalar(
-                conn,
-                "SELECT COUNT(*) FROM todos WHERE group_id=? AND status='todo'",
-                (active_group["id"],),
-                default=0,
-            )
-            stats["pinned"] = scalar(
-                conn,
-                "SELECT COUNT(*) FROM announcements WHERE group_id=? AND pinned=1",
-                (active_group["id"],),
-                default=0,
-            )
-            stats["currentWorks"] = scalar(
-                conn,
-                "SELECT COUNT(*) FROM works w JOIN members m ON m.id=w.member_id "
-                "WHERE m.group_id=? AND w.status='current'",
-                (active_group["id"],),
-                default=0,
-            )
-        stats["serverDate"] = date.today().isoformat()
+        teams = _team_tree(conn)
+        active_team = _resolve_active_team(teams, teamId)
+        _resolve_active_linked_member(conn, user, active_team)
+        stats = _bootstrap_stats(conn, teams)
     return ok(
         {
             "me": user.as_dict(),
             "config": settings_service.public(),
             "teams": teams,
-            "active": {"team": active_team, "group": active_group},
+            "active": {"team": active_team},
             "stats": stats,
             "serverTime": date.today().isoformat(),
             "deviceAdminName": "Admin",
@@ -180,7 +125,7 @@ def bootstrap(
 @router.get("/teams")
 def get_teams(user: CurrentUser = Depends(get_current_user)):
     with db() as conn:
-        return ok({"teams": _workspace_tree(conn)})
+        return ok({"teams": _team_tree(conn)})
 
 
 @router.get("/health")

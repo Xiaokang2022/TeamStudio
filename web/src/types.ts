@@ -1,5 +1,5 @@
-export type AdminRole = "super" | "team_admin" | "group_admin" | null;
-export type UserRole = "member" | "group_admin" | "team_admin" | "super";
+export type AdminRole = "super" | "team_admin" | null;
+export type UserRole = "member" | "team_admin" | "super";
 export type IdentitySource = "local" | "sso" | "email" | "ip" | "guest";
 
 export interface CurrentUser {
@@ -19,18 +19,17 @@ export interface CurrentUser {
   admin: {
     role: AdminRole;
     teamIds: string[];
-    groupIds: string[];
   };
+  /** Archive id of this account inside the currently active team (null when none). */
   linkedMemberId: string | null;
   /**
-   * Every member archive id of this account across all development groups
-   * (ordered by development group). Used to decide "this is me" for archives in
-   * any group while the aggregate scopes merge them into one member card.
+   * Every member archive id of this account across all teams. Used to decide
+   * "this is me" for archives in any team.
    */
   linkedMemberIds: string[];
   linkedMemberName: string | null;
   ssoConfigured: boolean;
-  /** True when the request comes from the deployment machine itself. */
+  /** True when the request comes from the deployment device. */
   deployDevice: boolean;
   /** True while the browser is using the built-in device Admin identity. */
   deviceAdminActive: boolean;
@@ -39,12 +38,12 @@ export interface CurrentUser {
     canEditAny: boolean;
     canEditSelf: boolean;
     canManageUsers: boolean;
-    canViewAllScope: boolean;
     canManageWorkspace: boolean;
   };
 }
 
 export interface ThemeConfig {
+  /** Kept for settings-file compatibility only — never decides light/dark. */
   mode: "light" | "dark" | "auto";
   accent: string;
   accentSecondary: string;
@@ -75,6 +74,8 @@ export interface ModuleFlags {
 export interface PublicConfig {
   site: SiteConfig;
   modules: ModuleFlags;
+  /** Modules the anonymous guest may access (settings is always false). */
+  guestModules: ModuleFlags;
   announcements: { maxPinned: number; dashboardLimit: number; showOnDashboard: boolean };
   calendar: {
     weekStartsOn: 0 | 1;
@@ -110,34 +111,24 @@ export interface PublicConfig {
   };
 }
 
-export interface GroupRef {
-  id: string;
-  teamId: string;
-  name: string;
-  description: string;
-  color: string;
-  icon: string;
-  memberCount: number;
-  pinnedCount: number;
-}
-
+/** A team is the only organization unit in round 8 (no development groups). */
 export interface TeamRef {
   id: string;
   name: string;
   shortName: string;
   description: string;
   color: string;
-  groups: GroupRef[];
+  memberCount: number;
+  pinnedCount: number;
 }
 
 export interface BootstrapData {
   me: CurrentUser;
   config: PublicConfig;
   teams: TeamRef[];
-  active: { team: TeamRef | null; group: GroupRef | null };
+  active: { team: TeamRef | null };
   stats: {
     teams: number;
-    groups: number;
     members: number;
     todos: number;
     pinned: number;
@@ -160,22 +151,22 @@ export interface WorkItem {
   category: string;
   progress: number;
   updatedAt: string;
+  teamId?: string;
+  teamName?: string;
 }
 
 /**
- * One development-group membership row of a person. The same registered account
- * may own several `members` rows (one per development group / team); aggregate
- * read models merge them into a single person card and describe each row here.
+ * One team membership row of a person. The same registered account may own one
+ * `members` row per team; aggregate read models merge them into a single person
+ * card and describe each row here.
  */
 export interface MemberMembership {
   memberId: string;
-  groupId: string;
-  groupName: string;
+  memberName?: string;
   teamId: string;
   teamName: string;
   title?: string;
   role?: string;
-  status?: string;
   joinedAt?: string;
 }
 
@@ -190,36 +181,19 @@ export interface Member {
   bio: string;
   tags: string[];
   skills: string[];
-  status: "available" | "busy" | "remote" | "offline" | string;
   duties: string[];
   joinedAt: string;
   currentWorks: WorkItem[];
   historyWorks: WorkItem[];
   stats: { current: number; done: number; todos: number };
-  groupId?: string;
-  groupName?: string;
   teamId?: string;
   teamName?: string;
   /** Every member archive id merged into this person card (main archive first). */
   memberIds?: string[];
-  /** One entry per development-group row inside the current scope. */
+  /** One entry per team-membership row. */
   memberships?: MemberMembership[];
-  groupIds?: string[];
-  groupNames?: string[];
   teamIds?: string[];
   teamNames?: string[];
-}
-
-export interface GroupDetail {
-  id: string;
-  teamId: string;
-  teamName: string;
-  teamShortName?: string;
-  name: string;
-  description: string;
-  color: string;
-  icon: string;
-  memberCount?: number;
 }
 
 export interface ActivityItem {
@@ -234,8 +208,7 @@ export interface ActivityItem {
 }
 
 export interface OverviewData {
-  group: GroupDetail;
-  scope?: ScopeMeta;
+  team: TeamRef;
   members: Member[];
   works: WorkItem[];
   recentActivity: ActivityItem[];
@@ -243,9 +216,13 @@ export interface OverviewData {
   workloadSummary: WorkloadSummary;
   stats: {
     members: number;
+    works: number;
     currentWorks: number;
     doneWorks: number;
+    plannedWorks: number;
+    todos: number;
     openTodos: number;
+    doneTodos: number;
     pinned: number;
     [key: string]: number;
   };
@@ -259,13 +236,13 @@ export type WorkloadLevel = "low" | "balanced" | "high" | "overload";
 
 export interface MemberTask {
   id: string;
-  groupId: string;
-  groupName?: string;
   teamId?: string;
   teamName?: string;
   memberId: string;
   memberName: string;
   memberTitle: string;
+  /** Real member avatar URL (empty string when the member has none). */
+  memberAvatar: string;
   memberAvatarColor: string;
   title: string;
   description: string;
@@ -288,6 +265,8 @@ export interface Workload {
   memberId: string;
   memberName: string;
   memberTitle: string;
+  /** Real member avatar URL (empty string when the member has none). */
+  avatar: string;
   avatarColor: string;
   currentPoints: number;
   currentLoadPercent: number;
@@ -302,10 +281,8 @@ export interface Workload {
   level: WorkloadLevel;
   /** Every member archive id merged into this person workload (main archive first). */
   memberIds?: string[];
-  /** One entry per development-group row inside the current scope. */
+  /** One entry per team-membership row. */
   memberships?: MemberMembership[];
-  groupIds?: string[];
-  groupNames?: string[];
   teamIds?: string[];
   teamNames?: string[];
 }
@@ -328,7 +305,6 @@ export interface TaskOverviewData {
   tasks: MemberTask[];
   workloads: Workload[];
   summary: WorkloadSummary;
-  scope?: ScopeMeta;
   meta: {
     capacityPoints: number;
     windowWeeks: number;
@@ -341,8 +317,6 @@ export type TodoPriority = "low" | "normal" | "high" | "urgent";
 
 export interface Todo {
   id: string;
-  groupId: string;
-  groupName?: string;
   teamId?: string;
   teamName?: string;
   title: string;
@@ -352,6 +326,8 @@ export interface Todo {
   assigneeMemberId: string | null;
   assigneeName?: string;
   assigneeEmail?: string;
+  /** Real assignee avatar URL (empty string when the member has none). */
+  assigneeAvatar?: string;
   assigneeColor?: string;
   priority: TodoPriority;
   status: "todo" | "done";
@@ -368,11 +344,11 @@ export interface RedBlackEntry {
   side: "red" | "black";
   memberId: string | null;
   memberName: string;
+  /** Real member avatar URL (empty string when the member has none). */
+  memberAvatar?: string;
   title: string;
   reason: string;
   score: number;
-  groupId?: string;
-  groupName?: string;
   teamId?: string;
   teamName?: string;
   createdAt?: string;
@@ -380,7 +356,7 @@ export interface RedBlackEntry {
 
 export interface RedBlackBoard {
   id: string | null;
-  groupId?: string | null;
+  teamId?: string | null;
   month: string;
   theme: string;
   updatedAt: string | null;
@@ -389,28 +365,14 @@ export interface RedBlackBoard {
   exists?: boolean;
 }
 
-export interface RedBlackGroupBoard {
-  groupId: string;
-  groupName: string;
-  teamId: string;
-  teamName: string;
-  theme: string;
-  red: RedBlackEntry[];
-  black: RedBlackEntry[];
-  updatedAt?: string | null;
-}
-
 export interface RedBlackData {
   month: string;
-  scope?: ScopeMeta;
   board: RedBlackBoard | null;
-  boards?: RedBlackGroupBoard[];
   availableMonths: string[];
 }
 
 export interface LinkItem {
   id: string;
-  groupId: string;
   title: string;
   url: string;
   description: string;
@@ -423,17 +385,20 @@ export interface MatrixBackupMember {
   id: string;
   name: string;
   color: string;
+  /** Real backup-member avatar URL (empty string when the member has none). */
+  avatar?: string;
 }
 
 export interface MatrixArea {
   id: string;
-  groupId: string;
   area: string;
   description: string;
   /** Exactly one primary owner per area (null means unclaimed). */
   ownerMemberId: string | null;
   ownerName: string;
   ownerColor?: string;
+  /** Real owner avatar URL (empty string when the member has none). */
+  ownerAvatar?: string;
   /** Multiple backups are allowed and may also own other areas. */
   backupMemberIds: string[];
   backups: MatrixBackupMember[];
@@ -441,25 +406,15 @@ export interface MatrixArea {
   backupMemberId?: string | null;
   backupName?: string;
   backupColor?: string;
+  backupAvatar?: string;
   channel: string;
   contact: string;
   sortOrder: number;
 }
 
 /* ------------------------------------------------------------------ */
-/* Workspace administration (teams / development groups)              */
+/* Workspace administration (teams only in round 8)                   */
 /* ------------------------------------------------------------------ */
-
-export interface ManagedGroup {
-  id: string;
-  teamId: string;
-  name: string;
-  description: string;
-  color: string;
-  icon: string;
-  memberCount: number;
-  canDelete: boolean;
-}
 
 export interface ManagedTeam {
   id: string;
@@ -467,30 +422,27 @@ export interface ManagedTeam {
   shortName: string;
   description: string;
   color: string;
-  groupCount: number;
   memberCount: number;
   canDelete: boolean;
-  canCreateGroup: boolean;
-  groups: ManagedGroup[];
 }
 
 export interface WorkspaceManageData {
   teams: ManagedTeam[];
   permissions: {
     canCreateTeam: boolean;
-    canCreateGroup: boolean;
     canManageAnyTeam: boolean;
   };
 }
 
 export interface Announcement {
   id: string;
-  groupId: string;
   title: string;
   content: string;
   pinned: boolean;
   level: "info" | "important" | "celebration" | string;
   authorName: string;
+  /** Real author avatar URL (empty string when the author has none). */
+  authorAvatar?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -524,6 +476,7 @@ export interface AppSettings {
   version: number;
   site: SiteConfig;
   modules: ModuleFlags;
+  guestModules: ModuleFlags;
   announcements: { maxPinned: number; dashboardLimit: number; showOnDashboard: boolean };
   calendar: PublicConfig["calendar"];
   redblack: PublicConfig["redblack"];
@@ -574,18 +527,16 @@ export interface AppSettings {
 export interface AdminIdEntry {
   id: string;
   name: string;
-  role: "team_admin" | "group_admin";
+  role: "team_admin";
   teamId: string;
-  groupIds: string[];
   note: string;
 }
 
 export interface AdminIpEntry {
   ip: string;
   name: string;
-  role: "team_admin" | "group_admin";
+  role: "team_admin";
   teamId: string;
-  groupIds: string[];
   note: string;
 }
 
@@ -600,7 +551,6 @@ export interface SettingsResponse {
 
 export interface SystemResetStats {
   teams: number;
-  groups: number;
   members: number;
   works: number;
   todos: number;
@@ -642,8 +592,6 @@ export interface SystemResetResult {
 
 export interface WorkspaceOption {
   teams: { id: string; name: string; short_name: string; color: string }[];
-  groups: { id: string; team_id: string; name: string; color: string }[];
-  members: { id: string; team_id: string; group_id: string; name: string; email: string; title: string }[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -661,7 +609,6 @@ export interface UserAccount {
   role: UserRole;
   roleLabel: string;
   teamIds: string[];
-  groupIds: string[];
   emailVerified: boolean;
   createdBy: string;
   createdAt: string;
@@ -679,7 +626,7 @@ export interface UsersData {
 
 /**
  * A registered account (including pre-created, not-yet-activated accounts)
- * that can still be added to a development group's member roster.
+ * that can still be added to a team's member roster.
  */
 export interface MemberCandidate {
   id: string;
@@ -710,9 +657,6 @@ export interface ProfileMember {
   bio: string;
   tags: string[];
   skills: string[];
-  status: string;
-  groupId: string;
-  groupName: string;
   teamId: string;
   teamName: string;
 }
@@ -724,8 +668,6 @@ export interface ProfileDuty {
   role: "owner" | "backup";
   channel: string;
   contact: string;
-  groupId: string;
-  groupName: string;
   teamId: string;
   teamName: string;
 }
@@ -738,16 +680,12 @@ export interface ProfileTodo {
   dueTime: string;
   status: "todo" | "done";
   priority: TodoPriority;
-  groupId: string;
-  groupName: string;
   teamId: string;
   teamName: string;
 }
 
 export interface ProfileRedBlackEntry extends RedBlackEntry {
   month: string;
-  groupId: string;
-  groupName: string;
   teamId: string;
   teamName: string;
 }
@@ -757,24 +695,15 @@ export interface ProfileAdminScopeTeam {
   name: string;
 }
 
-export interface ProfileAdminScopeGroup {
-  id: string;
-  name: string;
-  teamId: string;
-  teamName: string;
-}
-
 /**
- * Public administrator scope shown on the personal home page: which teams /
- * development groups this account administers. `super` intentionally keeps
- * empty arrays ("超级管理员" says it all).
+ * Public administrator scope shown on the personal home page: which teams this
+ * account administers. `super` intentionally keeps an empty array.
  */
 export interface ProfileAdminScope {
-  role: "super" | "team_admin" | "group_admin" | "member";
+  role: "super" | "team_admin" | "member";
   roleLabel: string;
   summary: string;
   teams: ProfileAdminScopeTeam[];
-  groups: ProfileAdminScopeGroup[];
   isDeviceAdmin: boolean;
 }
 
@@ -799,16 +728,6 @@ export interface ProfileData {
   isSelf: boolean;
 }
 
-export interface DomainGroupSettings {
-  id: string;
-  teamId: string;
-  name: string;
-  description: string;
-  color: string;
-  icon: string;
-  canEdit: boolean;
-}
-
 export interface DomainTeamSettings {
   id: string;
   name: string;
@@ -816,7 +735,6 @@ export interface DomainTeamSettings {
   description: string;
   color: string;
   canEdit: boolean;
-  groups: DomainGroupSettings[];
 }
 
 export interface DomainSettingsData {
@@ -825,7 +743,6 @@ export interface DomainSettingsData {
     canEditSite: boolean;
     canEditStructure: boolean;
     canEditTeam: boolean;
-    canEditGroup: boolean;
     isSuperAdmin: boolean;
     isDeviceAdmin: boolean;
   };
@@ -910,35 +827,11 @@ export interface ActivityEntry {
 }
 
 /* ------------------------------------------------------------------ */
-/* Multi-scope browsing, task tags and insights                       */
+/* Task tags and insights                                             */
 /* ------------------------------------------------------------------ */
-
-export type ScopeKind = "group" | "team" | "all";
-
-export interface ScopeGroupRef {
-  id: string;
-  teamId: string;
-  teamName: string;
-  teamShortName?: string;
-  name: string;
-  color: string;
-  icon?: string;
-}
-
-export interface ScopeMeta {
-  kind: ScopeKind;
-  label: string;
-  teamIds: string[];
-  groupIds: string[];
-  groups: ScopeGroupRef[];
-  team: { id: string; name: string; shortName: string; color: string } | null;
-  group: { id: string; teamId: string; name: string; color: string } | null;
-}
 
 export interface TaskTag {
   id: string;
-  groupId: string;
-  groupName?: string;
   name: string;
   color: string;
   usage?: number;
@@ -949,7 +842,6 @@ export interface TaskTag {
 
 export interface TagLibraryData {
   tags: TaskTag[];
-  scope?: ScopeMeta;
 }
 
 export type InsightsRangeKey = "1w" | "2w" | "1m" | "2m" | "3m" | "all";
@@ -963,7 +855,6 @@ export interface InsightsRange {
 
 export interface InsightsSummary {
   teams: number;
-  groups: number;
   members: number;
   tasks: number;
   openTasks: number;
@@ -983,11 +874,11 @@ export interface InsightsMemberRow {
   memberId: string;
   memberName: string;
   memberTitle: string;
+  /** Real member avatar URL (empty string when the member has none). */
+  avatar: string;
   avatarColor: string;
   teamId: string;
   teamName: string;
-  groupId: string;
-  groupName: string;
   tasks: number;
   openTasks: number;
   completedTasks: number;
@@ -997,39 +888,6 @@ export interface InsightsMemberRow {
   loadPoints: number;
   todos: number;
   completedTodos: number;
-}
-
-export interface InsightsGroupRow {
-  groupId: string;
-  groupName: string;
-  teamId: string;
-  teamName: string;
-  color: string;
-  members: number;
-  tasks: number;
-  openTasks: number;
-  completedTasks: number;
-  overdueTasks: number;
-  blockedTasks: number;
-  completionRate: number;
-  loadPoints: number;
-  averageLoadPercent: number;
-  todos: number;
-  completedTodos: number;
-}
-
-export interface InsightsTeamRow {
-  teamId: string;
-  teamName: string;
-  color: string;
-  groups: number;
-  members: number;
-  tasks: number;
-  openTasks: number;
-  completedTasks: number;
-  overdueTasks: number;
-  completionRate: number;
-  loadPoints: number;
 }
 
 export interface InsightsTrendPoint {
@@ -1041,12 +899,9 @@ export interface InsightsTrendPoint {
 }
 
 export interface InsightsData {
-  scope: ScopeMeta;
   range: InsightsRange;
   summary: InsightsSummary;
   members: InsightsMemberRow[];
-  groups: InsightsGroupRow[];
-  teams: InsightsTeamRow[];
   trend: {
     granularity: "day" | "week";
     buckets: InsightsTrendPoint[];

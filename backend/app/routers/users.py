@@ -1,27 +1,43 @@
-"""Super-administrator user account management.
+"""Super-administrator user account management (round 8, team-only).
 
-Only super administrators (the deployment device Admin or a stored ``super`` role)
-may list, pre-create, promote, re-scope or delete accounts. The deployment device's
-built-in ``Admin`` is shown as a non-editable row to that device Admin only; stored
-super administrators never see it and none of its endpoints can manage or delete it.
+Only super administrators (the deployment device Admin or a stored ``super`` role) may
+list, pre-create, promote, re-scope or delete accounts. Roles are ``member`` /
+``team_admin`` / ``super`` — development-group administrators (``group_admin``) and
+``groupIds`` no longer exist; a ``team_admin`` is scoped by ``teamIds`` only.
+
+The deployment device's built-in ``Admin`` is shown as a non-editable row to that device
+Admin only; stored super administrators never see it and none of its endpoints can manage
+or delete it.
 """
 
 from __future__ import annotations
 
 import sqlite3
 from typing import Any
-
 from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, Request
 
 from ..auth import CurrentUser, require_super
 from ..config import settings_service
-from ..db import db, log_audit, row, rows
+from ..db import db, json_loads, log_audit, rows
 from ..http import fail, ok
 from ..services import accounts
 
 router = APIRouter(prefix="/api/users", tags=["users"])
+
+
+def _id_list(value: Any) -> list[str]:
+    """Parse a JSON / list column into a deduplicated id list."""
+    parsed = json_loads(value, []) if isinstance(value, str) else value
+    if not isinstance(parsed, list):
+        return []
+    result: list[str] = []
+    for item in parsed:
+        cleaned = str(item).strip()
+        if cleaned and cleaned not in result:
+            result.append(cleaned)
+    return result
 
 
 def _activation_url(request: Request, token: str) -> str:
@@ -41,34 +57,27 @@ def _issue_activation(conn, request: Request, user: dict[str, Any], created_by: 
     }
 
 
-def _validate_scope(
+def _validate_teams(
     conn: sqlite3.Connection,
     team_ids: list[str],
-    group_ids: list[str],
     role: str,
-) -> tuple[list[str], list[str]]:
+) -> list[str]:
+    """Validate ``teamIds`` against the teams table; ``team_admin`` needs at least one."""
     known_teams = {item["id"] for item in rows(conn, "SELECT id FROM teams")}
-    known_groups = {item["id"]: item["team_id"] for item in rows(conn, "SELECT id, team_id FROM groups")}
-    cleaned_teams = sorted({item for item in team_ids if item})
-    cleaned_groups = sorted({item for item in group_ids if item})
-    unknown_teams = [item for item in cleaned_teams if item not in known_teams]
-    if unknown_teams:
-        raise fail(422, f"团队不存在：{', '.join(unknown_teams)}", "invalid_team_scope")
-    unknown_groups = [item for item in cleaned_groups if item not in known_groups]
-    if unknown_groups:
-        raise fail(422, f"开发组不存在：{', '.join(unknown_groups)}", "invalid_group_scope")
-    if role == "team_admin" and not cleaned_teams:
+    cleaned = sorted({str(item).strip() for item in team_ids if str(item or "").strip()})
+    unknown = [item for item in cleaned if item not in known_teams]
+    if unknown:
+        raise fail(422, f"团队不存在：{', '.join(unknown)}", "invalid_team_scope")
+    if role == "team_admin" and not cleaned:
         raise fail(422, "团队管理员至少需要指定一个团队", "team_scope_required")
-    if role == "group_admin" and not cleaned_groups:
-        raise fail(422, "开发组管理员至少需要指定一个开发组", "group_scope_required")
-    return cleaned_teams, cleaned_groups
+    return cleaned
 
 
 def _user_list(conn: sqlite3.Connection, user: CurrentUser) -> list[dict[str, Any]]:
     """List accounts visible to the caller.
 
     The synthetic device Admin row is only rendered for the deployment device's own
-    Admin identity (round 6 §2.3); stored super administrators never see it.
+    Admin identity; stored super administrators never see it.
     """
     items: list[dict[str, Any]] = []
     if user.is_device_admin:
@@ -84,7 +93,6 @@ def _user_list(conn: sqlite3.Connection, user: CurrentUser) -> list[dict[str, An
                 "role": "super",
                 "roleLabel": "超级管理员",
                 "teamIds": [],
-                "groupIds": [],
                 "emailVerified": True,
                 "createdBy": "system",
                 "createdAt": "",
@@ -127,17 +135,16 @@ def create_user(
         role = str(payload.get("role") or "member")
         if role not in accounts.USER_ROLES:
             raise accounts.AccountError("账号角色不合法", "invalid_role")
+        # ``groupIds`` is no longer accepted; an old client sending it is ignored.
         team_ids = [str(item) for item in (payload.get("teamIds") or [])]
-        group_ids = [str(item) for item in (payload.get("groupIds") or [])]
         with db() as conn:
-            team_ids, group_ids = _validate_scope(conn, team_ids, group_ids, role)
+            team_ids = _validate_teams(conn, team_ids, role)
             created = accounts.create_user(
                 conn,
                 email=email,
                 name=str(payload.get("name") or ""),
                 role=role,
                 team_ids=team_ids,
-                group_ids=group_ids,
                 email_verified=bool(payload.get("emailVerified")),
                 created_by=user.id,
             )
@@ -203,27 +210,22 @@ def update_user(
             role = payload.get("role")
             if role is not None and role not in accounts.USER_ROLES:
                 raise accounts.AccountError("账号角色不合法", "invalid_role")
+            # ``groupIds`` is no longer accepted; an old client sending it is ignored.
             team_ids = (
                 [str(item) for item in (payload.get("teamIds") or [])]
                 if "teamIds" in payload
                 else None
             )
-            group_ids = (
-                [str(item) for item in (payload.get("groupIds") or [])]
-                if "groupIds" in payload
-                else None
-            )
             effective_role = role or existing.get("role") or "member"
-            effective_teams = team_ids if team_ids is not None else accounts._list(existing.get("team_ids"))
-            effective_groups = group_ids if group_ids is not None else accounts._list(existing.get("group_ids"))
-            if role is not None or team_ids is not None or group_ids is not None:
-                effective_teams, effective_groups = _validate_scope(
-                    conn, effective_teams, effective_groups, effective_role
-                )
+            effective_teams = (
+                team_ids
+                if team_ids is not None
+                else _id_list(existing.get("team_ids"))
+            )
+            if role is not None or team_ids is not None:
+                effective_teams = _validate_teams(conn, effective_teams, effective_role)
                 if team_ids is None:
                     team_ids = effective_teams
-                if group_ids is None:
-                    group_ids = effective_groups
             name = payload.get("name") if "name" in payload else None
             updated = accounts.update_user(
                 conn,
@@ -231,7 +233,6 @@ def update_user(
                 name=str(name) if name is not None else None,
                 role=role,
                 team_ids=team_ids,
-                group_ids=group_ids,
             )
             log_audit(
                 conn,
