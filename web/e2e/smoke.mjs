@@ -15,8 +15,9 @@
  *      「工作室设置」 for super admins / 「团队设置」 for team admins), is absent from the
  *      avatar menu, and cannot be hidden by module switches (「模块展示」only has the 8
  *      regular module toggles);
- *   8. the personal home page carries the tabbed personal settings panel
- *      (个人信息 / 个性化设置);
+ *   8. the personal home page merges member archives into the hero card and shows the
+ *      rest as a settings-style left rail (个人信息 / 个性化设置 / 责任田 / 当前任务 /
+ *      历史任务 / 待办 / 红黑榜记录), without an extra 「个人设置」 card frame;
  *   9. settings expose per-module guest switches (`guestModules`) and persist them.
  *
  * Requirements: `npm run build --prefix web` and a running server
@@ -303,16 +304,34 @@ try {
   await page.waitForTimeout(300);
   const profileText = await page.locator(".profile-page").innerText();
   assert.ok(!profileText.includes("开发组"), "profile has no group concept");
-  // Round 9: personal settings use a settings-style left rail: 个人信息 then 个性化设置.
+  // Round 9: member archives are merged into the top hero card.
+  assert.equal(await page.locator(".profile-members").count(), 0, "no standalone 成员档案 card");
+  const heroArchives = page.locator(".profile-hero .profile-hero-archives");
+  assert.equal(await heroArchives.count(), 1, "成员档案 is integrated into the top hero card");
+  assert.ok((await heroArchives.innerText()).includes("成员档案"), "hero archives block is labelled");
+  // Personal settings use a settings-style left rail: 个人信息, 个性化设置, then the records.
   const profileTabs = (await page.locator(".profile-settings-tab").allInnerTexts()).map((value) =>
     value.trim(),
   );
-  assert.equal(profileTabs.length, 2, `personal settings exposes two tabs, got ${profileTabs.join(" | ")}`);
-  assert.ok(profileTabs[0].includes("个人信息"), "first personal-settings tab is 个人信息");
-  assert.ok(profileTabs[1].includes("个性化设置"), "second personal-settings tab is 个性化设置");
-  assert.ok(await page.locator("#profile-name").isVisible(), "个人信息 tab shows the profile fields");
+  assert.ok(profileTabs.length >= 7, `profile rail exposes personal + record panes, got ${profileTabs.length}`);
+  assert.ok(profileTabs[0].includes("个人信息"), "first pane is 个人信息");
+  assert.ok(profileTabs[1].includes("个性化设置"), "second pane is 个性化设置");
+  for (const label of ["责任田", "当前任务", "历史任务", "待办", "红黑榜记录"]) {
+    assert.ok(profileTabs.some((tab) => tab.includes(label)), `profile rail contains ${label}`);
+  }
+  assert.ok(await page.locator("#profile-name").isVisible(), "个人信息 pane shows the profile fields");
+  assert.equal(
+    await page.locator(".profile-settings-main > .card.profile-section").count(),
+    1,
+    "个人信息 content is wrapped in the same card frame as the record panes",
+  );
   await page.locator(".profile-settings-tab").filter({ hasText: "个性化设置" }).click();
   await page.locator(".profile-personalization-body .profile-theme-switch").waitFor();
+  assert.equal(
+    await page.locator(".profile-settings-main > .card.profile-section").count(),
+    1,
+    "个性化设置 content is wrapped in the same card frame as the record panes",
+  );
   // The personal theme control lives on the profile page (requirement #7).
   await page.locator(".profile-page").getByRole("button", { name: "深色", exact: true }).click();
   await page.waitForFunction(
@@ -324,6 +343,13 @@ try {
     .click();
   await page.waitForFunction(
     () => localStorage.getItem("teamstudio.theme.preference") === "auto",
+  );
+  // Record panes switch in the same left rail.
+  await page.locator(".profile-settings-tab").filter({ hasText: "责任田" }).click();
+  await page.locator(".profile-record-pane:not([hidden]) .profile-section").first().waitFor();
+  assert.ok(
+    (await page.locator(".profile-record-pane:not([hidden])").innerText()).includes("责任田"),
+    "record pane switches to 责任田",
   );
 
   // ---------------------------------------------------------------- 7. login page copy

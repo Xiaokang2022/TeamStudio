@@ -11,7 +11,6 @@ import {
   Palette,
   RotateCcw,
   Save,
-  Settings2,
   ShieldCheck,
   Sparkles,
   Trash2,
@@ -52,8 +51,8 @@ const AVATAR_SNIFF_BYTES = 16;
 const MAX_SKILLS = 20;
 const MAX_SKILL_LENGTH = 30;
 const MAX_BIO_LENGTH = 2000;
-/** Left-rail tabs of the personal settings panel (more can be added later). */
-type ProfileSettingsTab = "info" | "personalization";
+/** Left-rail panes of the personal home page (more can be added later). */
+type ProfilePane = "info" | "personalization" | "duties" | "tasks" | "history" | "todos" | "redblack";
 /** Theme choices shown in the 个性化设置 card (defaults to follow-system). */
 const THEME_PREFERENCES: { value: ThemePreference; label: string }[] = [
   { value: "auto", label: "跟随系统" },
@@ -234,8 +233,8 @@ export default function ProfilePage() {
   const { toast } = useToast();
   const [params, setParams] = useState<URLSearchParams>(() => hashRoute().params);
   const targetUserId = (params.get("userId") || "").trim();
-  /** Which personal-settings tab is open: 个人信息 / 个性化设置. */
-  const [settingsTab, setSettingsTab] = useState<ProfileSettingsTab>("info");
+  /** Which left-rail pane is open: 个人信息 / 个性化设置 / 协作记录. */
+  const [activePane, setActivePane] = useState<ProfilePane>("info");
 
   const [profile, setProfile] = useState<ProfileData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -460,6 +459,31 @@ export default function ProfilePage() {
   const redEntries = profile.redblack.red;
   const blackEntries = profile.redblack.black;
   const memberTaskCount = profile.members.length;
+  const panes: {
+    key: ProfilePane;
+    label: string;
+    hint: string;
+    icon: typeof UserRound;
+    personalOnly?: boolean;
+    count?: number;
+  }[] = [
+    { key: "info", label: "个人信息", hint: "头像、用户名、简介与技能", icon: UserRound, personalOnly: true },
+    { key: "personalization", label: "个性化设置", hint: "主题偏好与展示", icon: Palette, personalOnly: true },
+    { key: "duties", label: "责任田", hint: "主责与备份板块", icon: Waypoints, count: profile.duties.length },
+    { key: "tasks", label: "当前任务", hint: "进行中的任务", icon: ListTodo, count: profile.currentTasks.length },
+    { key: "history", label: "历史任务", hint: "已完成的任务", icon: History, count: profile.historyTasks.length },
+    { key: "todos", label: "待办", hint: "日历待办事项", icon: CalendarClock, count: profile.todos.length },
+    {
+      key: "redblack",
+      label: "红黑榜记录",
+      hint: "月度红榜与黑榜",
+      icon: Trophy,
+      count: redEntries.length + blackEntries.length,
+    },
+  ];
+  const visiblePanes = panes.filter((pane) => !pane.personalOnly || isSelf);
+  const activePaneSafe: ProfilePane =
+    isSelf || !["info", "personalization"].includes(activePane) ? activePane : "duties";
 
   return (
     <div className="profile-page fade-up">
@@ -488,7 +512,7 @@ export default function ProfilePage() {
             <button
               className="btn btn-primary btn-sm"
               onClick={() => {
-                setSettingsTab("info");
+                setActivePane("info");
                 document.getElementById("profile-settings")?.scrollIntoView({ behavior: "smooth" });
               }}
             >
@@ -538,464 +562,490 @@ export default function ProfilePage() {
             </div>
           ))}
         </div>
-      </section>
-
-      <section className="card profile-members" aria-label="成员档案">
-        <div className="profile-section-head">
-          <div className="profile-section-title">
+        <div className="profile-hero-archives" aria-label="成员档案">
+          <div className="profile-hero-archives-head">
             <span className="profile-section-icon">
               <Building2 size={16} />
             </span>
             <h2>成员档案</h2>
             <span className="badge badge-gray">{memberArchives.length}</span>
+            <span className="profile-members-note">
+              同一账号在不同团队的档案，每个团队只展示一次，并按姓名排序
+            </span>
           </div>
-          <span className="profile-members-note">
-            同一账号在不同团队的档案，每个团队只展示一次，并按姓名排序
-          </span>
+          <MemberArchiveList members={memberArchives} />
         </div>
-        <MemberArchiveList members={memberArchives} />
       </section>
 
-      {isSelf ? (
-        <section className="card profile-settings profile-settings-panel" id="profile-settings">
-          <div className="profile-section-head">
-            <div className="profile-section-title">
-              <span className="profile-section-icon">
-                <Settings2 size={16} />
-              </span>
-              <h2>个人设置</h2>
-              <span className="badge badge-gray">仅本人可见</span>
-            </div>
-            {settingsTab === "info" && canEdit ? (
-              <div className="profile-settings-actions">
-                <button className="btn btn-ghost btn-sm" onClick={resetForm} disabled={saving || !dirty}>
-                  <RotateCcw size={14} /> 重置
-                </button>
-                <button className="btn btn-primary btn-sm" onClick={() => void handleSave()} disabled={saving || !dirty}>
-                  {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
-                  {saving ? "保存中…" : "保存修改"}
-                </button>
+      <div className="profile-settings-layout" id="profile-settings">
+        <nav className="profile-settings-tabs" aria-label={isSelf ? "个人主页内容" : "成员协作记录"}>
+          {visiblePanes.map((pane) => {
+            const Icon = pane.icon;
+            const active = activePaneSafe === pane.key;
+            return (
+              <button
+                key={pane.key}
+                type="button"
+                className={cn("profile-settings-tab", active && "active")}
+                aria-pressed={active}
+                onClick={() => setActivePane(pane.key)}
+              >
+                <span className="profile-settings-tab-icon">
+                  <Icon size={16} />
+                </span>
+                <span className="profile-settings-tab-copy">
+                  <strong>{pane.label}</strong>
+                  <small>{pane.hint}</small>
+                </span>
+                {typeof pane.count === "number" ? (
+                  <span className="profile-settings-tab-count">{pane.count}</span>
+                ) : null}
+              </button>
+            );
+          })}
+          <p className="profile-settings-tabs-note">
+            {isSelf
+              ? "个人信息与个性化设置仅本人可见；更多设置项将在后续版本加入"
+              : "仅展示该成员的公开协作记录"}
+          </p>
+        </nav>
+
+        <div className="profile-settings-main">
+          {activePaneSafe === "info" && isSelf ? (
+            <section className="card profile-section">
+              <div className="profile-section-head">
+                <div className="profile-section-title">
+                  <span className="profile-section-icon">
+                    <UserRound size={16} />
+                  </span>
+                  <h2>个人信息</h2>
+                  <span className="badge badge-gray">仅本人可见</span>
+                </div>
+                {canEdit ? (
+                  <div className="profile-settings-actions">
+                    <button className="btn btn-ghost btn-sm" onClick={resetForm} disabled={saving || !dirty}>
+                      <RotateCcw size={14} /> 重置
+                    </button>
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={() => void handleSave()}
+                      disabled={saving || !dirty}
+                    >
+                      {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
+                      {saving ? "保存中…" : "保存修改"}
+                    </button>
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-            {settingsTab === "personalization" ? (
-              <span className="profile-members-note">
-                当前生效：{theme === "dark" ? "深色" : "浅色"}
-              </span>
-            ) : null}
-          </div>
 
-          <div className="profile-settings-layout">
-            <nav className="profile-settings-tabs" aria-label="个人设置分组">
-              <button
-                type="button"
-                className={cn("profile-settings-tab", settingsTab === "info" && "active")}
-                aria-pressed={settingsTab === "info"}
-                onClick={() => setSettingsTab("info")}
-              >
-                <span className="profile-settings-tab-icon">
-                  <UserRound size={16} />
-                </span>
-                <span className="profile-settings-tab-copy">
-                  <strong>个人信息</strong>
-                  <small>头像、用户名、简介与技能</small>
-                </span>
-              </button>
-              <button
-                type="button"
-                className={cn("profile-settings-tab", settingsTab === "personalization" && "active")}
-                aria-pressed={settingsTab === "personalization"}
-                onClick={() => setSettingsTab("personalization")}
-              >
-                <span className="profile-settings-tab-icon">
-                  <Palette size={16} />
-                </span>
-                <span className="profile-settings-tab-copy">
-                  <strong>个性化设置</strong>
-                  <small>主题偏好与展示</small>
-                </span>
-              </button>
-              <p className="profile-settings-tabs-note">更多个人设置将在后续版本加入</p>
-            </nav>
+              <p className="profile-section-note">
+                头像、头像颜色、用户名与个人简介；保存后会同步到关联的成员档案。
+              </p>
 
-            <div className="profile-settings-main">
-              {settingsTab === "info" ? (
-                <>
-                  {!canEdit ? (
-                    <div className="profile-readonly-hint">
-                      <ShieldCheck size={14} />
-                      当前身份不支持在此修改个人资料（例如系统内置管理员），如有需要请联系超级管理员。
-                    </div>
-                  ) : null}
-                  <div className="profile-settings-body">
-                    <div className="profile-avatar-editor">
-                      <Avatar
-                        name={form.name || displayName}
-                        src={user.avatar}
-                        color={form.avatarColor}
-                        size="xl"
+              {!canEdit ? (
+                <div className="profile-readonly-hint">
+                  <ShieldCheck size={14} />
+                  当前身份不支持在此修改个人资料（例如系统内置管理员），如有需要请联系超级管理员。
+                </div>
+              ) : null}
+
+              <div className="profile-settings-body">
+                <div className="profile-avatar-editor">
+                  <Avatar
+                    name={form.name || displayName}
+                    src={user.avatar}
+                    color={form.avatarColor}
+                    size="xl"
+                  />
+                  <div className="profile-avatar-actions">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp,image/gif"
+                      hidden
+                      onChange={(event) => void handleAvatarFile(event)}
+                    />
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={!canEdit || uploading}
+                    >
+                      {uploading ? <Loader2 size={14} className="spin" /> : <Camera size={14} />} 上传头像
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => void handleDeleteAvatar()}
+                      disabled={!canEdit || uploading || !user.avatar}
+                    >
+                      <Trash2 size={14} /> 恢复默认头像
+                    </button>
+                    <span className="field-hint">支持 PNG / JPEG / WebP / GIF，单张不超过 2MB。</span>
+                  </div>
+                </div>
+
+                <div className="profile-settings-grid">
+                  <div className="field">
+                    <label htmlFor="profile-name">用户名</label>
+                    <input
+                      id="profile-name"
+                      className="input"
+                      value={form.name}
+                      maxLength={60}
+                      placeholder="请输入用户名"
+                      disabled={!canEdit}
+                      onChange={(event) => setField("name", event.target.value)}
+                    />
+                    <span className="field-hint">用户名会同步展示在关联的成员档案中。</span>
+                  </div>
+                  <div className="field">
+                    <label htmlFor="profile-email">登录邮箱</label>
+                    <input id="profile-email" className="input" value={user.email || "未绑定邮箱"} disabled readOnly />
+                    <span className="field-hint">登录邮箱由账号体系管理，如需变更请联系超级管理员。</span>
+                  </div>
+
+                  <div className="field profile-field-full">
+                    <span className="field-label">头像颜色</span>
+                    <div className="profile-color-row">
+                      <div className="profile-color-swatches" role="group" aria-label="选择头像颜色">
+                        {AVATAR_COLORS.map((color) => (
+                          <button
+                            key={color}
+                            type="button"
+                            className={cn("profile-color-swatch", form.avatarColor === color && "active")}
+                            style={{ background: color }}
+                            onClick={() => setField("avatarColor", color)}
+                            disabled={!canEdit}
+                            aria-label={`头像颜色 ${color}`}
+                            aria-pressed={form.avatarColor === color}
+                          >
+                            {form.avatarColor === color ? <Check size={12} /> : null}
+                          </button>
+                        ))}
+                      </div>
+                      <input
+                        type="color"
+                        className="profile-color-input"
+                        value={form.avatarColor}
+                        aria-label="自定义头像颜色"
+                        disabled={!canEdit}
+                        onChange={(event) => setField("avatarColor", event.target.value)}
                       />
-                      <div className="profile-avatar-actions">
+                    </div>
+                  </div>
+
+                  <div className="field profile-field-full">
+                    <span className="field-label">
+                      技能标签 <span className="profile-field-count">{form.skills.length}/{MAX_SKILLS}</span>
+                    </span>
+                    <div className="profile-skill-editor">
+                      <div className="tag-list">
+                        {form.skills.length ? (
+                          form.skills.map((skill) => (
+                            <span className="chip profile-skill-chip" key={skill}>
+                              {skill}
+                              <button
+                                type="button"
+                                className="profile-skill-remove"
+                                onClick={() => removeSkill(skill)}
+                                disabled={!canEdit}
+                                aria-label={`移除技能 ${skill}`}
+                              >
+                                <X size={11} />
+                              </button>
+                            </span>
+                          ))
+                        ) : (
+                          <span className="profile-field-empty">还没有技能标签，添加后展示在你的个人主页。</span>
+                        )}
+                      </div>
+                      <div className="profile-skill-input">
                         <input
-                          ref={fileInputRef}
-                          type="file"
-                          accept="image/png,image/jpeg,image/webp,image/gif"
-                          hidden
-                          onChange={(event) => void handleAvatarFile(event)}
+                          className="input"
+                          value={skillDraft}
+                          maxLength={MAX_SKILL_LENGTH}
+                          placeholder="例如：前端开发、数据分析"
+                          disabled={!canEdit}
+                          onChange={(event) => setSkillDraft(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              addSkill();
+                            }
+                          }}
                         />
                         <button
                           className="btn btn-secondary btn-sm"
-                          onClick={() => fileInputRef.current?.click()}
-                          disabled={!canEdit || uploading}
+                          type="button"
+                          onClick={addSkill}
+                          disabled={!canEdit || !skillDraft.trim() || form.skills.length >= MAX_SKILLS}
                         >
-                          {uploading ? <Loader2 size={14} className="spin" /> : <Camera size={14} />} 上传头像
+                          添加
                         </button>
-                        <button
-                          className="btn btn-ghost btn-sm"
-                          onClick={() => void handleDeleteAvatar()}
-                          disabled={!canEdit || uploading || !user.avatar}
-                        >
-                          <Trash2 size={14} /> 恢复默认头像
-                        </button>
-                        <span className="field-hint">支持 PNG / JPEG / WebP / GIF，单张不超过 2MB。</span>
                       </div>
+                      <span className="field-hint">
+                        最多 {MAX_SKILLS} 个标签，单个标签不超过 {MAX_SKILL_LENGTH} 个字符。
+                      </span>
                     </div>
+                  </div>
 
-                    <div className="profile-settings-grid">
-                      <div className="field">
-                        <label htmlFor="profile-name">用户名</label>
-                        <input
-                          id="profile-name"
-                          className="input"
-                          value={form.name}
-                          maxLength={60}
-                          placeholder="请输入用户名"
-                          disabled={!canEdit}
-                          onChange={(event) => setField("name", event.target.value)}
-                        />
-                        <span className="field-hint">用户名会同步展示在关联的成员档案中。</span>
-                      </div>
-                      <div className="field">
-                        <label htmlFor="profile-email">登录邮箱</label>
-                        <input id="profile-email" className="input" value={user.email || "未绑定邮箱"} disabled readOnly />
-                        <span className="field-hint">登录邮箱由账号体系管理，如需变更请联系超级管理员。</span>
-                      </div>
+                  <div className="field profile-field-full">
+                    <label htmlFor="profile-bio">
+                      个人简介 <span className="profile-field-count">{form.bio.length}/{MAX_BIO_LENGTH}</span>
+                    </label>
+                    <textarea
+                      id="profile-bio"
+                      className="textarea"
+                      rows={4}
+                      maxLength={MAX_BIO_LENGTH}
+                      placeholder="介绍一下你的职责、专长与协作方式…"
+                      value={form.bio}
+                      disabled={!canEdit}
+                      onChange={(event) => setField("bio", event.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+            </section>
+          ) : null}
 
-                      <div className="field profile-field-full">
-                        <span className="field-label">头像颜色</span>
-                        <div className="profile-color-row">
-                          <div className="profile-color-swatches" role="group" aria-label="选择头像颜色">
-                            {AVATAR_COLORS.map((color) => (
-                              <button
-                                key={color}
-                                type="button"
-                                className={cn("profile-color-swatch", form.avatarColor === color && "active")}
-                                style={{ background: color }}
-                                onClick={() => setField("avatarColor", color)}
-                                disabled={!canEdit}
-                                aria-label={`头像颜色 ${color}`}
-                                aria-pressed={form.avatarColor === color}
-                              >
-                                {form.avatarColor === color ? <Check size={12} /> : null}
-                              </button>
-                            ))}
-                          </div>
-                          <input
-                            type="color"
-                            className="profile-color-input"
-                            value={form.avatarColor}
-                            aria-label="自定义头像颜色"
-                            disabled={!canEdit}
-                            onChange={(event) => setField("avatarColor", event.target.value)}
-                          />
-                        </div>
-                      </div>
+          {activePaneSafe === "personalization" && isSelf ? (
+            <section className="card profile-section">
+              <div className="profile-section-head">
+                <div className="profile-section-title">
+                  <span className="profile-section-icon">
+                    <Palette size={16} />
+                  </span>
+                  <h2>个性化设置</h2>
+                  <span className="badge badge-gray">仅保存在当前浏览器</span>
+                </div>
+                <span className="profile-members-note">
+                  当前生效：{theme === "dark" ? "深色" : "浅色"}
+                </span>
+              </div>
+              <p className="profile-section-note">主题偏好仅保存在当前浏览器，不影响其他成员。</p>
+              <div className="profile-personalization-body">
+                <div className="field">
+                  <span className="field-label">主题偏好</span>
+                  <div className="segmented profile-theme-switch" role="group" aria-label="主题偏好">
+                    {THEME_PREFERENCES.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={themePreference === option.value ? "active" : undefined}
+                        aria-pressed={themePreference === option.value}
+                        onClick={() => setThemePreference(option.value)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="field-hint">
+                    默认「跟随系统」会实时响应操作系统 / 浏览器的明暗切换；选择「浅色」或「深色」后固定使用该主题。
+                    主题偏好仅保存在当前浏览器，不影响其他成员。
+                  </span>
+                </div>
+              </div>
+            </section>
+          ) : null}
 
-                      <div className="field profile-field-full">
-                        <span className="field-label">
-                          技能标签 <span className="profile-field-count">{form.skills.length}/{MAX_SKILLS}</span>
-                        </span>
-                        <div className="profile-skill-editor">
-                          <div className="tag-list">
-                            {form.skills.length ? (
-                              form.skills.map((skill) => (
-                                <span className="chip profile-skill-chip" key={skill}>
-                                  {skill}
-                                  <button
-                                    type="button"
-                                    className="profile-skill-remove"
-                                    onClick={() => removeSkill(skill)}
-                                    disabled={!canEdit}
-                                    aria-label={`移除技能 ${skill}`}
-                                  >
-                                    <X size={11} />
-                                  </button>
-                                </span>
-                              ))
-                            ) : (
-                              <span className="profile-field-empty">还没有技能标签，添加后展示在你的个人主页。</span>
-                            )}
-                          </div>
-                          <div className="profile-skill-input">
-                            <input
-                              className="input"
-                              value={skillDraft}
-                              maxLength={MAX_SKILL_LENGTH}
-                              placeholder="例如：前端开发、数据分析"
-                              disabled={!canEdit}
-                              onChange={(event) => setSkillDraft(event.target.value)}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter") {
-                                  event.preventDefault();
-                                  addSkill();
-                                }
-                              }}
-                            />
-                            <button
-                              className="btn btn-secondary btn-sm"
-                              type="button"
-                              onClick={addSkill}
-                              disabled={!canEdit || !skillDraft.trim() || form.skills.length >= MAX_SKILLS}
-                            >
-                              添加
-                            </button>
-                          </div>
-                          <span className="field-hint">
-                            最多 {MAX_SKILLS} 个标签，单个标签不超过 {MAX_SKILL_LENGTH} 个字符。
+          <div className="profile-record-pane" hidden={activePaneSafe !== "duties"}>
+            <SectionCard icon={<Waypoints size={16} />} title="责任田" count={profile.duties.length}>
+              {profile.duties.length ? (
+                <div className="profile-list">
+                  {profile.duties.map((duty: ProfileDuty) => (
+                    <div className="profile-row" key={duty.id}>
+                      <div className="profile-row-main">
+                        <div className="profile-row-title">
+                          <strong>{duty.area}</strong>
+                          <span className={cn("badge", duty.role === "owner" ? "badge-green" : "badge-blue")}>
+                            {duty.role === "owner" ? "负责人" : "备份"}
                           </span>
                         </div>
+                        <span className="profile-row-desc">{duty.description || "暂无职责说明"}</span>
+                        {duty.channel || duty.contact ? (
+                          <span className="profile-row-meta">
+                            {[duty.channel, duty.contact].filter(Boolean).join(" · ")}
+                          </span>
+                        ) : null}
                       </div>
-
-                      <div className="field profile-field-full">
-                        <label htmlFor="profile-bio">
-                          个人简介 <span className="profile-field-count">{form.bio.length}/{MAX_BIO_LENGTH}</span>
-                        </label>
-                        <textarea
-                          id="profile-bio"
-                          className="textarea"
-                          rows={4}
-                          maxLength={MAX_BIO_LENGTH}
-                          placeholder="介绍一下你的职责、专长与协作方式…"
-                          value={form.bio}
-                          disabled={!canEdit}
-                          onChange={(event) => setField("bio", event.target.value)}
-                        />
-                      </div>
+                      <TeamBadge teamName={duty.teamName} />
                     </div>
-                  </div>
-                </>
+                  ))}
+                </div>
               ) : (
-                <div className="profile-personalization-body">
-                  <div className="field">
-                    <span className="field-label">主题偏好</span>
-                    <div className="segmented profile-theme-switch" role="group" aria-label="主题偏好">
-                      {THEME_PREFERENCES.map((option) => (
-                        <button
-                          key={option.value}
-                          type="button"
-                          className={themePreference === option.value ? "active" : undefined}
-                          aria-pressed={themePreference === option.value}
-                          onClick={() => setThemePreference(option.value)}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                    </div>
-                    <span className="field-hint">
-                      默认「跟随系统」会实时响应操作系统 / 浏览器的明暗切换；选择「浅色」或「深色」后固定使用该主题。
-                      主题偏好仅保存在当前浏览器，不影响其他成员。
-                    </span>
-                  </div>
-                </div>
+                <div className="profile-empty">暂无责任田记录</div>
               )}
-            </div>
+            </SectionCard>
           </div>
-        </section>
-      ) : null}
 
-      <div className="profile-grid">
-        <SectionCard icon={<Waypoints size={16} />} title="责任田" count={profile.duties.length}>
-          {profile.duties.length ? (
-            <div className="profile-list">
-              {profile.duties.map((duty: ProfileDuty) => (
-                <div className="profile-row" key={duty.id}>
-                  <div className="profile-row-main">
-                    <div className="profile-row-title">
-                      <strong>{duty.area}</strong>
-                      <span className={cn("badge", duty.role === "owner" ? "badge-green" : "badge-blue")}>
-                        {duty.role === "owner" ? "负责人" : "备份"}
-                      </span>
+          <div className="profile-record-pane" hidden={activePaneSafe !== "tasks"}>
+            <SectionCard icon={<ListTodo size={16} />} title="当前任务" count={profile.currentTasks.length}>
+              {profile.currentTasks.length ? (
+                <div className="profile-list">
+                  {profile.currentTasks.map((task) => (
+                    <div className="profile-row" key={task.id}>
+                      <div className="profile-row-main">
+                        <div className="profile-row-title">
+                          <strong>{task.title}</strong>
+                          <span className={cn("badge", TASK_PROGRESS_META[task.progressStatus].badge)}>
+                            {TASK_PROGRESS_META[task.progressStatus].label}
+                          </span>
+                        </div>
+                        <span className="profile-row-desc">{task.description || "暂无任务描述"}</span>
+                        <div className="profile-row-meta">
+                          <span className={cn("badge", TASK_PRIORITY_META[task.priority].badge)}>
+                            {TASK_PRIORITY_META[task.priority].label}优先级
+                          </span>
+                          <span>预计 {formatDate(task.expectedDate)}</span>
+                          {task.overdue ? <span className="badge badge-red">已逾期</span> : null}
+                          {memberTaskCount > 1 ? <span>{task.memberName}</span> : null}
+                        </div>
+                      </div>
+                      <TeamBadge teamName={task.teamName} />
                     </div>
-                    <span className="profile-row-desc">{duty.description || "暂无职责说明"}</span>
-                    {duty.channel || duty.contact ? (
-                      <span className="profile-row-meta">
-                        {[duty.channel, duty.contact].filter(Boolean).join(" · ")}
-                      </span>
-                    ) : null}
-                  </div>
-                  <TeamBadge teamName={duty.teamName} />
+                  ))}
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div className="profile-empty">暂无责任田记录</div>
-          )}
-        </SectionCard>
+              ) : (
+                <div className="profile-empty">暂无进行中的任务</div>
+              )}
+            </SectionCard>
+          </div>
 
-        <SectionCard icon={<ListTodo size={16} />} title="当前任务" count={profile.currentTasks.length}>
-          {profile.currentTasks.length ? (
-            <div className="profile-list">
-              {profile.currentTasks.map((task) => (
-                <div className="profile-row" key={task.id}>
-                  <div className="profile-row-main">
-                    <div className="profile-row-title">
-                      <strong>{task.title}</strong>
-                      <span className={cn("badge", TASK_PROGRESS_META[task.progressStatus].badge)}>
-                        {TASK_PROGRESS_META[task.progressStatus].label}
-                      </span>
-                    </div>
-                    <span className="profile-row-desc">{task.description || "暂无任务描述"}</span>
-                    <div className="profile-row-meta">
-                      <span className={cn("badge", TASK_PRIORITY_META[task.priority].badge)}>
-                        {TASK_PRIORITY_META[task.priority].label}优先级
-                      </span>
-                      <span>预计 {formatDate(task.expectedDate)}</span>
-                      {task.overdue ? <span className="badge badge-red">已逾期</span> : null}
-                      {memberTaskCount > 1 ? <span>{task.memberName}</span> : null}
-                    </div>
-                  </div>
-                  <TeamBadge teamName={task.teamName} />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="profile-empty">暂无进行中的任务</div>
-          )}
-        </SectionCard>
-
-        <SectionCard icon={<History size={16} />} title="历史任务" count={profile.historyTasks.length}>
-          {profile.historyTasks.length ? (
-            <div className="profile-list">
-              {profile.historyTasks.map((task) => (
-                <div className="profile-row" key={task.id}>
-                  <div className="profile-row-main">
-                    <div className="profile-row-title">
-                      <strong>{task.title}</strong>
-                      <span className="badge badge-green">已完成</span>
-                    </div>
-                    <span className="profile-row-desc">{task.description || "暂无任务描述"}</span>
-                    <div className="profile-row-meta">
-                      <span>
-                        {task.completedAt ? `完成于 ${formatDate(task.completedAt)}` : `预计 ${formatDate(task.expectedDate)}`}
-                      </span>
-                      {task.tags?.length ? (
-                        <span className="tag-list">
-                          {task.tags.map((tag) => (
-                            <span className="chip" key={tag.id}>
-                              {tag.name}
+          <div className="profile-record-pane" hidden={activePaneSafe !== "history"}>
+            <SectionCard icon={<History size={16} />} title="历史任务" count={profile.historyTasks.length}>
+              {profile.historyTasks.length ? (
+                <div className="profile-list">
+                  {profile.historyTasks.map((task) => (
+                    <div className="profile-row" key={task.id}>
+                      <div className="profile-row-main">
+                        <div className="profile-row-title">
+                          <strong>{task.title}</strong>
+                          <span className="badge badge-green">已完成</span>
+                        </div>
+                        <span className="profile-row-desc">{task.description || "暂无任务描述"}</span>
+                        <div className="profile-row-meta">
+                          <span>
+                            {task.completedAt ? `完成于 ${formatDate(task.completedAt)}` : `预计 ${formatDate(task.expectedDate)}`}
+                          </span>
+                          {task.tags?.length ? (
+                            <span className="tag-list">
+                              {task.tags.map((tag) => (
+                                <span className="chip" key={tag.id}>
+                                  {tag.name}
+                                </span>
+                              ))}
                             </span>
-                          ))}
-                        </span>
-                      ) : null}
-                      {memberTaskCount > 1 ? <span>{task.memberName}</span> : null}
+                          ) : null}
+                          {memberTaskCount > 1 ? <span>{task.memberName}</span> : null}
+                        </div>
+                      </div>
+                      <TeamBadge teamName={task.teamName} />
                     </div>
-                  </div>
-                  <TeamBadge teamName={task.teamName} />
+                  ))}
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div className="profile-empty">暂无历史任务</div>
-          )}
-        </SectionCard>
+              ) : (
+                <div className="profile-empty">暂无历史任务</div>
+              )}
+            </SectionCard>
+          </div>
 
-        <SectionCard icon={<CalendarClock size={16} />} title="待办" count={profile.todos.length}>
-          {profile.todos.length ? (
-            <div className="profile-list">
-              {profile.todos.map((todo: ProfileTodo) => {
-                const due = dueLabel(todo);
-                const dueTone =
-                  due.tone === "danger"
-                    ? "badge-red"
-                    : due.tone === "warning"
-                      ? "badge-orange"
-                      : due.tone === "muted"
-                        ? "badge-gray"
-                        : "badge-blue";
-                return (
-                  <div className="profile-row" key={todo.id}>
-                    <div className="profile-row-main">
-                      <div className="profile-row-title">
-                        <strong className={cn(todo.status === "done" && "profile-done-text")}>{todo.title}</strong>
-                        <span className={cn("badge", todoPriorityBadge(todo.priority))}>
-                          {TODO_PRIORITY_META[todo.priority].label}
-                        </span>
+          <div className="profile-record-pane" hidden={activePaneSafe !== "todos"}>
+            <SectionCard icon={<CalendarClock size={16} />} title="待办" count={profile.todos.length}>
+              {profile.todos.length ? (
+                <div className="profile-list">
+                  {profile.todos.map((todo: ProfileTodo) => {
+                    const due = dueLabel(todo);
+                    const dueTone =
+                      due.tone === "danger"
+                        ? "badge-red"
+                        : due.tone === "warning"
+                          ? "badge-orange"
+                          : due.tone === "muted"
+                            ? "badge-gray"
+                            : "badge-blue";
+                    return (
+                      <div className="profile-row" key={todo.id}>
+                        <div className="profile-row-main">
+                          <div className="profile-row-title">
+                            <strong className={cn(todo.status === "done" && "profile-done-text")}>{todo.title}</strong>
+                            <span className={cn("badge", todoPriorityBadge(todo.priority))}>
+                              {TODO_PRIORITY_META[todo.priority].label}
+                            </span>
+                          </div>
+                          <div className="profile-row-meta">
+                            <span className={cn("badge", dueTone)}>{due.label}</span>
+                            <span>截止 {formatDate(todo.dueDate)}</span>
+                            {todo.status === "done" ? <span className="badge badge-green">已完成</span> : null}
+                          </div>
+                        </div>
+                        <TeamBadge teamName={todo.teamName} />
                       </div>
-                      <div className="profile-row-meta">
-                        <span className={cn("badge", dueTone)}>{due.label}</span>
-                        <span>截止 {formatDate(todo.dueDate)}</span>
-                        {todo.status === "done" ? <span className="badge badge-green">已完成</span> : null}
-                      </div>
-                    </div>
-                    <TeamBadge teamName={todo.teamName} />
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="profile-empty">暂无待办事项</div>
+              )}
+            </SectionCard>
+          </div>
+
+          <div className="profile-record-pane" hidden={activePaneSafe !== "redblack"}>
+            <SectionCard
+              icon={<Trophy size={16} />}
+              title="红黑榜记录"
+              count={redEntries.length + blackEntries.length}
+            >
+              {redEntries.length || blackEntries.length ? (
+                <div className="profile-rb">
+                  <div className="profile-rb-column">
+                    <div className="profile-rb-heading is-red">红榜 · {redEntries.length}</div>
+                    {redEntries.length ? (
+                      redEntries.map((entry) => (
+                        <div className="profile-rb-entry" key={entry.id}>
+                          <div className="profile-row-title">
+                            <strong>{entry.title}</strong>
+                            <span className="badge badge-red">红榜</span>
+                            <span className="profile-rb-month">{entry.month}</span>
+                          </div>
+                          <span className="profile-row-desc">{entry.reason || "暂无上榜理由"}</span>
+                          <div className="profile-row-meta">
+                            <span>{entry.memberName}</span>
+                            <TeamBadge teamName={entry.teamName} />
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="profile-empty">暂无红榜记录</div>
+                    )}
                   </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="profile-empty">暂无待办事项</div>
-          )}
-        </SectionCard>
-
-        <SectionCard icon={<Trophy size={16} />} title="红黑榜记录" count={redEntries.length + blackEntries.length} wide>
-          {redEntries.length || blackEntries.length ? (
-            <div className="profile-rb">
-              <div className="profile-rb-column">
-                <div className="profile-rb-heading is-red">红榜 · {redEntries.length}</div>
-                {redEntries.length ? (
-                  redEntries.map((entry) => (
-                    <div className="profile-rb-entry" key={entry.id}>
-                      <div className="profile-row-title">
-                        <strong>{entry.title}</strong>
-                        <span className="badge badge-red">红榜</span>
-                        <span className="profile-rb-month">{entry.month}</span>
-                      </div>
-                      <span className="profile-row-desc">{entry.reason || "暂无上榜理由"}</span>
-                      <div className="profile-row-meta">
-                        <span>{entry.memberName}</span>
-                        <TeamBadge teamName={entry.teamName} />
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="profile-empty">暂无红榜记录</div>
-                )}
-              </div>
-              <div className="profile-rb-column">
-                <div className="profile-rb-heading is-black">黑榜 · {blackEntries.length}</div>
-                {blackEntries.length ? (
-                  blackEntries.map((entry) => (
-                    <div className="profile-rb-entry" key={entry.id}>
-                      <div className="profile-row-title">
-                        <strong>{entry.title}</strong>
-                        <span className="badge badge-gray">黑榜</span>
-                        <span className="profile-rb-month">{entry.month}</span>
-                      </div>
-                      <span className="profile-row-desc">{entry.reason || "暂无上榜理由"}</span>
-                      <div className="profile-row-meta">
-                        <span>{entry.memberName}</span>
-                        <TeamBadge teamName={entry.teamName} />
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="profile-empty">暂无黑榜记录</div>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="profile-empty">暂无红黑榜记录</div>
-          )}
-        </SectionCard>
+                  <div className="profile-rb-column">
+                    <div className="profile-rb-heading is-black">黑榜 · {blackEntries.length}</div>
+                    {blackEntries.length ? (
+                      blackEntries.map((entry) => (
+                        <div className="profile-rb-entry" key={entry.id}>
+                          <div className="profile-row-title">
+                            <strong>{entry.title}</strong>
+                            <span className="badge badge-gray">黑榜</span>
+                            <span className="profile-rb-month">{entry.month}</span>
+                          </div>
+                          <span className="profile-row-desc">{entry.reason || "暂无上榜理由"}</span>
+                          <div className="profile-row-meta">
+                            <span>{entry.memberName}</span>
+                            <TeamBadge teamName={entry.teamName} />
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="profile-empty">暂无黑榜记录</div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="profile-empty">暂无红黑榜记录</div>
+              )}
+            </SectionCard>
+          </div>
+        </div>
       </div>
     </div>
   );
