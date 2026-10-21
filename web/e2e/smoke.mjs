@@ -345,14 +345,17 @@ try {
   await page.waitForFunction(
     () => localStorage.getItem("teamstudio.theme.preference") === "auto",
   );
-  // The merged task pane shows its three groups in one card.
+  // The merged task pane shows its three groups in one card, ordered 待办 → 当前任务 → 历史任务.
   await page.locator(".profile-settings-tab").filter({ hasText: "任务与待办" }).click();
   const workPane = page.locator(".profile-record-pane:not([hidden])");
   await workPane.locator(".profile-work-heading").first().waitFor();
-  const workPaneText = await workPane.innerText();
-  for (const label of ["当前任务", "历史任务", "待办"]) {
-    assert.ok(workPaneText.includes(label), `任务与待办 pane contains ${label}`);
-  }
+  const workHeadings = (await workPane.locator(".profile-work-heading").allInnerTexts()).map((value) =>
+    value.trim(),
+  );
+  assert.equal(workHeadings.length, 3, "任务与待办 has three groups");
+  assert.ok(workHeadings[0].includes("待办"), `first group is 待办, got ${workHeadings[0]}`);
+  assert.ok(workHeadings[1].includes("当前任务"), `second group is 当前任务, got ${workHeadings[1]}`);
+  assert.ok(workHeadings[2].includes("历史任务"), `third group is 历史任务, got ${workHeadings[2]}`);
   // Responsibility areas are folded into the member archive rows (check another profile).
   await goto("profile?userId=lin.zhixia");
   await page.locator(".profile-hero-archives").waitFor();

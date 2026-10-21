@@ -878,6 +878,48 @@ export default function ProfilePage() {
             >
               <div className="profile-work-group">
                 <div className="profile-work-heading">
+                  <CalendarClock size={14} /> 待办
+                  <span className="badge badge-gray">{profile.todos.length}</span>
+                </div>
+                {profile.todos.length ? (
+                  <div className="profile-list">
+                    {profile.todos.map((todo: ProfileTodo) => {
+                      const due = dueLabel(todo);
+                      const dueTone =
+                        due.tone === "danger"
+                          ? "badge-red"
+                          : due.tone === "warning"
+                            ? "badge-orange"
+                            : due.tone === "muted"
+                              ? "badge-gray"
+                              : "badge-blue";
+                      return (
+                        <div className="profile-row" key={todo.id}>
+                          <div className="profile-row-main">
+                            <div className="profile-row-title">
+                              <strong className={cn(todo.status === "done" && "profile-done-text")}>{todo.title}</strong>
+                              <span className={cn("badge", todoPriorityBadge(todo.priority))}>
+                                {TODO_PRIORITY_META[todo.priority].label}
+                              </span>
+                            </div>
+                            <div className="profile-row-meta">
+                              <span className={cn("badge", dueTone)}>{due.label}</span>
+                              <span>截止 {formatDate(todo.dueDate)}</span>
+                              {todo.status === "done" ? <span className="badge badge-green">已完成</span> : null}
+                            </div>
+                          </div>
+                          <TeamBadge teamName={todo.teamName} />
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="profile-empty">暂无待办事项</div>
+                )}
+              </div>
+
+              <div className="profile-work-group">
+                <div className="profile-work-heading">
                   <ListTodo size={14} /> 当前任务
                   <span className="badge badge-gray">{profile.currentTasks.length}</span>
                 </div>
@@ -948,48 +990,6 @@ export default function ProfilePage() {
                   </div>
                 ) : (
                   <div className="profile-empty">暂无历史任务</div>
-                )}
-              </div>
-
-              <div className="profile-work-group">
-                <div className="profile-work-heading">
-                  <CalendarClock size={14} /> 待办
-                  <span className="badge badge-gray">{profile.todos.length}</span>
-                </div>
-                {profile.todos.length ? (
-                  <div className="profile-list">
-                    {profile.todos.map((todo: ProfileTodo) => {
-                      const due = dueLabel(todo);
-                      const dueTone =
-                        due.tone === "danger"
-                          ? "badge-red"
-                          : due.tone === "warning"
-                            ? "badge-orange"
-                            : due.tone === "muted"
-                              ? "badge-gray"
-                              : "badge-blue";
-                      return (
-                        <div className="profile-row" key={todo.id}>
-                          <div className="profile-row-main">
-                            <div className="profile-row-title">
-                              <strong className={cn(todo.status === "done" && "profile-done-text")}>{todo.title}</strong>
-                              <span className={cn("badge", todoPriorityBadge(todo.priority))}>
-                                {TODO_PRIORITY_META[todo.priority].label}
-                              </span>
-                            </div>
-                            <div className="profile-row-meta">
-                              <span className={cn("badge", dueTone)}>{due.label}</span>
-                              <span>截止 {formatDate(todo.dueDate)}</span>
-                              {todo.status === "done" ? <span className="badge badge-green">已完成</span> : null}
-                            </div>
-                          </div>
-                          <TeamBadge teamName={todo.teamName} />
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="profile-empty">暂无待办事项</div>
                 )}
               </div>
             </SectionCard>
