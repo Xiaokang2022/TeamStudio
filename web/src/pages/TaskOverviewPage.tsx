@@ -6,7 +6,9 @@ import {
   ArrowUpDown,
   Clock,
   Eye,
+  FolderPlus,
   Gauge,
+  Layers,
   ListTodo,
   Pencil,
   Plus,
@@ -26,7 +28,7 @@ import { useApp } from "../store";
 import { useToast } from "../components/Toast";
 import { Avatar } from "../components/Avatar";
 import { EmptyState, LoadingBlock } from "../components/Feedback";
-import { ConfirmDialog } from "../components/Modal";
+import { ConfirmDialog, Modal } from "../components/Modal";
 import { TaskDialog } from "../components/TaskDialog";
 import type { TaskMemberOption } from "../components/TaskDialog";
 import { TagChips, TagLibraryDialog } from "../components/TagPicker";
@@ -44,12 +46,15 @@ import {
   rangeStartISO,
 } from "../lib/utils";
 import {
+  DIFFICULTIES,
   DIFFICULTY_META,
   HEALTH_STATUSES,
   PRIORITIES,
   PRIORITY_META,
   PROGRESS_STATUSES,
+  TASK_CAPACITY_POINTS,
   TASK_HEALTH_META,
+  TASK_MAX_POINTS,
   TASK_PROGRESS_META,
   formatPercent,
   formatPoints,
@@ -64,6 +69,7 @@ import type {
   TaskPriority,
   TaskProgressStatus,
   TaskTag,
+  TeamGroup,
   Workload,
   WorkloadSummary,
 } from "../types";
@@ -72,6 +78,8 @@ import "./TaskOverviewPage.css";
 type ProgressFilter = "all" | TaskProgressStatus;
 type HealthFilter = "all" | TaskHealthStatus;
 type PriorityFilter = "all" | TaskPriority;
+/** 任务分组筛选："all" = 全部任务，"none" = 未分组，其他值 = 任务组 id。 */
+type GroupFilter = string;
 
 /** #13 sortable task-ledger columns. */
 type TaskSortKey =
@@ -93,8 +101,9 @@ interface SortState {
 const DEFAULT_SORT: SortState = { key: "created", direction: "desc" };
 const DEFAULT_RANGE_KEY: InsightsRangeKey = "1m";
 
-const PRIORITY_RANK: Record<TaskPriority, number> = { low: 0, normal: 1, high: 2, urgent: 3 };
-const DIFFICULTY_RANK: Record<TaskDifficulty, number> = { easy: 0, medium: 1, hard: 2 };
+// Round 9：排序按分值 1/2/3（与 taskMeta 的乘法评分一致）。
+const PRIORITY_RANK: Record<TaskPriority, number> = { low: 1, normal: 2, high: 3 };
+const DIFFICULTY_RANK: Record<TaskDifficulty, number> = { easy: 1, medium: 2, hard: 3 };
 const PROGRESS_RANK: Record<TaskProgressStatus, number> = {
   pending: 0,
   in_progress: 1,
@@ -118,11 +127,12 @@ const EMPTY_SUMMARY: WorkloadSummary = {
   windowWeeks: 4,
 };
 const EMPTY_META = {
-  capacityPoints: 15,
+  capacityPoints: TASK_CAPACITY_POINTS,
   windowWeeks: 4,
   windowLabel: "近 4 周",
-  scoring: "任务基础 1 分 + 难度加成 + 优先级加成；每人每周容量 15 分",
+  scoring: `负载分 = 优先级分（1-3）× 难度分（1-3），满分 ${TASK_MAX_POINTS}；每人每周容量 ${TASK_CAPACITY_POINTS} 分`,
 };
+const EMPTY_GROUPS: TeamGroup[] = [];
 
 function messageOf(error: unknown, fallback: string): string {
   return error instanceof ApiError ? error.message : fallback;
@@ -256,6 +266,294 @@ function SortableTh({
   );
 }
 
+// Round 9：优先级 / 难度行内编辑选项（带分值，与 TaskDialog 按钮文案保持一致）。
+const PRIORITY_EDIT_OPTIONS = PRIORITIES.map((value) => ({
+  value,
+  label: `${PRIORITY_META[value].label} · ${PRIORITY_META[value].score} 分`,
+}));
+const DIFFICULTY_EDIT_OPTIONS = DIFFICULTIES.map((value) => ({
+  value,
+  label: `${DIFFICULTY_META[value].label} · ${DIFFICULTY_META[value].score} 分`,
+}));
+
+const GROUP_COLOR_PRESETS = [
+  "#5865f2",
+  "#7c3aed",
+  "#0ea5e9",
+  "#10b981",
+  "#f59e0b",
+  "#ef4444",
+  "#ec4899",
+  "#64748b",
+];
+
+/**
+ * Round 9：任务组管理（仅团队管理员可见）。增删改都走 groups API，
+ * 成功后由父级重新拉取台账，组列表与 taskCount 始终与后端一致。
+ */
+function GroupManagerDialog({
+  open,
+  teamId,
+  groups,
+  onClose,
+  onChanged,
+}: {
+  open: boolean;
+  teamId: string;
+  groups: TeamGroup[];
+  onClose: () => void;
+  onChanged: () => void | Promise<void>;
+}) {
+  const { toast } = useToast();
+  const [name, setName] = useState("");
+  const [color, setColor] = useState(GROUP_COLOR_PRESETS[0]);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editColor, setEditColor] = useState(GROUP_COLOR_PRESETS[0]);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (open) return;
+    setName("");
+    setColor(GROUP_COLOR_PRESETS[0]);
+    setEditingId(null);
+    setConfirmDeleteId(null);
+    setBusy(false);
+  }, [open]);
+
+  const createGroup = async () => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      toast("请填写任务组名称。", "info");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.createGroup(teamId, { kind: "task", name: trimmed, color });
+      toast(`已创建任务组「${trimmed}」`, "success");
+      setName("");
+      await onChanged();
+    } catch (err) {
+      toast(messageOf(err, "创建任务组失败，请稍后重试。"), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveEdit = async (group: TeamGroup) => {
+    const trimmed = editName.trim();
+    if (!trimmed) {
+      toast("任务组名称不能为空。", "info");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.updateGroup(teamId, group.id, { name: trimmed, color: editColor });
+      toast("任务组已更新", "success");
+      setEditingId(null);
+      await onChanged();
+    } catch (err) {
+      toast(messageOf(err, "更新任务组失败，请稍后重试。"), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeGroup = async (group: TeamGroup) => {
+    setBusy(true);
+    try {
+      await api.deleteGroup(teamId, group.id);
+      toast(`已删除任务组「${group.name}」，组内任务变为未分组`, "success");
+      setConfirmDeleteId(null);
+      await onChanged();
+    } catch (err) {
+      toast(messageOf(err, "删除任务组失败，请稍后重试。"), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="任务分组管理"
+      size="md"
+      description="任务组用于任务台账的筛选与分区显示；删除任务组后，组内任务会自动变为未分组（任务本身不会被删除）。"
+      footer={
+        <button className="btn btn-ghost" type="button" onClick={onClose}>
+          关闭
+        </button>
+      }
+    >
+      <div className="tasks-group-manager">
+        <div className="tasks-group-create">
+          <label htmlFor="tasks-group-new-name">新建任务组</label>
+          <div className="tasks-group-create-row">
+            <input
+              id="tasks-group-new-name"
+              className="input"
+              value={name}
+              maxLength={24}
+              placeholder="例如：本周冲刺、客户端体验"
+              onChange={(event) => setName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void createGroup();
+                }
+              }}
+              disabled={busy}
+            />
+            <input
+              className="tasks-group-color"
+              type="color"
+              value={color}
+              onChange={(event) => setColor(event.target.value)}
+              aria-label="任务组颜色"
+              disabled={busy}
+            />
+            <button
+              className="btn btn-primary btn-sm"
+              type="button"
+              onClick={() => void createGroup()}
+              disabled={busy || !name.trim()}
+            >
+              <FolderPlus size={13} /> 新建
+            </button>
+          </div>
+          <div className="tasks-group-swatches" role="group" aria-label="选择任务组颜色">
+            {GROUP_COLOR_PRESETS.map((preset) => (
+              <button
+                key={preset}
+                type="button"
+                className={cn("tasks-group-swatch", color === preset && "active")}
+                style={{ background: preset }}
+                onClick={() => setColor(preset)}
+                aria-label={`使用颜色 ${preset}`}
+                aria-pressed={color === preset}
+              />
+            ))}
+          </div>
+          <span className="field-hint">同一团队内任务组名称唯一；颜色用于列表中的圆点标识。</span>
+        </div>
+
+        {groups.length ? (
+          <ul className="tasks-group-list">
+            {groups.map((group) => (
+              <li key={group.id} className="tasks-group-row">
+                {editingId === group.id ? (
+                  <>
+                    <span className="tasks-group-dot" style={{ background: editColor }} />
+                    <input
+                      className="input tasks-group-rename"
+                      value={editName}
+                      maxLength={24}
+                      onChange={(event) => setEditName(event.target.value)}
+                      aria-label={`重命名任务组 ${group.name}`}
+                      disabled={busy}
+                    />
+                    <input
+                      className="tasks-group-color"
+                      type="color"
+                      value={editColor}
+                      onChange={(event) => setEditColor(event.target.value)}
+                      aria-label="任务组颜色"
+                      disabled={busy}
+                    />
+                    <button
+                      className="btn btn-primary btn-sm"
+                      type="button"
+                      onClick={() => void saveEdit(group)}
+                      disabled={busy || !editName.trim()}
+                    >
+                      保存
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      type="button"
+                      onClick={() => setEditingId(null)}
+                      disabled={busy}
+                    >
+                      取消
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="tasks-group-dot" style={{ background: group.color }} />
+                    <strong>{group.name}</strong>
+                    <span className="tasks-group-count">{group.taskCount ?? 0} 条任务</span>
+                    {confirmDeleteId === group.id ? (
+                      <>
+                        <span className="tasks-group-confirm">
+                          确认删除？组内任务将变为未分组。
+                        </span>
+                        <button
+                          className="btn btn-danger btn-sm"
+                          type="button"
+                          onClick={() => void removeGroup(group)}
+                          disabled={busy}
+                        >
+                          确认删除
+                        </button>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          type="button"
+                          onClick={() => setConfirmDeleteId(null)}
+                          disabled={busy}
+                        >
+                          取消
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          className="icon-button"
+                          type="button"
+                          onClick={() => {
+                            setEditingId(group.id);
+                            setEditName(group.name);
+                            setEditColor(group.color || GROUP_COLOR_PRESETS[0]);
+                            setConfirmDeleteId(null);
+                          }}
+                          aria-label={`重命名任务组 ${group.name}`}
+                          title="重命名"
+                        >
+                          <Pencil size={13} />
+                        </button>
+                        <button
+                          className="icon-button danger"
+                          type="button"
+                          onClick={() => {
+                            setConfirmDeleteId(group.id);
+                            setEditingId(null);
+                          }}
+                          aria-label={`删除任务组 ${group.name}`}
+                          title="删除"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </>
+                    )}
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <EmptyState
+            compact
+            icon={<FolderPlus size={22} />}
+            title="还没有任务组"
+            description="创建任务组后，可在任务台账中按组筛选或分区查看任务。"
+          />
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 export default function TaskOverviewPage() {
   const { data, currentTeam, canManageActiveTeam, reload, navigate } = useApp();
   const { toast } = useToast();
@@ -287,6 +585,9 @@ export default function TaskOverviewPage() {
   const [healthFilter, setHealthFilter] = useState<HealthFilter>("all");
   const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>("all");
   const [tagFilter, setTagFilter] = useState<string>("all");
+  const [groupFilter, setGroupFilter] = useState<GroupFilter>("all");
+  const [groupBy, setGroupBy] = useState(false);
+  const [groupManageOpen, setGroupManageOpen] = useState(false);
   const [showCompleted, setShowCompleted] = useState(true);
   const [rangeKey, setRangeKey] = useState<InsightsRangeKey>(DEFAULT_RANGE_KEY);
   const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
@@ -332,6 +633,9 @@ export default function TaskOverviewPage() {
     setHealthFilter("all");
     setPriorityFilter("all");
     setTagFilter("all");
+    setGroupFilter("all");
+    setGroupBy(false);
+    setGroupManageOpen(false);
     setShowCompleted(true);
     setRangeKey(DEFAULT_RANGE_KEY);
     setSort(DEFAULT_SORT);
@@ -347,6 +651,38 @@ export default function TaskOverviewPage() {
   const summary = payload?.summary ?? EMPTY_SUMMARY;
   const meta = payload?.meta ?? EMPTY_META;
   const windowLabel = meta.windowLabel || "近 4 周";
+  /** Round 9: 任务组（kind="task"），按 sortOrder 再按名称排序；旧 payload 无 groups 时兜底为空。 */
+  const groups = useMemo(
+    () =>
+      (payload?.groups ?? EMPTY_GROUPS)
+        .filter((group) => group.kind === "task")
+        .slice()
+        .sort(
+          (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || compareNames(a.name, b.name),
+        ),
+    [payload?.groups],
+  );
+  const groupFilterOptions = useMemo(
+    () => [
+      { value: "all", label: "全部任务组" },
+      { value: "none", label: "未分组" },
+      ...groups.map((group) => ({ value: group.id, label: group.name, color: group.color })),
+    ],
+    [groups],
+  );
+  const taskGroupOptions = useMemo(
+    () => [
+      { value: "", label: "未分组" },
+      ...groups.map((group) => ({ value: group.id, label: group.name, color: group.color })),
+    ],
+    [groups],
+  );
+
+  // 选中的任务组被删除后，筛选条件回退为「全部」，避免台账空白。
+  useEffect(() => {
+    if (groupFilter === "all" || groupFilter === "none") return;
+    if (!groups.some((group) => group.id === groupFilter)) setGroupFilter("all");
+  }, [groups, groupFilter]);
 
   /**
    * Archive id -> person id (the merged workload's main archive id). Tasks always
@@ -484,6 +820,9 @@ export default function TaskOverviewPage() {
       if (progressFilter !== "all" && task.progressStatus !== progressFilter) return false;
       if (healthFilter !== "all" && task.healthStatus !== healthFilter) return false;
       if (priorityFilter !== "all" && task.priority !== priorityFilter) return false;
+      if (groupFilter === "none") {
+        if (task.groupId) return false;
+      } else if (groupFilter !== "all" && task.groupId !== groupFilter) return false;
       if (memberFilter !== "all" && personIdOf(task.memberId) !== memberFilter) return false;
       if (tagFilter !== "all" && !(task.tags ?? []).some((tag) => tag.id === tagFilter)) return false;
       if (keyword) {
@@ -501,6 +840,7 @@ export default function TaskOverviewPage() {
     progressFilter,
     healthFilter,
     priorityFilter,
+    groupFilter,
     memberFilter,
     tagFilter,
     personIdOf,
@@ -510,6 +850,27 @@ export default function TaskOverviewPage() {
     () => [...filteredTasks].sort((a, b) => compareTasks(a, b, sort)),
     [filteredTasks, sort],
   );
+
+  /**
+   * Round 9：「按组显示」的分区数据。组按 sortOrder 排序，未分组固定置底；
+   * 引用了已删除组的任务同样归入未分组，避免任务在列表里凭空消失。
+   */
+  const groupedSections = useMemo(() => {
+    const knownIds = new Set(groups.map((group) => group.id));
+    const sections = groups.map((group) => ({
+      key: group.id,
+      label: group.name,
+      color: group.color,
+      tasks: sortedTasks.filter((task) => task.groupId === group.id),
+    }));
+    sections.push({
+      key: "none",
+      label: "未分组",
+      color: "",
+      tasks: sortedTasks.filter((task) => !task.groupId || !knownIds.has(task.groupId)),
+    });
+    return sections.filter((section) => section.tasks.length);
+  }, [groups, sortedTasks]);
 
   // Person-deduplicated member filter options (one entry per human, not per archive).
   const memberOptions = useMemo(() => {
@@ -600,6 +961,7 @@ export default function TaskOverviewPage() {
     progressFilter !== "all" ||
     healthFilter !== "all" ||
     priorityFilter !== "all" ||
+    groupFilter !== "all" ||
     tagFilter !== "all" ||
     !showCompleted;
 
@@ -618,6 +980,7 @@ export default function TaskOverviewPage() {
     setProgressFilter("all");
     setHealthFilter("all");
     setPriorityFilter("all");
+    setGroupFilter("all");
     setTagFilter("all");
     setShowCompleted(true);
   };
@@ -676,6 +1039,56 @@ export default function TaskOverviewPage() {
       setBusyId(null);
     }
   };
+
+  /** Round 9：行内修改优先级 / 难度 / 分组，成功后局部替换并静默刷新汇总。 */
+  const patchTask = useCallback(
+    async (task: MemberTask, patch: Partial<MemberTask>, successMessage: string) => {
+      setBusyId(task.id);
+      try {
+        const result = await api.updateTask(teamId, task.id, patch);
+        setPayload((current) =>
+          current
+            ? {
+                ...current,
+                tasks: current.tasks.map((item) =>
+                  item.id === result.task.id ? result.task : item,
+                ),
+              }
+            : current,
+        );
+        toast(successMessage, "success");
+        await loadTasks(true);
+      } catch (err) {
+        toast(messageOf(err, "保存失败，请稍后重试。"), "error");
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [teamId, toast, loadTasks],
+  );
+
+  const changeTaskPriority = (task: MemberTask, priority: TaskPriority) =>
+    void patchTask(
+      task,
+      { priority },
+      `已将「${task.title}」优先级改为${PRIORITY_META[priority].label}（${PRIORITY_META[priority].score} 分）`,
+    );
+
+  const changeTaskDifficulty = (task: MemberTask, difficulty: TaskDifficulty) =>
+    void patchTask(
+      task,
+      { difficulty },
+      `已将「${task.title}」难度改为${DIFFICULTY_META[difficulty].label}（${DIFFICULTY_META[difficulty].score} 分）`,
+    );
+
+  const changeTaskGroup = (task: MemberTask, groupId: string) =>
+    void patchTask(
+      task,
+      { groupId },
+      groupId
+        ? `已将「${task.title}」归入「${groups.find((group) => group.id === groupId)?.name ?? "任务组"}」`
+        : `已将「${task.title}」移出任务组（未分组）`,
+    );
 
   if (!currentTeam) {
     return (
@@ -856,6 +1269,32 @@ export default function TaskOverviewPage() {
           </div>
         </div>
 
+        <div className="tasks-filter-group">
+          <span className="tasks-filter-label">
+            <Layers size={11} /> 分组
+          </span>
+          <div className="tasks-group-filters">
+            <div className="tasks-group-filter-select">
+              <Select
+                value={groupFilter}
+                onChange={setGroupFilter}
+                ariaLabel="按任务组筛选"
+                size="sm"
+                options={groupFilterOptions}
+              />
+            </div>
+            <label className="switch tasks-groupby-switch">
+              <input
+                type="checkbox"
+                checked={groupBy}
+                onChange={(event) => setGroupBy(event.target.checked)}
+              />
+              <span className="switch-track" />
+              <span>按组显示</span>
+            </label>
+          </div>
+        </div>
+
         {tagUsage.length ? (
           <div className="tasks-filter-group tasks-tag-filter-group">
             <span className="tasks-filter-label">
@@ -907,6 +1346,8 @@ export default function TaskOverviewPage() {
     progressFilter,
     healthFilter,
     priorityFilter,
+    groupFilter,
+    groupBy ? "grouped" : "flat",
     tagFilter,
     showCompleted ? "1" : "0",
     search,
@@ -914,24 +1355,37 @@ export default function TaskOverviewPage() {
     sort.direction,
   ].join("|");
 
-  const table = (
-    <div className="table-wrap tasks-table-wrap" key={`table-${listKey}`}>
+  const renderTable = (rows: MemberTask[], sectionKey: string) => (
+    <div className="table-wrap tasks-table-wrap" key={`table-${sectionKey}-${listKey}`}>
       <table className="data-table tasks-table">
         <thead>
           <tr>
             <SortableTh label="成员" sortKey="member" sort={sort} onSort={toggleSort} />
             <th scope="col">任务</th>
-            <SortableTh label="优先级" sortKey="priority" sort={sort} onSort={toggleSort} />
-            <SortableTh label="难度" sortKey="difficulty" sort={sort} onSort={toggleSort} />
+            <SortableTh
+              label="优先级"
+              sortKey="priority"
+              sort={sort}
+              onSort={toggleSort}
+              title="按优先级排序（低 1 分 / 普通 2 分 / 高 3 分）"
+            />
+            <SortableTh
+              label="难度"
+              sortKey="difficulty"
+              sort={sort}
+              onSort={toggleSort}
+              title="按难度排序（简单 1 分 / 中等 2 分 / 困难 3 分）"
+            />
             <SortableTh label="进度" sortKey="progress" sort={sort} onSort={toggleSort} />
             <SortableTh label="健康度" sortKey="health" sort={sort} onSort={toggleSort} />
+            <th scope="col">分组</th>
             <SortableTh label="预期完成" sortKey="expected" sort={sort} onSort={toggleSort} />
             <SortableTh
               label="负载"
               sortKey="load"
               sort={sort}
               onSort={toggleSort}
-              title="按负载点数排序（负载点数 = 1 分基础 + 优先级加成 + 难度加成）"
+              title={`按负载分排序（负载分 = 优先级分 1-3 × 难度分 1-3，满分 ${TASK_MAX_POINTS}）`}
             />
             <SortableTh label="创建时间" sortKey="created" sort={sort} onSort={toggleSort} />
             <th scope="col">
@@ -940,7 +1394,7 @@ export default function TaskOverviewPage() {
           </tr>
         </thead>
         <tbody>
-          {sortedTasks.map((task, index) => {
+          {rows.map((task, index) => {
             const progress = TASK_PROGRESS_META[task.progressStatus] ?? TASK_PROGRESS_META.pending;
             const health = TASK_HEALTH_META[task.healthStatus] ?? TASK_HEALTH_META.normal;
             const priorityKey: TaskPriority = task.priority ?? "normal";
@@ -983,20 +1437,50 @@ export default function TaskOverviewPage() {
                   </div>
                 </td>
                 <td>
-                  <span
-                    className={cn("tasks-tag", `is-priority-${priorityKey}`)}
-                    title={`优先级 ${priority.label}（+${priority.weight} 分）`}
-                  >
-                    <i className="tasks-tag-dot" /> {priority.label}
-                  </span>
+                  {manageable ? (
+                    <Select
+                      className="tasks-inline-select"
+                      size="sm"
+                      value={priorityKey}
+                      onChange={(value) => {
+                        if (!value || value === priorityKey) return;
+                        changeTaskPriority(task, value as TaskPriority);
+                      }}
+                      options={PRIORITY_EDIT_OPTIONS}
+                      ariaLabel={`设置任务「${task.title}」的优先级`}
+                      disabled={busyId === task.id}
+                    />
+                  ) : (
+                    <span
+                      className={cn("tasks-tag", `is-priority-${priorityKey}`)}
+                      title={`优先级 ${priority.label}（${priority.score} 分）`}
+                    >
+                      <i className="tasks-tag-dot" /> {priority.label}
+                    </span>
+                  )}
                 </td>
                 <td>
-                  <span
-                    className={cn("tasks-tag", `is-difficulty-${difficultyKey}`)}
-                    title={`难度 ${difficulty.label}（+${difficulty.weight} 分）`}
-                  >
-                    <i className="tasks-tag-dot" /> {difficulty.label}
-                  </span>
+                  {manageable ? (
+                    <Select
+                      className="tasks-inline-select"
+                      size="sm"
+                      value={difficultyKey}
+                      onChange={(value) => {
+                        if (!value || value === difficultyKey) return;
+                        changeTaskDifficulty(task, value as TaskDifficulty);
+                      }}
+                      options={DIFFICULTY_EDIT_OPTIONS}
+                      ariaLabel={`设置任务「${task.title}」的难度`}
+                      disabled={busyId === task.id}
+                    />
+                  ) : (
+                    <span
+                      className={cn("tasks-tag", `is-difficulty-${difficultyKey}`)}
+                      title={`难度 ${difficulty.label}（${difficulty.score} 分）`}
+                    >
+                      <i className="tasks-tag-dot" /> {difficulty.label}
+                    </span>
+                  )}
                 </td>
                 <td>
                   <span className={cn("badge", progress.badge)}>{progress.label}</span>
@@ -1015,6 +1499,34 @@ export default function TaskOverviewPage() {
                   </span>
                 </td>
                 <td>
+                  {manageable ? (
+                    <Select
+                      className="tasks-inline-select tasks-group-inline-select"
+                      size="sm"
+                      value={task.groupId ?? ""}
+                      onChange={(value) => {
+                        if (value === (task.groupId ?? "")) return;
+                        changeTaskGroup(task, value);
+                      }}
+                      options={taskGroupOptions}
+                      ariaLabel={`设置任务「${task.title}」的分组`}
+                      disabled={busyId === task.id}
+                    />
+                  ) : (
+                    <span className={cn("tasks-group-label", !task.groupName && "is-empty")}>
+                      <i
+                        className="tasks-group-dot"
+                        style={{
+                          background:
+                            groups.find((group) => group.id === task.groupId)?.color ||
+                            "var(--border)",
+                        }}
+                      />
+                      {task.groupName || "未分组"}
+                    </span>
+                  )}
+                </td>
+                <td>
                   <div className="tasks-date-cell">
                     <span className={cn("tasks-date", task.overdue && "is-overdue")}>
                       {task.expectedDate ? formatDate(task.expectedDate) : "未设置"}
@@ -1025,15 +1537,15 @@ export default function TaskOverviewPage() {
                 <td>
                   <div
                     className="tasks-points"
-                    title={`负载点数 ${points}：基础 1 分 + 优先级 ${priority.label}（+${priority.weight}）+ 难度 ${difficulty.label}（+${difficulty.weight}）`}
+                    title={`负载分 ${points} = 优先级分 ${priority.score} × 难度分 ${difficulty.score}（满分 ${TASK_MAX_POINTS}）`}
                   >
                     <span className="tasks-points-value">{formatPoints(points)}</span>
                     <span
                       className="tasks-points-meter"
                       role="img"
-                      aria-label={`负载强度 ${points} / 6`}
+                      aria-label={`负载分 ${points} / ${TASK_MAX_POINTS}`}
                     >
-                      {Array.from({ length: 6 }, (_, index) => (
+                      {Array.from({ length: TASK_MAX_POINTS }, (_, index) => (
                         <i key={index} className={index < points ? "is-on" : undefined} />
                       ))}
                     </span>
@@ -1078,9 +1590,9 @@ export default function TaskOverviewPage() {
     </div>
   );
 
-  const mobileCards = (
-    <div className="tasks-card-list" key={`cards-${listKey}`}>
-      {sortedTasks.map((task, index) => {
+  const renderCards = (rows: MemberTask[], sectionKey: string) => (
+    <div className="tasks-card-list" key={`cards-${sectionKey}-${listKey}`}>
+      {rows.map((task, index) => {
         const progress = TASK_PROGRESS_META[task.progressStatus] ?? TASK_PROGRESS_META.pending;
         const health = TASK_HEALTH_META[task.healthStatus] ?? TASK_HEALTH_META.normal;
         const priorityKey: TaskPriority = task.priority ?? "normal";
@@ -1113,18 +1625,72 @@ export default function TaskOverviewPage() {
             {task.description ? <p className="tasks-card-desc">{task.description}</p> : null}
             {renderTaskTags(task)}
             <div className="tasks-task-tags">
-              <span
-                className={cn("tasks-tag", `is-priority-${priorityKey}`)}
-                title={`优先级 ${priority.label}（+${priority.weight} 分）`}
-              >
-                <i className="tasks-tag-dot" /> 优先级 {priority.label}
-              </span>
-              <span
-                className={cn("tasks-tag", `is-difficulty-${difficultyKey}`)}
-                title={`难度 ${difficulty.label}（+${difficulty.weight} 分）`}
-              >
-                <i className="tasks-tag-dot" /> 难度 {difficulty.label}
-              </span>
+              {manageable ? (
+                <>
+                  <Select
+                    className="tasks-inline-select"
+                    size="sm"
+                    value={priorityKey}
+                    onChange={(value) => {
+                      if (!value || value === priorityKey) return;
+                      changeTaskPriority(task, value as TaskPriority);
+                    }}
+                    options={PRIORITY_EDIT_OPTIONS}
+                    ariaLabel={`设置任务「${task.title}」的优先级`}
+                    disabled={busyId === task.id}
+                  />
+                  <Select
+                    className="tasks-inline-select"
+                    size="sm"
+                    value={difficultyKey}
+                    onChange={(value) => {
+                      if (!value || value === difficultyKey) return;
+                      changeTaskDifficulty(task, value as TaskDifficulty);
+                    }}
+                    options={DIFFICULTY_EDIT_OPTIONS}
+                    ariaLabel={`设置任务「${task.title}」的难度`}
+                    disabled={busyId === task.id}
+                  />
+                  <Select
+                    className="tasks-inline-select tasks-group-inline-select"
+                    size="sm"
+                    value={task.groupId ?? ""}
+                    onChange={(value) => {
+                      if (value === (task.groupId ?? "")) return;
+                      changeTaskGroup(task, value);
+                    }}
+                    options={taskGroupOptions}
+                    ariaLabel={`设置任务「${task.title}」的分组`}
+                    disabled={busyId === task.id}
+                  />
+                </>
+              ) : (
+                <>
+                  <span
+                    className={cn("tasks-tag", `is-priority-${priorityKey}`)}
+                    title={`优先级 ${priority.label}（${priority.score} 分）`}
+                  >
+                    <i className="tasks-tag-dot" /> 优先级 {priority.label}
+                  </span>
+                  <span
+                    className={cn("tasks-tag", `is-difficulty-${difficultyKey}`)}
+                    title={`难度 ${difficulty.label}（${difficulty.score} 分）`}
+                  >
+                    <i className="tasks-tag-dot" /> 难度 {difficulty.label}
+                  </span>
+                  <span className={cn("tasks-group-label", !task.groupName && "is-empty")}>
+                    <i
+                      className="tasks-group-dot"
+                      style={{
+                        background:
+                          groups.find((group) => group.id === task.groupId)?.color ||
+                          "var(--border)",
+                      }}
+                    />
+                    {task.groupName || "未分组"}
+                  </span>
+                </>
+              )}
             </div>
             <div className="tasks-card-meta">
               <span
@@ -1145,7 +1711,7 @@ export default function TaskOverviewPage() {
               </span>
               <span
                 className="tasks-points"
-                title={`负载点数 ${points}：基础 1 分 + 优先级 ${priority.label}（+${priority.weight}）+ 难度 ${difficulty.label}（+${difficulty.weight}）`}
+                title={`负载分 ${points} = 优先级分 ${priority.score} × 难度分 ${difficulty.score}（满分 ${TASK_MAX_POINTS}）`}
               >
                 <Gauge size={11} /> {formatPoints(points)}
               </span>
@@ -1177,8 +1743,9 @@ export default function TaskOverviewPage() {
           </span>
           <h1 className="page-title">团队任务总览</h1>
           <p className="page-subtitle">
-            成员自主维护任务进度、健康状态与预期完成时间；任务负载由基础 1 分、优先级与难度加成计算，
-            每人每周容量 15 分，帮助团队在过载前及时调整节奏。
+            成员自主维护任务进度、健康状态与预期完成时间；负载分 = 优先级分（1-3）× 难度分（1-3），
+            满分 {TASK_MAX_POINTS} 分，每人每周容量 {TASK_CAPACITY_POINTS} 分，帮助团队在过载前及时调整节奏。
+            管理员可新建任务组，按组筛选或分区查看任务。
           </p>
         </div>
         <div className="page-actions">
@@ -1260,6 +1827,16 @@ export default function TaskOverviewPage() {
             <span className="badge badge-gray tasks-window-badge">
               <Clock size={11} /> {range.label}
             </span>
+            {canManageActiveTeam ? (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm tasks-group-manage-btn"
+                onClick={() => setGroupManageOpen(true)}
+                title="新建、重命名或删除任务组"
+              >
+                <FolderPlus size={13} /> 分组管理
+              </button>
+            ) : null}
             <button
               type="button"
               className="btn btn-secondary btn-sm tasks-tag-library-btn"
@@ -1298,10 +1875,33 @@ export default function TaskOverviewPage() {
               }
             />
           ) : sortedTasks.length ? (
-            <>
-              {table}
-              {mobileCards}
-            </>
+            groupBy ? (
+              <div className="tasks-group-sections">
+                {groupedSections.map((section) => (
+                  <section
+                    className="tasks-group-section"
+                    key={`section-${section.key}`}
+                    aria-label={`任务组 ${section.label}`}
+                  >
+                    <header className="tasks-group-section-head">
+                      <span
+                        className="tasks-group-dot"
+                        style={{ background: section.color || "var(--border)" }}
+                      />
+                      <h3>{section.label}</h3>
+                      <span className="badge badge-gray">{section.tasks.length} 条</span>
+                    </header>
+                    {renderTable(section.tasks, section.key)}
+                    {renderCards(section.tasks, section.key)}
+                  </section>
+                ))}
+              </div>
+            ) : (
+              <>
+                {renderTable(sortedTasks, "all")}
+                {renderCards(sortedTasks, "all")}
+              </>
+            )
           ) : (
             <EmptyState
               icon={<ListTodo size={24} />}
@@ -1312,7 +1912,7 @@ export default function TaskOverviewPage() {
                   : tasks.length
                     ? "切换到更长的时间跨度，或者新建一条任务。"
                     : canCreate
-                      ? "为成员登记第一项任务，优先级与难度会自动换算成负载点数计入团队负载。"
+                      ? "为成员登记第一项任务，优先级分与难度分会自动换算成负载分计入团队负载。"
                       : "当前为只读视图，暂时没有可查看的任务。"
               }
               action={
@@ -1342,7 +1942,7 @@ export default function TaskOverviewPage() {
         <Gauge size={12} />{" "}
         {meta.scoring
           ? `${meta.scoring}；`
-          : "负载点数 = 1 分基础 + 优先级加成 + 难度加成；每人每周容量 15 分；"}
+          : `负载分 = 优先级分（1-3）× 难度分（1-3），满分 ${TASK_MAX_POINTS} 分；每人每周容量 ${TASK_CAPACITY_POINTS} 分；`}
         任务台账按所选时间跨度（{range.label}）过滤活跃任务，点击表头可切换升/降序；{" "}
         {windowLabel}平均负载按滚动窗口统计，仅供团队节奏参考。
       </p>
@@ -1355,6 +1955,7 @@ export default function TaskOverviewPage() {
         canAssignOthers={canManageActiveTeam}
         selfMemberId={dialogSelfMemberId}
         defaultMemberId={defaultMemberId}
+        groups={groups}
         onClose={() => setDialog({ open: false, task: null })}
         onSaved={handleSaved}
       />
@@ -1379,6 +1980,14 @@ export default function TaskOverviewPage() {
         onClose={() => setWorkloadDetail(null)}
         onFilterMember={(memberId) => setMemberFilter(memberId)}
         onOpenProfile={(memberId) => navigate("overview", { member: memberId })}
+      />
+
+      <GroupManagerDialog
+        open={groupManageOpen}
+        teamId={teamId}
+        groups={groups}
+        onClose={() => setGroupManageOpen(false)}
+        onChanged={() => loadTasks(true)}
       />
 
       <ConfirmDialog

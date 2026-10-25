@@ -425,15 +425,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <div className="topbar-right">
             <span className="today-pill">{todayLabel}</span>
-            <button
-              className="icon-button"
-              onClick={() => navigate("announcements")}
-              aria-label="查看公告"
-              title="公告栏"
-            >
-              <Bell size={18} />
-              {data.stats.pinned > 0 ? <span className="dot-badge" /> : null}
-            </button>
+            {moduleVisible("announcements") ? (
+              <button
+                className="icon-button"
+                onClick={() => navigate("announcements")}
+                aria-label="查看公告"
+                title="公告栏"
+              >
+                <Bell size={18} />
+                {data.stats.pinned > 0 ? <span className="dot-badge" /> : null}
+              </button>
+            ) : null}
             <div className="theme-menu-wrap" ref={themeMenuRef}>
               <button
                 className="icon-button theme-menu-trigger"
@@ -480,7 +482,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             >
               <QuickThemeIcon size={18} />
             </button>
-            {me.authenticated && (isAdmin || me.linkedMemberId) ? (
+            {me.authenticated && (isAdmin || me.linkedMemberId) && moduleVisible("calendar") ? (
               <button
                 className="btn btn-secondary btn-sm quick-create"
                 onClick={() => navigate("calendar", { new: "1" })}

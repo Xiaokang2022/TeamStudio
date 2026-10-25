@@ -55,14 +55,17 @@ def probe(client, monkeypatch):
 # --------------------------------------------------------------------------- members / sorting
 
 
-def test_member_cards_are_sorted_by_name_and_have_no_status(client):
+def test_member_cards_follow_sort_order_and_expose_groups(client):
+    """Round 9 requirement #3/#8: manual order plus group id/name on every card."""
     members = members_of(client)
-    names = [member["name"] for member in members]
-    assert names == sorted(names, key=str.casefold), names
+    sort_orders = [member["sortOrder"] for member in members]
+    assert sort_orders == sorted(sort_orders), sort_orders
+    assert [member["id"] for member in members][:3] == ["m-lin", "m-chen", "m-su"]
     for member in members:
         assert "status" not in member, member["name"]
         assert "avatar" in member, member["name"]
-        assert "groupId" not in member, member["name"]
+        assert member["groupId"] == "", member["name"]
+        assert member["groupName"] == "", member["name"]
         assert member["memberIds"] == [member["id"]]
 
 
@@ -91,7 +94,8 @@ def test_task_payload_has_member_avatar(probe):
     )["task"]
     assert created["memberAvatar"] == probe["avatar"]
     assert created["memberAvatarColor"]
-    assert "groupId" not in created
+    # Round 9 requirement #8: tasks carry a (team) task group id, empty when ungrouped.
+    assert created["groupId"] == ""
     listed = tasks_payload(probe["client"])
     listed_task = next(item for item in listed["tasks"] if item["id"] == created["id"])
     assert listed_task["memberAvatar"] == probe["avatar"]
@@ -249,7 +253,12 @@ def test_member_candidates_expose_avatar_key(client):
 # --------------------------------------------------------------------------- legacy keys
 
 
-def test_member_payloads_never_leak_group_or_status(client):
+def test_member_payloads_expose_round9_group_fields_without_legacy_ones(client):
+    """Round 9 requirement #8 replaces the removed group *tags* with team groups.
+
+    Overview member cards now legitimately carry ``groupId``/``groupName`` (empty until
+    grouped); the legacy plural group tag fields must still never leak back.
+    """
     payloads = {
         "overview": overview(client),
         "tasks": tasks_payload(client),
@@ -257,8 +266,13 @@ def test_member_payloads_never_leak_group_or_status(client):
     }
     for name, payload in payloads.items():
         serialized = json.dumps(payload, ensure_ascii=False)
-        for legacy in ("groupId", "groupName", "groupIds", "groupNames"):
+        for legacy in ("groupIds", "groupNames"):
             assert legacy not in serialized, (name, legacy)
-        for member in payload.get("members", []):
+    for member in payloads["overview"]["members"]:
+        assert member["groupId"] == "", member.get("name")
+        assert member["groupName"] == "", member.get("name")
+        assert "status" not in member, member.get("name")
+    for name in ("tasks", "insights"):
+        for member in payloads[name].get("members", []):
             if "memberIds" in member:
                 assert "status" not in member, (name, member.get("name"))

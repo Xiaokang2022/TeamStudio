@@ -40,6 +40,12 @@ interface AppContextValue {
   isSuperAdmin: boolean;
   permissions: CurrentUser["permissions"] | null;
   currentTeam: TeamRef | null;
+  /** Round 9: the visitor is anonymous or signed in through the guest identity. */
+  isGuest: boolean;
+  /** Round 9: the current user may edit the active team's module switches. */
+  canEditTeamSettings: boolean;
+  /** Round 9: server-composed effective module flags for the active team. */
+  teamModuleFlags: ModuleFlags | null;
   moduleVisible: (module: keyof ModuleFlags) => boolean;
   reload: (silent?: boolean) => Promise<void>;
   selectTeam: (teamId: string) => Promise<void>;
@@ -224,11 +230,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const isAdmin = Boolean(me?.isDeviceAdmin || me?.isSuperAdmin || me?.admin.role);
   const canManageActiveTeam = canManageTeam(me, currentTeam?.id ?? null);
   const config = data?.config ?? null;
+  const canEditTeamSettings = Boolean(data?.active.canEditTeamSettings);
+  const teamModuleFlags = data?.active.moduleFlags ?? null;
   const moduleVisible = useCallback(
-    (module: keyof ModuleFlags) =>
-      Boolean(config?.modules[module]) &&
-      (!isGuest || Boolean(config?.guestModules[module])),
-    [config, isGuest],
+    (module: keyof ModuleFlags) => {
+      // Round 9: the server composes the effective visibility (site switches AND the
+      // active team's switches, already guest aware). Fall back to the site-level
+      // switches when an older payload does not ship moduleFlags.
+      if (teamModuleFlags) return Boolean(teamModuleFlags[module]);
+      return Boolean(config?.modules[module]) && (!isGuest || Boolean(config?.guestModules[module]));
+    },
+    [config, isGuest, teamModuleFlags],
   );
 
   const value = useMemo<AppContextValue>(
@@ -248,6 +260,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       isSuperAdmin,
       permissions,
       currentTeam,
+      isGuest,
+      canEditTeamSettings,
+      teamModuleFlags,
       moduleVisible,
       reload: fetchBootstrap,
       selectTeam,
@@ -268,6 +283,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       isAdmin,
       isSuperAdmin,
       currentTeam,
+      isGuest,
+      canEditTeamSettings,
+      teamModuleFlags,
       moduleVisible,
       fetchBootstrap,
       selectTeam,

@@ -39,31 +39,36 @@ export const TASK_HEALTH_META: Record<
   },
 };
 
+/**
+ * Round 9：优先级/难度各 1-3 分，任务负载分 = 优先级分 × 难度分（1-9）。
+ * urgent 仅作为历史数据兼容读取（按 3 分），不再出现在任何入口/选项里。
+ */
 export const PRIORITY_META: Record<
   TaskPriority,
-  { label: string; tone: string; badge: string; weight: number }
+  { label: string; tone: string; badge: string; score: number }
 > = {
-  low: { label: "低", tone: "neutral", badge: "badge-gray", weight: 0 },
-  normal: { label: "普通", tone: "blue", badge: "badge-blue", weight: 1 },
-  high: { label: "高", tone: "orange", badge: "badge-orange", weight: 2 },
-  urgent: { label: "紧急", tone: "red", badge: "badge-red", weight: 3 },
+  low: { label: "低", tone: "neutral", badge: "badge-gray", score: 1 },
+  normal: { label: "普通", tone: "blue", badge: "badge-blue", score: 2 },
+  high: { label: "高", tone: "orange", badge: "badge-orange", score: 3 },
 };
 
 export const DIFFICULTY_META: Record<
   TaskDifficulty,
-  { label: string; tone: string; badge: string; weight: number }
+  { label: string; tone: string; badge: string; score: number }
 > = {
-  easy: { label: "简单", tone: "green", badge: "badge-green", weight: 0 },
-  medium: { label: "中等", tone: "blue", badge: "badge-blue", weight: 1 },
-  hard: { label: "困难", tone: "orange", badge: "badge-orange", weight: 2 },
+  easy: { label: "简单", tone: "green", badge: "badge-green", score: 1 },
+  medium: { label: "中等", tone: "blue", badge: "badge-blue", score: 2 },
+  hard: { label: "困难", tone: "orange", badge: "badge-orange", score: 3 },
 };
 
-export const TASK_BASE_POINTS = 1;
+/** 单任务负载分上限：优先级 3 分 × 难度 3 分。 */
+export const TASK_MAX_POINTS = 9;
+/** 每人每周容量（分），负载百分比 = 点数 / 15 * 100。 */
 export const TASK_CAPACITY_POINTS = 15;
 
 export const PROGRESS_STATUSES: TaskProgressStatus[] = ["pending", "in_progress", "completed"];
 export const HEALTH_STATUSES: TaskHealthStatus[] = ["normal", "delayed", "blocked"];
-export const PRIORITIES: TaskPriority[] = ["low", "normal", "high", "urgent"];
+export const PRIORITIES: TaskPriority[] = ["low", "normal", "high"];
 export const DIFFICULTIES: TaskDifficulty[] = ["easy", "medium", "hard"];
 
 export const WORKLOAD_LEVEL_META: Record<
@@ -87,10 +92,30 @@ export function loadTone(percent: number): string {
   return WORKLOAD_LEVEL_META[workloadLevel(percent)].className;
 }
 
+/* 历史数据兜底：urgent 在迁移前可能仍出现在旧 payload 里，按 3 分读取。 */
+const PRIORITY_SCORE_FALLBACK: Record<string, number> = {
+  low: 1,
+  normal: 2,
+  high: 3,
+  urgent: 3,
+};
+const DIFFICULTY_SCORE_FALLBACK: Record<string, number> = {
+  easy: 1,
+  medium: 2,
+  hard: 3,
+};
+
+export function priorityScore(priority: TaskPriority | string | null | undefined): number {
+  return PRIORITY_SCORE_FALLBACK[priority ?? ""] ?? PRIORITY_META.normal.score;
+}
+
+export function difficultyScore(difficulty: TaskDifficulty | string | null | undefined): number {
+  return DIFFICULTY_SCORE_FALLBACK[difficulty ?? ""] ?? DIFFICULTY_META.medium.score;
+}
+
+/** 任务负载分 = 优先级分（1-3）× 难度分（1-3），取值 1-9。 */
 export function taskLoadPoints(priority: TaskPriority, difficulty: TaskDifficulty): number {
-  return (
-    TASK_BASE_POINTS + (PRIORITY_META[priority]?.weight ?? 0) + (DIFFICULTY_META[difficulty]?.weight ?? 0)
-  );
+  return priorityScore(priority) * difficultyScore(difficulty);
 }
 
 export function formatPoints(value: number): string {

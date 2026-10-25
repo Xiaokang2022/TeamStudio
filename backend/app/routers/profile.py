@@ -36,9 +36,10 @@ MAX_SKILLS = 20
 MAX_SKILL_LENGTH = 30
 
 # Load scoring mirrors the task ledger (profile tasks are display-only here). Kept in
-# sync with ``services/tasks_service``: 1 base point + priority + difficulty bonuses.
-PRIORITY_WEIGHTS = {"low": 0, "normal": 1, "high": 2, "urgent": 3}
-DIFFICULTY_WEIGHTS = {"easy": 0, "medium": 1, "hard": 2}
+# sync with ``services/tasks_service``: priority score (1-3) * difficulty score (1-3),
+# so a task is worth 1-9 points. "urgent" is a legacy alias that reads as high.
+PRIORITY_WEIGHTS = {"low": 1, "normal": 2, "high": 3, "urgent": 3}
+DIFFICULTY_WEIGHTS = {"easy": 1, "medium": 2, "hard": 3}
 OPEN_PROGRESS_STATUSES = {"pending", "in_progress"}
 
 
@@ -193,12 +194,11 @@ def _tag_map(conn: sqlite3.Connection, team_ids: list[str]) -> dict[str, dict[st
 
 
 def _task_load_points(task: dict[str, Any]) -> int:
+    """Multiplicative load score in the 1-9 range, matching the task ledger."""
     priority = str(task.get("priority") or "normal")
     difficulty = str(task.get("difficulty") or "medium")
-    return (
-        1
-        + PRIORITY_WEIGHTS.get(priority, PRIORITY_WEIGHTS["normal"])
-        + DIFFICULTY_WEIGHTS.get(difficulty, DIFFICULTY_WEIGHTS["medium"])
+    return int(PRIORITY_WEIGHTS.get(priority, PRIORITY_WEIGHTS["normal"])) * int(
+        DIFFICULTY_WEIGHTS.get(difficulty, DIFFICULTY_WEIGHTS["medium"])
     )
 
 

@@ -11,6 +11,7 @@ Response envelope is always ``{"ok": true, "data": ...}``; errors use
 from __future__ import annotations
 
 import re
+from datetime import date
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Query
@@ -18,7 +19,7 @@ from fastapi import APIRouter, Body, Depends, Query
 from ..auth import CurrentUser, get_current_user
 from ..config import EMAIL_PATTERN
 from ..db import db, json_dumps, json_loads, new_id, now_iso, row, rows, scalar
-from ..http import fail, get_member, get_team, int_value, ok, text
+from ..http import DATE_PATTERN, fail, get_member, get_team, int_value, ok, text
 from ..permissions import (
     audit,
     require_member_writer,
@@ -26,6 +27,7 @@ from ..permissions import (
     require_team_admin,
 )
 from ..services import accounts
+from ..services.groups_service import get_group, list_group_payloads
 from ..services.member_identity import (
     account_avatar_map,
     identity_fields,
@@ -129,7 +131,7 @@ def _work_payload(work: dict[str, Any], team: dict[str, Any]) -> dict[str, Any]:
         "title": work["title"],
         "description": work.get("description", ""),
         "status": work.get("status", "current"),
-        "period": work.get("period", ""),
+        "plannedDate": work.get("planned_date", ""),
         "category": work.get("category", ""),
         "progress": int(work.get("progress") or 0),
         "updatedAt": work.get("updated_at", ""),
@@ -161,6 +163,10 @@ def _member_payload(
         # ``duties`` has no dedicated column; tolerate future schema additions.
         "duties": _parsed_list(member.get("duties")),
         "joinedAt": member.get("joined_at", ""),
+        "groupId": member.get("group_id") or "",
+        "groupName": member.get("group_name") or "",
+        "sortOrder": int(member.get("sort_order") or 0),
+        "createdAt": member.get("created_at", ""),
         "teamId": team.get("id") or member.get("team_id", ""),
         "teamName": member.get("team_name") or team.get("name", ""),
         "currentWorks": current,
@@ -187,9 +193,80 @@ def _member_detail(conn, team: dict[str, Any], member: dict[str, Any]) -> dict[s
     )
     avatars = account_avatar_map(conn)
     person = {"personKey": "", "primary": member, "rows": [member]}
-    card = _member_payload(member, works, team, avatars, open_todos)
+    group_name = ""
+    if member.get("group_id"):
+        group = get_group(conn, team["id"], str(member["group_id"]), "member")
+        group_name = str(group.get("name") or "") if group else ""
+    card = _member_payload(
+        {**member, "group_name": group_name}, works, team, avatars, open_todos
+    )
     card.update(identity_fields(person))
     return card
+
+
+_MEMBER_SELECT = (
+    "SELECT m.*, t.name AS team_name, g.name AS group_name FROM members m "
+    "JOIN teams t ON t.id=m.team_id "
+    "LEFT JOIN team_groups g ON g.id=m.group_id AND g.team_id=m.team_id "
+)
+
+
+def _team_member_rows(conn, team_id: str) -> list[dict[str, Any]]:
+    """Member rows for one team ordered by the round-9 sort order (contract section 3)."""
+    return rows(
+        conn,
+        _MEMBER_SELECT + "WHERE m.team_id=? ORDER BY m.sort_order, m.created_at, m.id",
+        (team_id,),
+    )
+
+
+def _member_cards(
+    conn,
+    team: dict[str, Any],
+    member_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Merged-person member cards ordered by sort_order, created_at, id."""
+    works = rows(
+        conn,
+        "SELECT w.*, t.name AS team_name FROM works w "
+        "JOIN teams t ON t.id=w.team_id WHERE w.team_id=? "
+        "ORDER BY w.member_id, w.sort_order, w.created_at",
+        (team["id"],),
+    )
+    todos = rows(
+        conn,
+        "SELECT id, assignee_member_id, status FROM todos WHERE team_id=?",
+        (team["id"],),
+    )
+    avatars = account_avatar_map(conn)
+    works_by_member: dict[str, list[dict[str, Any]]] = {}
+    for work in works:
+        works_by_member.setdefault(work["member_id"], []).append(work)
+    open_todos_by_member: dict[str, int] = {}
+    for todo in todos:
+        assignee = todo.get("assignee_member_id")
+        if assignee and todo.get("status") != "done":
+            open_todos_by_member[assignee] = open_todos_by_member.get(assignee, 0) + 1
+    members: list[dict[str, Any]] = []
+    for person in team_members(member_rows):
+        person_archive_ids = member_ids(person)
+        person_works: list[dict[str, Any]] = []
+        for archive_id in person_archive_ids:
+            person_works.extend(works_by_member.get(archive_id, []))
+        open_todos = sum(
+            open_todos_by_member.get(archive_id, 0) for archive_id in person_archive_ids
+        )
+        card = _member_payload(person["primary"], person_works, team, avatars, open_todos)
+        card.update(identity_fields(person))
+        members.append(card)
+    members.sort(
+        key=lambda item: (
+            int(item.get("sortOrder") or 0),
+            str(item.get("createdAt") or ""),
+            str(item.get("id") or ""),
+        )
+    )
+    return members
 
 
 def _team_detail(team: dict[str, Any], member_count: int = 0) -> dict[str, Any]:
@@ -303,6 +380,24 @@ def _work_status(value: Any, default: str = "current") -> str:
     return value
 
 
+def _planned_date(value: Any) -> str:
+    """Validate the round-9 planned completion date (YYYY-MM-DD or empty)."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise fail(400, "计划完成时间格式应为 YYYY-MM-DD", "invalid_planned_date")
+    cleaned = value.strip()
+    if not cleaned:
+        return ""
+    if not DATE_PATTERN.fullmatch(cleaned):
+        raise fail(400, "计划完成时间格式应为 YYYY-MM-DD", "invalid_planned_date")
+    try:
+        date.fromisoformat(cleaned)
+    except ValueError:
+        raise fail(400, "计划完成时间格式应为 YYYY-MM-DD", "invalid_planned_date")
+    return cleaned
+
+
 # --------------------------------------------------------------------------- overview
 
 
@@ -313,13 +408,7 @@ def team_overview(
 ):
     with db() as conn:
         team = get_team(conn, team_id)
-        member_rows = rows(
-            conn,
-            "SELECT m.*, t.name AS team_name FROM members m "
-            "JOIN teams t ON t.id=m.team_id WHERE m.team_id=? "
-            "ORDER BY m.sort_order, m.created_at, m.id",
-            (team_id,),
-        )
+        member_rows = _team_member_rows(conn, team_id)
         work_rows = rows(
             conn,
             "SELECT w.*, t.name AS team_name FROM works w "
@@ -343,40 +432,15 @@ def team_overview(
         )
         activity = _recent_activity(conn, team)
         workload_section = build_workload_section(conn, team_id)
-        avatars = account_avatar_map(conn)
-
-    works_by_member: dict[str, list[dict[str, Any]]] = {}
-    for work in work_rows:
-        works_by_member.setdefault(work["member_id"], []).append(work)
-    open_todos_by_member: dict[str, int] = {}
-    for todo in todo_rows:
-        assignee = todo.get("assignee_member_id")
-        if assignee and todo.get("status") != "done":
-            open_todos_by_member[assignee] = open_todos_by_member.get(assignee, 0) + 1
-
-    members: list[dict[str, Any]] = []
-    # One account may own several historical archive rows inside the same team after the
-    # round-8 migration: merge them into one card (the first row, by sort order, is the
-    # primary archive).
-    people = team_members(member_rows)
-    for person in people:
-        person_archive_ids = member_ids(person)
-        person_works: list[dict[str, Any]] = []
-        for archive_id in person_archive_ids:
-            person_works.extend(works_by_member.get(archive_id, []))
-        open_todos = sum(
-            open_todos_by_member.get(archive_id, 0) for archive_id in person_archive_ids
-        )
-        card = _member_payload(person["primary"], person_works, team, avatars, open_todos)
-        card.update(identity_fields(person))
-        members.append(card)
-    # Contract §3.3 / requirement #3: member cards are ordered by name ascending.
-    members.sort(key=lambda item: str(item.get("name") or "").casefold())
+        member_groups = list_group_payloads(conn, team_id, "member")
+        # Round 9 requirement #3: merged-person cards follow the manual member order
+        # (sort_order, created_at, id) instead of the old name ordering.
+        members = _member_cards(conn, team, member_rows)
 
     works = [_work_payload(work, team) for work in work_rows]
     done_todos = sum(1 for todo in todo_rows if todo.get("status") == "done")
     stats = {
-        "members": len(people),
+        "members": len(members),
         "works": len(work_rows),
         "currentWorks": sum(1 for work in works if work["status"] == "current"),
         "doneWorks": sum(1 for work in works if work["status"] == "done"),
@@ -388,8 +452,9 @@ def team_overview(
     }
     return ok(
         {
-            "team": _team_detail(team, len(people)),
+            "team": _team_detail(team, len(members)),
             "members": members,
+            "memberGroups": member_groups,
             "works": works,
             "recentActivity": activity,
             "stats": stats,
@@ -468,6 +533,45 @@ def list_member_candidates(
     return ok({"candidates": candidates, "total": len(candidates)})
 
 
+@router.patch("/members/order")
+def reorder_members(
+    team_id: str,
+    payload: dict[str, Any] = Body(...),
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Persist the manual member order (team administrators only).
+
+    The body carries the complete ``memberIds`` list in display order; ids must be
+    unique and belong to this team. ``sort_order`` becomes the index (0-based).
+    """
+    with db() as conn:
+        team = get_team(conn, team_id)
+        require_team_admin(user, team_id)
+        raw_ids = payload.get("memberIds")
+        if not isinstance(raw_ids, list):
+            raise fail(400, "memberIds 必须是成员编号数组", "validation_error")
+        ordered_ids: list[str] = []
+        for item in raw_ids:
+            if not isinstance(item, str) or not item.strip():
+                raise fail(400, "成员编号格式不正确", "validation_error")
+            cleaned = item.strip()
+            if cleaned in ordered_ids:
+                raise fail(400, "成员编号不能重复", "validation_error")
+            ordered_ids.append(cleaned)
+        existing_ids = {str(item["id"]) for item in _team_member_rows(conn, team_id)}
+        if set(ordered_ids) != existing_ids:
+            raise fail(400, "成员顺序必须包含该团队全部成员", "validation_error")
+        now = now_iso()
+        for index, member_id in enumerate(ordered_ids):
+            conn.execute(
+                "UPDATE members SET sort_order=?, updated_at=? WHERE id=? AND team_id=?",
+                (index, now, member_id, team_id),
+            )
+        audit(conn, user, "member.reorder", "member", team_id, {"memberIds": ordered_ids})
+        members = _member_cards(conn, team, _team_member_rows(conn, team_id))
+    return ok({"members": members})
+
+
 @router.patch("/members/{member_id}")
 def update_member(
     team_id: str,
@@ -513,6 +617,23 @@ def update_member(
         if "avatar" in payload or "avatarUrl" in payload:
             raw_avatar = payload["avatar"] if "avatar" in payload else payload.get("avatarUrl")
             updates["avatar_url"] = _avatar_url(raw_avatar)
+        if "groupId" in payload:
+            # Round 9 requirement #8: grouping is organisational, so only team
+            # administrators may move a member ("" or null clears the group).
+            require_team_admin(user, team_id)
+            raw_group = payload.get("groupId")
+            if raw_group is None or raw_group == "":
+                updates["group_id"] = ""
+            elif not isinstance(raw_group, str):
+                raise fail(400, "成员分组格式不正确", "validation_error")
+            else:
+                group_id = raw_group.strip()
+                if not group_id:
+                    updates["group_id"] = ""
+                elif get_group(conn, team_id, group_id, "member") is None:
+                    raise fail(400, "成员分组不存在", "group_not_found")
+                else:
+                    updates["group_id"] = group_id
         if updates:
             updates["updated_at"] = now_iso()
             assignments = ", ".join(f"{column}=?" for column in updates)
@@ -731,7 +852,7 @@ def create_work(
         status = _work_status(payload.get("status"))
         title = text(payload.get("title"), "工作标题", 120, required=True)
         description = text(payload.get("description"), "工作描述", 2000)
-        period = text(payload.get("period"), "周期", 60)
+        planned_date = _planned_date(payload.get("plannedDate"))
         category = text(payload.get("category"), "分类", 60)
         default_progress = 100 if status == "done" else 0
         progress = int_value(payload.get("progress", default_progress), "进度", 0, 100)
@@ -747,8 +868,8 @@ def create_work(
         work_id = new_id("work")
         now = now_iso()
         conn.execute(
-            "INSERT INTO works (id,member_id,team_id,title,description,status,period,category,"
-            "progress,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO works (id,member_id,team_id,title,description,status,planned_date,"
+            "category,progress,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 work_id,
                 member_id,
@@ -756,7 +877,7 @@ def create_work(
                 title,
                 description,
                 status,
-                period,
+                planned_date,
                 category,
                 progress,
                 sort_order,
@@ -793,8 +914,8 @@ def update_work(
             updates["status"] = status
             if status == "done" and "progress" not in payload:
                 updates["progress"] = 100
-        if "period" in payload:
-            updates["period"] = text(payload.get("period"), "周期", 60)
+        if "plannedDate" in payload:
+            updates["planned_date"] = _planned_date(payload.get("plannedDate"))
         if "category" in payload:
             updates["category"] = text(payload.get("category"), "分类", 60)
         if "progress" in payload:

@@ -12,6 +12,8 @@ from ..config import settings_service
 from ..db import db, rows, scalar
 from ..http import ok
 from ..services.member_identity import first_member_in_team, person_key
+from ..services.team_settings import build_payload as build_team_settings
+from ..services.team_settings import default_payload as default_team_settings
 
 router = APIRouter(prefix="/api", tags=["bootstrap"])
 
@@ -109,12 +111,29 @@ def bootstrap(
         active_team = _resolve_active_team(teams, teamId)
         _resolve_active_linked_member(conn, user, active_team)
         stats = _bootstrap_stats(conn, teams)
+        if active_team is not None:
+            team_settings = build_team_settings(conn, str(active_team["id"]), user)
+        else:
+            team_settings = default_team_settings()
+    # Guests only see what the team exposes to guests; logged-in members use the team
+    # module switches. The site-wide switches are already folded into "effective".
+    module_flags = (
+        team_settings["effective"]["modules"]
+        if user.authenticated
+        else team_settings["effective"]["guestModules"]
+    )
+    active = {
+        "team": active_team,
+        "moduleFlags": module_flags,
+        "teamSettings": team_settings["settings"],
+        "canEditTeamSettings": bool(team_settings["canEdit"]),
+    }
     return ok(
         {
             "me": user.as_dict(),
             "config": settings_service.public(),
             "teams": teams,
-            "active": {"team": active_team},
+            "active": active,
             "stats": stats,
             "serverTime": date.today().isoformat(),
             "deviceAdminName": "Admin",

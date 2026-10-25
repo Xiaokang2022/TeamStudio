@@ -1832,3 +1832,258 @@
     transition: none !important;
   }
 }
+
+/* ---------- Round 9: inline priority / difficulty / group editing ---------- */
+.tasks-inline-select.ts-select {
+  width: 96px;
+}
+
+.tasks-inline-select.tasks-group-inline-select.ts-select {
+  width: 118px;
+}
+
+.tasks-inline-select .ts-select-trigger {
+  min-height: 26px;
+  padding: 2px 6px 2px 8px;
+  border-radius: 7px;
+  border-color: var(--border);
+  background: var(--surface-2);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.tasks-inline-select .ts-select-value-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Read-only group chip used by non-managers and the mobile card list. */
+.tasks-group-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 150px;
+  color: var(--text-2);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tasks-group-label.is-empty {
+  color: var(--text-3);
+}
+
+.tasks-group-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+
+/* ---------- Round 9: group filter + grouped sections ---------- */
+.tasks-group-filters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tasks-group-filter-select {
+  width: 158px;
+}
+
+.tasks-groupby-switch {
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.tasks-group-manage-btn {
+  gap: 5px;
+}
+
+.tasks-group-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tasks-group-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tasks-group-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+}
+
+.tasks-group-section-head h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.tasks-group-section-head .badge {
+  font-size: 9.5px;
+}
+
+/* ---------- Round 9: task group manager dialog ---------- */
+.tasks-group-manager {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.tasks-group-create {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.tasks-group-create label {
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.tasks-group-create-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tasks-group-create-row .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.tasks-group-color {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.tasks-group-color::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+
+.tasks-group-color::-webkit-color-swatch {
+  border: 0;
+  border-radius: 4px;
+}
+
+.tasks-group-swatches {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tasks-group-swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  outline: 2px solid transparent;
+  outline-offset: 1px;
+  transition: outline-color 0.16s var(--ease), transform 0.16s var(--ease);
+}
+
+.tasks-group-swatch:hover {
+  transform: scale(1.08);
+}
+
+.tasks-group-swatch.active {
+  outline-color: var(--accent);
+}
+
+.tasks-group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tasks-group-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.tasks-group-row strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tasks-group-rename {
+  flex: 1;
+  min-width: 0;
+}
+
+.tasks-group-count {
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.tasks-group-confirm {
+  color: var(--red);
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+@media (max-width: 860px) {
+  .tasks-group-filter-select {
+    width: 100%;
+  }
+
+  .tasks-group-filters {
+    width: 100%;
+  }
+
+  .tasks-group-row {
+    flex-wrap: wrap;
+  }
+
+  .tasks-task-tags .tasks-inline-select.ts-select {
+    width: calc(50% - 3px);
+  }
+
+  .tasks-task-tags .tasks-inline-select.tasks-group-inline-select.ts-select {
+    width: 100%;
+  }
+}

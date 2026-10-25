@@ -23,6 +23,7 @@ from ..auth import CurrentUser, get_current_user
 from ..db import db, json_dumps, json_loads, new_id, now_iso, row, rows
 from ..http import fail, get_member, get_team, ok, parse_date, text
 from ..permissions import audit, require_authenticated, require_read_module
+from ..services.groups_service import get_group
 from ..services.member_identity import first_member_in_team
 from ..services.tasks_service import (
     DIFFICULTIES,
@@ -71,7 +72,7 @@ def _priority(value: Any) -> str:
     if value is None or value == "":
         raise fail(422, "优先级不能为空", "validation_error")
     if not isinstance(value, str) or value not in PRIORITIES:
-        raise fail(422, "优先级必须是 low/normal/high/urgent", "validation_error")
+        raise fail(422, "优先级必须是 low/normal/high", "validation_error")
     return value
 
 
@@ -131,6 +132,20 @@ def _tag_color(value: Any, fallback: str = "#5865f2") -> str:
     if not isinstance(value, str) or not HEX_PATTERN.fullmatch(value):
         raise fail(422, "标签颜色必须是 #RRGGBB 格式", "validation_error")
     return value.lower()
+
+
+def _group_id(conn: sqlite3.Connection, team_id: str, value: Any) -> str:
+    """Validate a task group reference: empty string means "ungrouped"."""
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str):
+        raise fail(400, "任务分组不存在", "invalid_group")
+    cleaned = value.strip()
+    if not cleaned:
+        return ""
+    if get_group(conn, team_id, cleaned, "task") is None:
+        raise fail(400, "任务分组不存在", "invalid_group")
+    return cleaned
 
 
 # --------------------------------------------------------------------------- permissions
@@ -230,13 +245,14 @@ def create_task(
         )
         expected_date = _expected_date(payload.get("expectedDate"))
         tag_ids = _tag_ids(conn, team_id, payload.get("tagIds"))
+        group_id = _group_id(conn, team_id, payload.get("groupId"))
         now = now_iso()
         task_id = new_id("task")
         conn.execute(
             "INSERT INTO member_tasks (id,team_id,member_id,title,description,"
-            "progress_status,health_status,priority,difficulty,expected_date,tags,"
-            "created_by,created_at,updated_at,completed_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "progress_status,health_status,priority,difficulty,expected_date,"
+            "group_id,tags,created_by,created_at,updated_at,completed_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 task_id,
                 team_id,
@@ -248,6 +264,7 @@ def create_task(
                 priority,
                 difficulty,
                 expected_date,
+                group_id,
                 json_dumps(tag_ids),
                 user.name or user.id,
                 now,
@@ -268,6 +285,7 @@ def create_task(
                 "priority": priority,
                 "difficulty": difficulty,
                 "tagIds": tag_ids,
+                "groupId": group_id,
             },
         )
         task = get_task_row(conn, task_id, team_id)
@@ -324,6 +342,8 @@ def update_task(
             updates["expected_date"] = _expected_date(payload.get("expectedDate"))
         if "tagIds" in payload:
             updates["tags"] = json_dumps(_tag_ids(conn, team_id, payload.get("tagIds")))
+        if "groupId" in payload:
+            updates["group_id"] = _group_id(conn, team_id, payload.get("groupId"))
         if updates:
             updates["updated_at"] = now_iso()
             assignments = ", ".join(f"{column}=?" for column in updates)

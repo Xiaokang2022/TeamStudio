@@ -101,6 +101,29 @@ def _require_team_admin(user: CurrentUser, team_id: str) -> None:
     require_team_admin(user, team_id)
 
 
+def _require_team_writer(conn, user: CurrentUser, team_id: str) -> None:
+    """Round 9: any authenticated member of the team may write links.
+
+    Team administrators (and the device/super admin) always pass; a plain account passes
+    when one of its linked archive rows belongs to the team. Guests are rejected with
+    401. The error code stays not_admin so existing clients keep their handling.
+    """
+    require_authenticated(user)
+    if user.can_manage_team(team_id):
+        return
+    linked_ids = user.linked_member_id_list()
+    if linked_ids:
+        placeholders = ",".join("?" for _ in linked_ids)
+        found = scalar(
+            conn,
+            f"SELECT 1 FROM members WHERE team_id=? AND id IN ({placeholders}) LIMIT 1",
+            (team_id, *linked_ids),
+        )
+        if found:
+            return
+    raise fail(403, "你没有该团队的写权限", "not_admin")
+
+
 # --------------------------------------------------------------------------- red / black board
 
 
@@ -452,7 +475,7 @@ def create_link(
 ):
     with db() as conn:
         get_team(conn, team_id)
-        _require_team_admin(user, team_id)
+        _require_team_writer(conn, user, team_id)
         link_id = new_id("link")
         now = now_iso()
         sort_order = (
@@ -491,7 +514,7 @@ def update_link(
     with db() as conn:
         get_team(conn, team_id)
         _get_link(conn, link_id, team_id)
-        _require_team_admin(user, team_id)
+        _require_team_writer(conn, user, team_id)
 
         updates: dict[str, Any] = {}
         if "title" in payload:
@@ -527,7 +550,7 @@ def delete_link(
     with db() as conn:
         get_team(conn, team_id)
         link = _get_link(conn, link_id, team_id)
-        _require_team_admin(user, team_id)
+        _require_team_writer(conn, user, team_id)
         conn.execute("DELETE FROM links WHERE id=? AND team_id=?", (link_id, team_id))
         audit(conn, user, "link.delete", "link", link_id, {"title": link["title"]})
     return ok({"deleted": True, "id": link_id})

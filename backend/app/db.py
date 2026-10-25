@@ -88,6 +88,8 @@ _COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("skills", "TEXT NOT NULL DEFAULT '[]'"),
         ("joined_at", "TEXT NOT NULL DEFAULT ''"),
         ("sort_order", "INTEGER NOT NULL DEFAULT 0"),
+        # Round 9: optional custom member group ("" = ungrouped).
+        ("group_id", "TEXT NOT NULL DEFAULT ''"),
         ("created_at", "TEXT NOT NULL"),
         ("updated_at", "TEXT NOT NULL"),
     ),
@@ -98,7 +100,10 @@ _COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("title", "TEXT NOT NULL"),
         ("description", "TEXT NOT NULL DEFAULT ''"),
         ("status", "TEXT NOT NULL DEFAULT 'current'"),
+        # Legacy free-text period; round 9 replaced it with a concrete planned date.
         ("period", "TEXT NOT NULL DEFAULT ''"),
+        # Round 9: planned completion date (YYYY-MM-DD, "" = not planned yet).
+        ("planned_date", "TEXT NOT NULL DEFAULT ''"),
         ("category", "TEXT NOT NULL DEFAULT ''"),
         ("progress", "INTEGER NOT NULL DEFAULT 0"),
         ("sort_order", "INTEGER NOT NULL DEFAULT 0"),
@@ -139,7 +144,7 @@ _COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         (
             "priority",
             "TEXT NOT NULL DEFAULT 'normal' "
-            "CHECK(priority IN ('low','normal','high','urgent'))",
+            "CHECK(priority IN ('low','normal','high'))",
         ),
         (
             "difficulty",
@@ -148,6 +153,8 @@ _COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("expected_date", "TEXT NOT NULL DEFAULT ''"),
         ("effort_hours", "REAL NOT NULL DEFAULT 8"),
         ("tags", "TEXT NOT NULL DEFAULT '[]'"),
+        # Round 9: optional custom task group ("" = ungrouped).
+        ("group_id", "TEXT NOT NULL DEFAULT ''"),
         ("created_by", "TEXT NOT NULL DEFAULT ''"),
         ("created_at", "TEXT NOT NULL"),
         ("updated_at", "TEXT NOT NULL"),
@@ -220,6 +227,24 @@ _COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("created_at", "TEXT NOT NULL"),
         ("updated_at", "TEXT NOT NULL"),
     ),
+    # Round 9: per-team custom groups for tasks and members (\"\" on a row = ungrouped).
+    "team_groups": (
+        ("id", "TEXT PRIMARY KEY"),
+        ("team_id", "TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE"),
+        ("kind", "TEXT NOT NULL CHECK(kind IN ('task','member'))"),
+        ("name", "TEXT NOT NULL"),
+        ("color", "TEXT NOT NULL DEFAULT '#5865f2'"),
+        ("sort_order", "INTEGER NOT NULL DEFAULT 0"),
+        ("created_at", "TEXT NOT NULL"),
+        ("updated_at", "TEXT NOT NULL"),
+    ),
+    # Round 9: per-team module switches stored as a JSON document.
+    "team_settings": (
+        ("team_id", "TEXT PRIMARY KEY REFERENCES teams(id) ON DELETE CASCADE"),
+        ("data", "TEXT NOT NULL DEFAULT '{}'"),
+        ("created_at", "TEXT NOT NULL"),
+        ("updated_at", "TEXT NOT NULL"),
+    ),
     "users": (
         ("id", "TEXT PRIMARY KEY"),
         ("email", "TEXT NOT NULL UNIQUE"),
@@ -288,6 +313,7 @@ _COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
 _CONSTRAINTS: dict[str, tuple[str, ...]] = {
     "redblack_boards": ("UNIQUE(team_id, month)",),
     "task_tags": ("UNIQUE(team_id, name)",),
+    "team_groups": ("UNIQUE(team_id, kind, name)",),
 }
 
 _INDEXES: tuple[str, ...] = (
@@ -308,6 +334,8 @@ _INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_announcements_team "
     "ON announcements(team_id, pinned DESC, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_task_tags_team ON task_tags(team_id, name)",
+    "CREATE INDEX IF NOT EXISTS idx_team_groups_team "
+    "ON team_groups(team_id, kind, sort_order)",
     "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)",
     "CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)",
     "CREATE INDEX IF NOT EXISTS idx_email_codes_email ON email_codes(email, created_at DESC)",
@@ -523,12 +551,69 @@ def _migrate_remove_email_reminders(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS mailbox_messages")
 
 
-def _run_additive_migrations(conn: sqlite3.Connection) -> None:
+
+def _migrate_round9(conn: sqlite3.Connection) -> None:
+    """Round-9 additive migration: planned dates, custom groups, team settings.
+
+    Run through :func:`_run_additive_migrations` so fresh databases, legacy round-7
+    databases rebuilt by round 8, and live round-8 databases all converge on the same
+    shape. Every step is idempotent.
+    """
+    # 1. Columns: works.planned_date, members.group_id, member_tasks.group_id.
+    for table, column, declaration in (
+        ("works", "planned_date", "TEXT NOT NULL DEFAULT ''"),
+        ("members", "group_id", "TEXT NOT NULL DEFAULT ''"),
+        ("member_tasks", "group_id", "TEXT NOT NULL DEFAULT ''"),
+    ):
+        if table not in _table_names(conn):
+            continue
+        if column not in _columns(conn, table):
+            conn.execute(f'ALTER TABLE "{table}" ADD COLUMN {column} {declaration}')
+
+    # 2. New tables (created without IF NOT EXISTS in the shared builder; callers pass
+    #    CREATE TABLE IF NOT EXISTS, so this is idempotent on every startup).
+    conn.execute(_create_table_sql("team_groups"))
+    conn.execute(_create_table_sql("team_settings"))
+
+    # 3. Fold the retired "urgent" priority into "high" (round-9 scale is low/normal/high).
+    conn.execute("UPDATE member_tasks SET priority='high' WHERE priority='urgent'")
+
+    # 4. Indexes on the freshly added columns. They cannot live in ``_INDEXES`` because
+    #    ``SCHEMA`` runs (``executescript``) before this additive migration on legacy
+    #    round-8 databases, where the columns do not exist yet.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_member_tasks_group ON member_tasks(group_id)"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_members_group ON members(group_id)")
+
+    # 5. Legacy group ids inherited from the pre-round-8 schema are dangling after the
+    #    rebuild; clear anything that no longer resolves to a real team group.
+    conn.execute(
+        "UPDATE members SET group_id='' "
+        "WHERE group_id<>'' AND group_id NOT IN (SELECT id FROM team_groups)"
+    )
+    conn.execute(
+        "UPDATE member_tasks SET group_id='' "
+        "WHERE group_id<>'' AND group_id NOT IN (SELECT id FROM team_groups)"
+    )
+
+
+def _run_additive_migrations(
+    conn: sqlite3.Connection, *, include_round9: bool = True
+) -> None:
+    """Additive (idempotent) column/table migrations.
+
+    ``include_round9=False`` is used by the round-8 rebuild: that path runs *before* the
+    legacy tables are rebuilt, so the round-9 columns must not be added to (and then
+    overwritten by) the pre-round-8 layout. The normal startup path adds them afterwards.
+    """
     _migrate_member_tasks(conn)
     _migrate_task_tags(conn)
     _migrate_matrix_backups(conn)
     _migrate_member_avatar(conn)
     _migrate_remove_email_reminders(conn)
+    if include_round9:
+        _migrate_round9(conn)
 
 
 # --------------------------------------------------------------- round-8 team migration
@@ -645,10 +730,12 @@ def _rebuild_legacy_table(
         )
 
     target_columns = _table_column_names(table)
+    # ``group_id`` in the round-9 target layout is a team-group reference, not the legacy
+    # development-group id, so it is never copied across the rebuild (it stays "").
     copy_columns = [
         column
         for column in target_columns
-        if column != "team_id" and column in old_columns
+        if column not in ("team_id", "group_id") and column in old_columns
     ]
     insert_columns = ", ".join(["team_id", *(f'"{column}"' for column in copy_columns)])
     select_columns = ", ".join(
@@ -723,8 +810,10 @@ def _migrate_round8(conn: sqlite3.Connection) -> None:
         if "teams" not in tables or "groups" not in tables:
             raise RuntimeError("第 8 轮数据库迁移失败：旧库缺少 teams/groups 表")
         # Backfill the newest additive columns on the legacy tables first so the rebuild
-        # copies the computed values instead of falling back to bare defaults.
-        _run_additive_migrations(conn)
+        # copies the computed values instead of falling back to bare defaults. Round 9 is
+        # deliberately skipped: its group_id/planned_date columns belong to the post-rebuild
+        # layout, and running it here would scrub the legacy group ids the rebuild needs.
+        _run_additive_migrations(conn, include_round9=False)
         conn.execute(_create_table_sql("app_meta"))
         _merge_duplicate_redblack_boards(conn)
         _rename_duplicate_task_tags(conn)

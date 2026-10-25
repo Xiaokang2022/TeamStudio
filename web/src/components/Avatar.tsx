@@ -35,13 +35,6 @@ export function Avatar({ name, src, color = "#5865f2", size = "md", className }:
           src={src as string}
           alt={name}
           onError={() => setFailed(true)}
-          style={{
-            width: "100%",
-            height: "100%",
-            objectFit: "cover",
-            borderRadius: "50%",
-            display: "block",
-          }}
         />
       ) : (
         <span>{initials(name)}</span>

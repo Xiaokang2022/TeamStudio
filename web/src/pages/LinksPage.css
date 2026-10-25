@@ -12,6 +12,26 @@
   margin-bottom: 0;
 }
 
+/* Round 9: guests get an explicit read-only hint instead of the write buttons. */
+.links-readonly-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.links-readonly-note svg {
+  flex: none;
+  color: var(--text-3);
+}
+
 .links-search {
   min-width: 250px;
 }

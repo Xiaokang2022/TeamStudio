@@ -19,6 +19,7 @@ import type {
   Member,
   MemberCandidate,
   MemberTask,
+  ModuleFlags,
   OverviewData,
   ProfileData,
   RedBlackBoard,
@@ -29,6 +30,9 @@ import type {
   SystemResetResult,
   TagLibraryData,
   TaskOverviewData,
+  TeamGroup,
+  TeamGroupKind,
+  TeamSettingsPayload,
   Todo,
   UserAccount,
   UsersData,
@@ -398,6 +402,50 @@ export const api = {
     request<{ schema: Record<string, unknown>; meta: SettingsMeta }>("/api/settings/schema"),
   settingsDefaults: () => request<AppSettings>("/api/settings/defaults"),
   settingsWorkspace: () => request<WorkspaceOption>("/api/settings/workspace"),
+
+  /* ---------------------------------------------------------------- */
+  /* Round 9: custom groups, member ordering, team-level settings      */
+  /* ---------------------------------------------------------------- */
+  listGroups: (teamId: string, kind?: TeamGroupKind) =>
+    request<{ groups: TeamGroup[] }>(`${teamBase(teamId)}/groups${q({ kind })}`),
+  createGroup: (
+    teamId: string,
+    body: { kind: TeamGroupKind; name: string; color?: string },
+  ) =>
+    request<{ group: TeamGroup }>(`${teamBase(teamId)}/groups`, {
+      method: "POST",
+      body,
+    }),
+  updateGroup: (
+    teamId: string,
+    groupId: string,
+    body: { kind?: TeamGroupKind; name?: string; color?: string },
+  ) =>
+    request<{ group: TeamGroup }>(`${teamBase(teamId)}/groups/${groupId}`, {
+      method: "PATCH",
+      body,
+    }),
+  deleteGroup: (teamId: string, groupId: string) =>
+    request<{ deleted: boolean }>(`${teamBase(teamId)}/groups/${groupId}`, {
+      method: "DELETE",
+    }),
+  /** Round 9: persist the admin-defined order of the team member cards. */
+  reorderMembers: (teamId: string, memberIds: string[]) =>
+    request<{ members: Member[] }>(`${teamBase(teamId)}/members/order`, {
+      method: "PATCH",
+      body: { memberIds },
+    }),
+  getTeamSettings: (teamId: string) =>
+    request<TeamSettingsPayload>(`${teamBase(teamId)}/settings`),
+  updateTeamSettings: (
+    teamId: string,
+    body: { modules?: Partial<ModuleFlags>; guestModules?: Partial<ModuleFlags> },
+  ) =>
+    request<TeamSettingsPayload>(`${teamBase(teamId)}/settings`, {
+      method: "PUT",
+      body,
+    }),
+
 
   /* ---------------------------------------------------------------- */
   /* Whole-system reset (deployment device Admin only)                 */

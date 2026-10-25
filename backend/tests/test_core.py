@@ -173,8 +173,8 @@ def test_scope_query_parameter_is_gone(client):
     tasks = data(client.get(f"/api/teams/{TEAM_AURORA}/tasks?scope=team"))
     assert "scope" not in tasks
     for task in tasks["tasks"]:
-        assert "groupId" not in task
-        assert "groupName" not in task
+        assert "groupId" in task
+        assert "groupName" in task
         assert "scope" not in task
 
 
@@ -187,7 +187,8 @@ def test_overview_is_team_only(client):
     for member in payload["members"]:
         assert "status" not in member
         assert "avatar" in member
-        assert "groupId" not in member
+        assert "groupId" in member
+        assert "groupName" in member
 
 
 def test_team_not_found_returns_404(client):

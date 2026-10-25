@@ -14,9 +14,10 @@ Time-window semantics (see docs/OPTIMIZATION_ROUND2_CONTRACT.md §3):
 - a task is *active* in the window when it was created in it, completed in it, or is still
   open (``progress_status != "completed"``); ``range=all`` keeps everything;
 - todos count when they were created in the window (``all`` keeps everything);
-- a member row is only emitted when that person holds at least one active task or in-window
-  todo, so empty teams stay compact;
-- every ``*Rate`` / ``averageLoadPercent`` is a 0-100 integer.
+- every merged team member gets a row, even when they hold no active task and no in-window
+  todo (the dashboard stays aligned with the member directory);
+- every ``*Rate`` is a clamped 0-100 integer, while ``averageLoadPercent`` is a real ratio of
+  open-task load points over capacity (``members * CAPACITY_POINTS``) and may exceed 100.
 
 Trend buckets: ``1w``/``2w`` use calendar days, the longer ranges use weeks, and ``all``
 returns the most recent 26 weekly buckets.
@@ -68,6 +69,13 @@ def _percent(part: int | float, whole: int | float) -> int:
     if not whole:
         return 0
     return max(0, min(100, int(round(float(part) / float(whole) * 100))))
+
+
+def _load_percent(points: int | float, capacity: int | float) -> int:
+    """Real (unclamped) load percentage: overload shows as > 100, never capped."""
+    if not capacity:
+        return 0
+    return int(round(float(points) / float(capacity) * 100))
 
 
 def _local_midnight(day: date, tz: Any) -> datetime:
@@ -241,8 +249,6 @@ def build_insights(
         for archive_id in archive_ids:
             member_tasks.extend(tasks_by_member.get(archive_id, []))
             member_todos.extend(todos_by_member.get(archive_id, []))
-        if not member_tasks and not member_todos:
-            continue
         task_stats = _task_stats(member_tasks, today)
         todo_stats = _todo_stats(member_todos)
         members.append(
@@ -283,7 +289,9 @@ def build_insights(
         "todoCompletionRate": summary_todos["todoCompletionRate"],
         "loadPoints": summary_stats["loadPoints"],
         "capacityPoints": capacity_points,
-        "averageLoadPercent": _percent(summary_stats["loadPoints"], capacity_points),
+        "averageLoadPercent": _load_percent(
+            summary_stats["loadPoints"], capacity_points
+        ),
     }
 
     return {

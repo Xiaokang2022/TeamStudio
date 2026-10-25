@@ -131,7 +131,14 @@ export interface BootstrapData {
   me: CurrentUser;
   config: PublicConfig;
   teams: TeamRef[];
-  active: { team: TeamRef | null };
+  active: {
+    team: TeamRef | null;
+    /** Round 9: effective module visibility for the current user on this team. */
+    moduleFlags?: ModuleFlags;
+    /** Round 9: stored team-level module switches (defaults merged in). */
+    teamSettings?: TeamSettingsPayload["settings"];
+    canEditTeamSettings?: boolean;
+  };
   stats: {
     teams: number;
     members: number;
@@ -152,7 +159,8 @@ export interface WorkItem {
   title: string;
   description: string;
   status: WorkStatus;
-  period: string;
+  /** Round 9: planned completion date (YYYY-MM-DD, "" = not planned yet). */
+  plannedDate: string;
   category: string;
   progress: number;
   updatedAt: string;
@@ -199,6 +207,9 @@ export interface Member {
   memberships?: MemberMembership[];
   teamIds?: string[];
   teamNames?: string[];
+  /** Round 9: custom member group id ("" = ungrouped). */
+  groupId?: string;
+  groupName?: string;
 }
 
 export interface ActivityItem {
@@ -231,13 +242,31 @@ export interface OverviewData {
     pinned: number;
     [key: string]: number;
   };
+  /** Round 9: custom member groups defined by the team (for grouping the member cards). */
+  memberGroups?: TeamGroup[];
 }
 
 export type TaskProgressStatus = "pending" | "in_progress" | "completed";
 export type TaskHealthStatus = "normal" | "delayed" | "blocked";
-export type TaskPriority = "low" | "normal" | "high" | "urgent";
+export type TaskPriority = "low" | "normal" | "high";
 export type TaskDifficulty = "easy" | "medium" | "hard";
 export type WorkloadLevel = "low" | "balanced" | "high" | "overload";
+
+/** Round 9: a team-defined custom group for tasks or members ("" groupId = ungrouped). */
+export type TeamGroupKind = "task" | "member";
+
+export interface TeamGroup {
+  id: string;
+  teamId: string;
+  kind: TeamGroupKind;
+  name: string;
+  color: string;
+  sortOrder: number;
+  taskCount: number;
+  memberCount: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
 
 export interface MemberTask {
   id: string;
@@ -255,7 +284,11 @@ export interface MemberTask {
   healthStatus: TaskHealthStatus;
   priority: TaskPriority;
   difficulty: TaskDifficulty;
+  /** Round 9 load score: priorityScore (1-3) x difficultyScore (1-3), 1-9. */
   loadPoints: number;
+  /** Custom task group id ("" = ungrouped). */
+  groupId?: string;
+  groupName?: string;
   expectedDate: string;
   tagIds?: string[];
   tags?: TaskTag[];
@@ -310,9 +343,14 @@ export interface TaskOverviewData {
   tasks: MemberTask[];
   workloads: Workload[];
   summary: WorkloadSummary;
+  /** Round 9: task groups defined by the team (for the group-by selector). */
+  groups: TeamGroup[];
   meta: {
     capacityPoints: number;
     windowWeeks: number;
+    /** Round 9: windows that actually had data (used as the average divisor). */
+    effectiveWindowWeeks?: number;
+    maxPoints?: number;
     windowLabel: string;
     scoring: string;
   };
@@ -740,6 +778,13 @@ export interface DomainTeamSettings {
   description: string;
   color: string;
   canEdit: boolean;
+}
+
+export interface TeamSettingsPayload {
+  settings: { modules: ModuleFlags; guestModules: ModuleFlags };
+  effective: { modules: ModuleFlags; guestModules: ModuleFlags };
+  canEdit: boolean;
+  updatedAt: string;
 }
 
 export interface DomainSettingsData {

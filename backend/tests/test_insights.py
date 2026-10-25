@@ -117,9 +117,12 @@ def test_insights_structure_matches_frontend_contract(client):
     assert set(payload["summary"]) == SUMMARY_KEYS
     assert "groups" not in payload["summary"]
     assert payload["summary"]["teams"] == 1
-    for key in ("completionRate", "todoCompletionRate", "averageLoadPercent"):
+    for key in ("completionRate", "todoCompletionRate"):
         assert isinstance(payload["summary"][key], int)
         assert 0 <= payload["summary"][key] <= 100
+    # Load is a real ratio over capacity: overload is not clamped to 100.
+    assert isinstance(payload["summary"]["averageLoadPercent"], int)
+    assert payload["summary"]["averageLoadPercent"] >= 0
 
     assert payload["members"]
     assert set(payload["members"][0]) == MEMBER_ROW_KEYS
@@ -175,12 +178,13 @@ def test_team_totals_split_the_seeded_ledger(client):
     assert voyage["summary"]["members"] >= 1
     assert aurora["summary"]["capacityPoints"] == aurora["summary"]["members"] * 15
 
-    # The scoped member rows only contain members of the requested team.
+    # Every merged team member gets a row, even without any active task or window todo.
     aurora_member_ids = {
         member["id"]
         for member in data(client.get(f"/api/teams/{TEAM_AURORA}/overview"))["members"]
     }
-    assert {row["memberId"] for row in aurora["members"]} <= aurora_member_ids
+    assert {row["memberId"] for row in aurora["members"]} == aurora_member_ids
+    assert aurora["summary"]["members"] == len(aurora_member_ids)
 
 
 def test_trend_sums_match_totals_for_all_range(client):
@@ -232,7 +236,7 @@ def test_active_window_filters_completed_and_keeps_open_tasks(client):
     assert after_open["all"] == baseline["all"] + 2
 
 
-def test_members_without_window_activity_are_omitted(client):
+def test_members_without_window_activity_are_included(client):
     from backend.app.db import db, new_id
 
     member_id = new_id("member")
@@ -260,7 +264,21 @@ def test_members_without_window_activity_are_omitted(client):
             ),
         )
     payload = insights_payload(client, range_key="all")
-    assert all(row["memberId"] != member_id for row in payload["members"])
+    rows_by_id = {row["memberId"]: row for row in payload["members"]}
+    assert member_id in rows_by_id
+    empty_row = rows_by_id[member_id]
+    assert empty_row["tasks"] == 0
+    assert empty_row["openTasks"] == 0
+    assert empty_row["loadPoints"] == 0
+
+    overview_ids = {
+        member["id"]
+        for member in data(client.get(f"/api/teams/{TEAM_AURORA}/overview"))["members"]
+    }
+    assert set(rows_by_id) == overview_ids
+    assert payload["summary"]["members"] == len(overview_ids)
+    # Capacity is based on all merged members, including the ones without tasks.
+    assert payload["summary"]["capacityPoints"] == len(overview_ids) * 15
 
 
 def test_guest_can_read_insights(guest_client):

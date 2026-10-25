@@ -13,7 +13,7 @@ import { cn, formatDate } from "../lib/utils";
 import {
   DIFFICULTY_META,
   PRIORITY_META,
-  TASK_BASE_POINTS,
+  TASK_MAX_POINTS,
   TASK_PROGRESS_META,
   WORKLOAD_LEVEL_META,
   formatPercent,
@@ -222,7 +222,8 @@ export function WorkloadDetailDialog({
                 const priority = PRIORITY_META[task.priority] ?? PRIORITY_META.normal;
                 const difficulty = DIFFICULTY_META[task.difficulty] ?? DIFFICULTY_META.medium;
                 const points = pointsOf(task);
-                const formula = `基础 ${TASK_BASE_POINTS} + 优先级 ${priority.weight} + 难度 ${difficulty.weight}`;
+                // Round 9：负载分 = 优先级分（1-3）× 难度分（1-3），满分 9。
+                const formula = `优先级分 ${priority.score} × 难度分 ${difficulty.score} = ${points} / ${TASK_MAX_POINTS}`;
                 return (
                   <li key={task.id} className={cn("wl-detail-task", task.overdue && "is-overdue")}>
                     <div className="wl-detail-task-main">

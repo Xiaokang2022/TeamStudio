@@ -1567,11 +1567,20 @@ ol {
 }
 
 /* ---------- Avatar ---------- */
+/* Round 9 req 7: avatars must stay perfectly round.
+ * The uploaded image is absolutely positioned inside the avatar box so
+ * `height: 100%` resolves against the square container instead of the
+ * inline-grid content track (which used to fall back to the image's
+ * intrinsic ratio and produced ellipses). aspect-ratio keeps the box
+ * square even when a page overrides only width or only height. */
 .avatar {
   position: relative;
   display: inline-grid;
   place-items: center;
   border-radius: 50%;
+  overflow: hidden;
+  aspect-ratio: 1 / 1;
+  isolation: isolate;
   color: #fff;
   font-weight: 700;
   flex: none;
@@ -1581,6 +1590,26 @@ ol {
     inset 0 0 0 1px rgba(255, 255, 255, 0.18),
     0 4px 12px -8px rgba(17, 18, 20, 0.45);
   user-select: none;
+}
+
+.avatar-img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  border-radius: 50%;
+}
+
+/* Flex/grid parents must never shrink or stretch an avatar out of its square. */
+.workload-head .avatar,
+.tasks-wl-head .avatar,
+.ov-member-top .avatar,
+.ov-avatar-stack .avatar,
+.md-hero-avatar {
+  flex: 0 0 auto;
 }
 
 .avatar-xs {

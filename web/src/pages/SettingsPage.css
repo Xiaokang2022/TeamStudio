@@ -2561,3 +2561,110 @@
     flex: 1;
   }
 }
+
+/* ---------- round 9: team settings (per-team module switches) ---------- */
+
+/* The 9 module cards sit next to the team/domain cards; each card owns a
+   "members can see" and a "guests can access" switch. */
+.team-settings-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.team-settings-module {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-2);
+  transition: border-color 0.16s, background 0.16s;
+}
+
+.team-settings-module.is-on {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: var(--surface);
+}
+
+.team-settings-module-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 0;
+}
+
+.team-settings-module-icon {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-3);
+}
+
+.team-settings-module.is-on .team-settings-module-icon {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+}
+
+.team-settings-module-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.team-settings-module-copy strong {
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.team-settings-module-copy small {
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
+.team-settings-module-switches {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.team-settings-module-switches .settings-toggle-row {
+  padding: 6px 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.team-settings-module-switches .settings-toggle-row:hover {
+  background: transparent;
+  box-shadow: none;
+}
+
+.team-settings-module-switches .settings-toggle-copy strong {
+  font-size: 11.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.team-settings-module-switches .settings-toggle-copy .badge {
+  font-size: 9px;
+  padding: 1px 6px;
+}
+
+@media (max-width: 1080px) {
+  .team-settings-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+

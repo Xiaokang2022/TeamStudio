@@ -28,6 +28,9 @@ from ..auth import CurrentUser, get_current_user
 from ..config import DEFAULT_SETTINGS, ConfigValidationError, settings_service
 from ..db import db, log_audit, rows
 from ..http import fail, get_team, ok
+from ..permissions import require_read_module
+from ..services.team_settings import build_payload as build_team_settings
+from ..services.team_settings import save as save_team_settings
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -240,3 +243,39 @@ def update_domain_team(
             }
         }
     )
+
+# ------------------------------------------------------------------- team modules
+#
+# Round 9: each team owns module switches ("team settings"). GET/PUT live under
+# /api/teams/{team_id}/settings and reuse the round-9 service; the site-level
+# router above (including PATCH /api/settings/teams/{team_id}) is unchanged.
+
+team_router = APIRouter(prefix="/api/teams", tags=["settings"])
+
+
+@team_router.get("/{team_id}/settings")
+def get_team_settings(
+    team_id: str,
+    user: CurrentUser = Depends(require_read_module("settings")),
+):
+    """Stored team module switches + effective visibility (readable team members)."""
+    with db() as conn:
+        get_team(conn, team_id)
+        payload = build_team_settings(conn, team_id, user)
+    return ok(payload)
+
+
+@team_router.put("/{team_id}/settings")
+def update_team_settings(
+    team_id: str,
+    payload: dict[str, Any] = Body(...),
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Partially merge team module switches; team administrators only."""
+    with db() as conn:
+        get_team(conn, team_id)
+        if not user.can_edit_team(team_id):
+            raise fail(403, "你没有该团队设置的管理权限", "not_admin")
+        result = save_team_settings(conn, team_id, payload, user)
+    return ok(result)
+

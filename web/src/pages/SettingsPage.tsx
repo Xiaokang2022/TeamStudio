@@ -90,6 +90,7 @@ import type {
   SystemResetInfo,
   SystemResetResult,
   SystemResetStats,
+  TeamSettingsPayload,
   UserAccount,
   UserRole,
   UsersData,
@@ -3618,6 +3619,9 @@ function WorkspaceSettingsSection() {
         )}
       </SettingsCard>
 
+      {/* Round 9: the active team's own module switches, next to the team/domain cards. */}
+      <TeamSettingsSection />
+
       <WorkspaceManager
         open={managerOpen}
         onClose={() => {
@@ -3626,6 +3630,229 @@ function WorkspaceSettingsSection() {
         }}
       />
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Round 9: per-team module switches (+ guest access)                  */
+/* ------------------------------------------------------------------ */
+
+/** All nine round-9 modules, including the permission-based settings entry. */
+const TEAM_SETTINGS_MODULE_META: {
+  key: keyof ModuleFlags;
+  label: string;
+  description: string;
+  icon: LucideIcon;
+}[] = [
+  ...MODULE_META,
+  {
+    key: "settings",
+    label: "团队设置",
+    description: "团队级设置面板本身（由权限决定，始终开启）。",
+    icon: Settings2,
+  },
+];
+
+/**
+ * Round 9 team settings: each team owns its own module switches, layered on top of the
+ * site switches, plus a per-module "open to guests" flag. Only team administrators may
+ * edit; everyone else gets a read-only view. Saving refreshes the bootstrap payload so
+ * the sidebar navigation reacts immediately.
+ */
+function TeamSettingsSection() {
+  const { currentTeam, canEditTeamSettings, reload } = useApp();
+  const { toast } = useToast();
+  const teamId = currentTeam?.id ?? "";
+
+  const [payload, setPayload] = useState<TeamSettingsPayload | null>(null);
+  const [modules, setModules] = useState<ModuleFlags | null>(null);
+  const [guestModules, setGuestModules] = useState<ModuleFlags | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const requestRef = useRef(0);
+
+  const load = useCallback(async () => {
+    if (!teamId) {
+      setPayload(null);
+      setModules(null);
+      setGuestModules(null);
+      setLoading(false);
+      return;
+    }
+    const id = ++requestRef.current;
+    setLoading(true);
+    setError("");
+    try {
+      const result = await api.getTeamSettings(teamId);
+      if (id !== requestRef.current) return;
+      setPayload(result);
+      setModules(result.settings.modules);
+      setGuestModules(result.settings.guestModules);
+    } catch (err) {
+      if (id !== requestRef.current) return;
+      const message = err instanceof ApiError ? err.message : "加载团队设置失败";
+      setError(message);
+    } finally {
+      if (id === requestRef.current) setLoading(false);
+    }
+  }, [teamId]);
+
+  // Reload whenever the active team changes (team switcher) and on first mount.
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const editable = canEditTeamSettings && Boolean(payload?.canEdit);
+  const dirty = Boolean(
+    payload &&
+      modules &&
+      guestModules &&
+      TEAM_SETTINGS_MODULE_META.some(
+        (item) =>
+          modules[item.key] !== payload.settings.modules[item.key] ||
+          guestModules[item.key] !== payload.settings.guestModules[item.key],
+      ),
+  );
+
+  const handleSave = async () => {
+    if (!teamId || !modules || !guestModules) return;
+    setSaving(true);
+    try {
+      const result = await api.updateTeamSettings(teamId, { modules, guestModules });
+      setPayload(result);
+      setModules(result.settings.modules);
+      setGuestModules(result.settings.guestModules);
+      toast("团队设置已保存", "success");
+      // Refresh the bootstrap payload: active.moduleFlags / canEditTeamSettings change
+      // immediately, so the navigation and route guards follow the new switches.
+      await reload(true);
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "保存团队设置失败，请稍后重试", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const updateModule = (key: keyof ModuleFlags, checked: boolean) => {
+    setModules((prev) => (prev ? { ...prev, [key]: checked } : prev));
+  };
+
+  const updateGuestModule = (key: keyof ModuleFlags, checked: boolean) => {
+    setGuestModules((prev) => (prev ? { ...prev, [key]: checked } : prev));
+  };
+
+  if (!currentTeam) return null;
+
+  return (
+    <SettingsCard
+      title="团队设置"
+      description={`为「${currentTeam.name}」单独配置模块开关：团队开关叠加在站点开关之上，同时开启时模块才可见；保存后导航立即生效。`}
+      icon={<Settings2 size={18} />}
+      extra={
+        <>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => void load()}
+            disabled={loading || saving}
+          >
+            <RefreshCw size={14} className={loading ? "spin" : undefined} /> 刷新
+          </button>
+          {editable ? (
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => void handleSave()}
+              disabled={saving || loading || !dirty}
+            >
+              <Save size={14} /> {saving ? "保存中…" : "保存团队设置"}
+            </button>
+          ) : null}
+        </>
+      }
+    >
+      {loading ? (
+        <LoadingBlock label="正在读取团队设置…" rows={4} />
+      ) : error ? (
+        <div className="settings-inline-empty">
+          <AlertTriangle size={18} />
+          <div>
+            <strong>无法加载团队设置</strong>
+            <p>{error}</p>
+          </div>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => void load()}>
+            重新加载
+          </button>
+        </div>
+      ) : modules && guestModules ? (
+        <>
+          {editable ? (
+            <p className="settings-note">
+              <ShieldCheck size={13} />
+              你是该团队的管理员，可随时调整模块开关；未保存的改动不会影响其他成员。
+            </p>
+          ) : (
+            <p className="settings-note">
+              <Lock size={13} />
+              仅团队管理员可修改该团队的模块开关，当前为只读展示。
+            </p>
+          )}
+          <p className="settings-note">
+            <ShieldCheck size={13} />
+            团队开关与站点开关同时开启时模块才可见；访客还需站点与团队同时开放。「团队设置」入口按权限展示，恒为开启且访客不可访问。
+          </p>
+          <div className="settings-toggle-grid team-settings-grid">
+            {TEAM_SETTINGS_MODULE_META.map((item) => {
+              const Icon = item.icon;
+              const pinned = item.key === "settings";
+              const moduleOn = pinned ? true : modules[item.key];
+              const guestOn = pinned ? false : guestModules[item.key];
+              return (
+                <div key={item.key} className={cn("team-settings-module", moduleOn && "is-on")}>
+                  <div className="team-settings-module-head">
+                    <span className="team-settings-module-icon">
+                      <Icon size={16} />
+                    </span>
+                    <div className="team-settings-module-copy">
+                      <strong>{item.label}</strong>
+                      <small>{item.description}</small>
+                    </div>
+                  </div>
+                  <div className="team-settings-module-switches">
+                    <ToggleRow
+                      label="成员可见"
+                      checked={moduleOn}
+                      disabled={pinned || !editable}
+                      onChange={(checked) => updateModule(item.key, checked)}
+                      badge={pinned ? <span className="badge badge-gray">始终开启</span> : undefined}
+                    />
+                    <ToggleRow
+                      label="访客可访问"
+                      checked={guestOn}
+                      disabled={pinned || !editable || !moduleOn}
+                      onChange={(checked) => updateGuestModule(item.key, checked)}
+                      badge={
+                        pinned ? (
+                          <span className="badge badge-gray">不可开启</span>
+                        ) : !moduleOn ? (
+                          <span className="badge badge-gray">模块已关闭</span>
+                        ) : undefined
+                      }
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {payload?.updatedAt ? (
+            <p className="settings-note">
+              <Clock size={13} /> 最近保存：{formatDateTime(payload.updatedAt)}
+            </p>
+          ) : null}
+        </>
+      ) : null}
+    </SettingsCard>
   );
 }
 

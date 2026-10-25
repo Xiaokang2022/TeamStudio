@@ -16,6 +16,7 @@ import {
   Trash2,
   TriangleAlert,
   UserRound,
+  Users,
   UserX,
   X,
 } from "lucide-react";
@@ -33,9 +34,10 @@ import {
   formatDateTime,
   isLinkedMember,
   relativeTime,
+  todayISO,
 } from "../lib/utils";
 import { formatPercent, formatPoints, WORKLOAD_LEVEL_META, workloadLevel } from "../lib/taskMeta";
-import type { Member, MemberMembership, WorkItem, WorkStatus, Workload } from "../types";
+import type { Member, MemberMembership, TeamGroup, WorkItem, WorkStatus, Workload } from "../types";
 
 const WORK_STATUS_META: Record<WorkStatus, { label: string; badge: string }> = {
   current: { label: "进行中", badge: "badge-violet" },
@@ -65,11 +67,22 @@ function messageOf(error: unknown, fallback: string): string {
   return error instanceof ApiError ? error.message : fallback;
 }
 
+/** Round 9 (req 1): a planned completion date in the past on an unfinished work item. */
+function workIsOverdue(work: WorkItem): boolean {
+  return Boolean(work.plannedDate) && work.status !== "done" && work.plannedDate < todayISO();
+}
+
+function workPlannedLabel(work: WorkItem): string {
+  return work.plannedDate ? `计划完成 ${work.plannedDate}` : "";
+}
+
 export interface MemberDrawerProps {
   open: boolean;
   member: Member | null;
   teamId: string;
   workload?: Workload | null;
+  /** Round 9: member groups of the current team (kind="member"), for the admin-only group picker. */
+  memberGroups?: TeamGroup[];
   onClose: () => void;
   onChanged: () => Promise<void> | void;
 }
@@ -79,6 +92,7 @@ export function MemberDrawer({
   member: memberProp,
   teamId,
   workload: workloadProp = null,
+  memberGroups = [],
   onClose,
   onChanged,
 }: MemberDrawerProps) {
@@ -94,6 +108,7 @@ export function MemberDrawer({
   const [workToDelete, setWorkToDelete] = useState<WorkItem | null>(null);
   const [deleteMemberOpen, setDeleteMemberOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [groupSaving, setGroupSaving] = useState(false);
   // #5 close animation: stay mounted for one exit beat instead of returning null.
   const [closing, setClosing] = useState(false);
   const [visibleMember, setVisibleMember] = useState<Member | null>(open ? memberProp : null);
@@ -255,6 +270,25 @@ export function MemberDrawer({
     await onChanged();
   };
 
+  /**
+   * Round 9 (req 3): team administrators assign a member to a custom member group.
+   * "" means ungrouped; the backend validates that the group belongs to the team
+   * and has kind="member".
+   */
+  const handleGroupChange = async (value: string) => {
+    if (!memberProp) return;
+    setGroupSaving(true);
+    try {
+      await api.updateMember(teamId, memberProp.id, { groupId: value });
+      toast(value ? "成员分组已更新" : "已移出分组", "success");
+      await onChanged();
+    } catch (err) {
+      toast(messageOf(err, "调整成员分组失败，请稍后重试。"), "error");
+    } finally {
+      setGroupSaving(false);
+    }
+  };
+
   return createPortal(
     <div className={cn("md-layer", closing && "is-closing")} role="presentation" aria-hidden={closing || undefined}>
       <button className="md-scrim" type="button" onClick={onClose} aria-label="关闭成员档案" />
@@ -296,6 +330,11 @@ export function MemberDrawer({
                 ) : null}
                 {isSelf ? <span className="badge">这是我</span> : null}
                 {isAdmin ? <span className="badge">{isSelf ? "管理员" : "管理员视角"}</span> : null}
+                {member.groupName || member.groupId ? (
+                  <span className="badge md-hero-group">
+                    <Users size={11} /> {member.groupName || "已分组"}
+                  </span>
+                ) : null}
                 {!canEdit ? <span className="badge">只读</span> : null}
               </div>
             </div>
@@ -360,6 +399,33 @@ export function MemberDrawer({
                 </span>
               </div>
             </div>
+            {canManageActiveTeam && memberGroups.length ? (
+              <div className="md-group-row">
+                <span className="md-group-label">
+                  <Users size={13} /> 成员分组
+                </span>
+                <Select
+                  value={member.groupId ?? ""}
+                  onChange={(value) => void handleGroupChange(value)}
+                  options={[
+                    { value: "", label: "未分组" },
+                    ...memberGroups.map((group) => ({
+                      value: group.id,
+                      label: group.name,
+                      color: group.color,
+                    })),
+                  ]}
+                  placeholder="未分组"
+                  ariaLabel="成员分组"
+                  disabled={groupSaving}
+                  size="sm"
+                  className="md-group-select"
+                />
+                <span className="md-group-hint">
+                  {groupSaving ? "保存中…" : "调整后立即可见，其他成员只读。"}
+                </span>
+              </div>
+            ) : null}
           </section>
 
           <section className="md-section">
@@ -587,7 +653,8 @@ export function MemberDrawer({
                         </div>
                       </div>
                       <div className="md-history-meta">
-                        {[work.category, work.period].filter(Boolean).join(" · ") || "未分类"}
+                        {[work.category, workPlannedLabel(work)].filter(Boolean).join(" · ") || "未分类"}
+                        {workIsOverdue(work) ? <span className="badge badge-red">已逾期</span> : null}
                         <span>·</span>
                         <span>{formatDateTime(work.updatedAt)}</span>
                       </div>
@@ -703,10 +770,13 @@ function WorkCard({ work, canEdit, onEdit, onDelete }: WorkCardProps) {
         <div>
           <strong>{work.title}</strong>
           <span className="md-work-meta">
-            {[work.category, work.period].filter(Boolean).join(" · ") || "未分类"}
+            {[work.category, workPlannedLabel(work)].filter(Boolean).join(" · ") || "未分类"}
           </span>
         </div>
-        <span className={cn("badge", meta.badge)}>{meta.label}</span>
+        <span className="md-work-badges">
+          <span className={cn("badge", meta.badge)}>{meta.label}</span>
+          {workIsOverdue(work) ? <span className="badge badge-red">已逾期</span> : null}
+        </span>
       </div>
       {work.description ? <p>{work.description}</p> : null}
       <div className="md-progress">
@@ -987,7 +1057,7 @@ function WorkEditDialog({ open, work, memberId, teamId, onClose, onSaved }: Work
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [status, setStatus] = useState<WorkStatus>("current");
-  const [period, setPeriod] = useState("");
+  const [plannedDate, setPlannedDate] = useState("");
   const [category, setCategory] = useState("");
   const [progress, setProgress] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -998,7 +1068,7 @@ function WorkEditDialog({ open, work, memberId, teamId, onClose, onSaved }: Work
     setTitle(work?.title ?? "");
     setDescription(work?.description ?? "");
     setStatus(work?.status ?? "current");
-    setPeriod(work?.period ?? "");
+    setPlannedDate(work?.plannedDate ?? "");
     setCategory(work?.category ?? "");
     setProgress(work?.progress ?? (work?.status === "done" ? 100 : 0));
     setSaving(false);
@@ -1017,7 +1087,7 @@ function WorkEditDialog({ open, work, memberId, teamId, onClose, onSaved }: Work
       title: title.trim(),
       description: description.trim(),
       status,
-      period: period.trim(),
+      plannedDate: plannedDate.trim(),
       category: category.trim(),
       progress: Math.max(0, Math.min(100, Math.round(progress))),
     };
@@ -1084,15 +1154,18 @@ function WorkEditDialog({ open, work, memberId, teamId, onClose, onSaved }: Work
           />
         </div>
         <div className="field">
-          <label htmlFor="md-work-period">周期</label>
+          <label htmlFor="md-work-planned-date">计划完成时间</label>
           <input
-            id="md-work-period"
+            id="md-work-planned-date"
             className="input"
-            value={period}
-            onChange={(event) => setPeriod(event.target.value)}
-            placeholder="例如：2026 Q4"
-            maxLength={60}
+            type="date"
+            value={plannedDate}
+            onChange={(event) => setPlannedDate(event.target.value)}
+            aria-describedby="md-work-planned-date-hint"
           />
+          <span id="md-work-planned-date-hint" className="field-hint">
+            留空表示暂未计划完成时间。
+          </span>
         </div>
         <div className="field span-2">
           <label htmlFor="md-work-category">分类</label>

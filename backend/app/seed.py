@@ -171,6 +171,19 @@ def _future_day(base: date, offset: int) -> str:
     return (base + timedelta(days=offset)).isoformat()
 
 
+def _period_end_date(period: str) -> str:
+    """Convert a legacy quarter label ("2026 Q4") into its last calendar day."""
+    parts = (period or "").split()
+    if len(parts) != 2 or not parts[0].isdigit():
+        return ""
+    quarter = parts[1].upper()
+    if quarter not in {"Q1", "Q2", "Q3", "Q4"}:
+        return ""
+    end_months = {"Q1": (3, 31), "Q2": (6, 30), "Q3": (9, 30), "Q4": (12, 31)}
+    month, day = end_months[quarter]
+    return f"{int(parts[0]):04d}-{month:02d}-{day:02d}"
+
+
 def seed_if_empty(force: bool = False) -> bool:
     """Populate the demo workspace once for a brand-new database.
 
@@ -252,9 +265,12 @@ def seed_if_empty(force: bool = False) -> bool:
             team_id = MEMBER_TEAM[member_id]
             for index, item in enumerate(items):
                 work_id, title, description, status, period, category, progress = item
+                # Round 9: works carry a planned date instead of the legacy quarter label.
+                planned_date = _period_end_date(period)
                 conn.execute(
                     "INSERT INTO works (id,member_id,team_id,title,description,status,period,"
-                    "category,progress,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "planned_date,category,progress,sort_order,created_at,updated_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         work_id,
                         member_id,
@@ -262,7 +278,8 @@ def seed_if_empty(force: bool = False) -> bool:
                         title,
                         description,
                         status,
-                        period,
+                        "",
+                        planned_date,
                         category,
                         progress,
                         index,
@@ -715,17 +732,17 @@ TASK_TEMPLATES: dict[str, list[tuple]] = {
     ],
 }
 
-# Explicit v2 scoring for seeded tasks: (priority, difficulty). Every priority x difficulty
-# combination (4 x 3) appears at least once across the two teams so the UI and workload
-# aggregation are exercised with the full 1-6 point range.
+# Explicit round-9 scoring for seeded tasks: (priority, difficulty). Every priority x
+# difficulty combination (3 x 3) appears at least once across the two teams so the UI and
+# workload aggregation are exercised with the full 1-9 point range.
 TASK_SCORING: dict[tuple[str, int], tuple[str, str]] = {
     ("m-lin", 0): ("high", "hard"),
     ("m-lin", 1): ("normal", "hard"),
     ("m-lin", 2): ("high", "easy"),
     ("m-chen", 0): ("high", "hard"),
-    ("m-chen", 1): ("urgent", "medium"),
+    ("m-chen", 1): ("high", "medium"),
     ("m-chen", 2): ("normal", "medium"),
-    ("m-su", 0): ("urgent", "hard"),
+    ("m-su", 0): ("high", "hard"),
     ("m-su", 1): ("high", "medium"),
     ("m-su", 2): ("normal", "medium"),
     ("m-he", 0): ("low", "hard"),
@@ -734,32 +751,32 @@ TASK_SCORING: dict[tuple[str, int], tuple[str, str]] = {
     ("m-tang", 0): ("high", "hard"),
     ("m-tang", 1): ("low", "medium"),
     ("m-zhou", 0): ("high", "hard"),
-    ("m-zhou", 1): ("urgent", "hard"),
+    ("m-zhou", 1): ("high", "hard"),
     ("m-zhou", 2): ("normal", "medium"),
     ("m-wu", 0): ("high", "hard"),
     ("m-wu", 1): ("high", "medium"),
     ("m-wu", 2): ("normal", "medium"),
-    ("m-xu", 0): ("urgent", "hard"),
+    ("m-xu", 0): ("high", "hard"),
     ("m-xu", 1): ("normal", "medium"),
-    ("m-xu", 2): ("urgent", "easy"),
+    ("m-xu", 2): ("high", "easy"),
     ("m-luo", 0): ("high", "hard"),
     ("m-luo", 1): ("normal", "medium"),
     ("m-luo", 2): ("normal", "easy"),
     ("m-yu", 0): ("high", "hard"),
     ("m-yu", 1): ("low", "medium"),
     ("m-qin", 0): ("high", "hard"),
-    ("m-qin", 1): ("urgent", "medium"),
+    ("m-qin", 1): ("high", "medium"),
     ("m-qin", 2): ("low", "easy"),
     ("m-shen", 0): ("high", "medium"),
     ("m-shen", 1): ("low", "medium"),
-    ("m-gu", 0): ("urgent", "hard"),
+    ("m-gu", 0): ("high", "hard"),
     ("m-gu", 1): ("high", "medium"),
     ("m-gu", 2): ("normal", "medium"),
-    ("m-li", 0): ("urgent", "hard"),
+    ("m-li", 0): ("high", "hard"),
     ("m-li", 1): ("high", "hard"),
     ("m-li", 2): ("normal", "medium"),
     ("m-fang", 0): ("high", "hard"),
-    ("m-fang", 1): ("urgent", "medium"),
+    ("m-fang", 1): ("high", "medium"),
     ("m-jia", 0): ("high", "hard"),
     ("m-jia", 1): ("normal", "medium"),
     ("m-pei", 0): ("high", "hard"),
@@ -767,7 +784,7 @@ TASK_SCORING: dict[tuple[str, int], tuple[str, str]] = {
     ("m-pei", 2): ("normal", "medium"),
     ("m-han", 0): ("high", "hard"),
     ("m-han", 1): ("normal", "medium"),
-    ("m-han", 2): ("urgent", "medium"),
+    ("m-han", 2): ("high", "medium"),
 }
 
 
@@ -785,7 +802,7 @@ def _derive_scoring(
     else:
         difficulty = "hard"
     if health_status == "blocked":
-        priority = "urgent"
+        priority = "high"
     elif health_status == "delayed":
         priority = "high"
     elif progress_status != "completed" and expected_offset is not None and expected_offset < 0:

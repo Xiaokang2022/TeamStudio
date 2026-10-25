@@ -27,6 +27,10 @@ GROUP_SCOPED_TABLES = (
     "task_tags",
 )
 
+# Round 9 re-introduces group_id on these two tables, but as a team_groups reference
+# ("" = ungrouped), never as the retired development-group id.
+ROUND9_GROUPED_TABLES = ("members", "member_tasks")
+
 
 def _use_database(tmp_path, monkeypatch):
     import backend.app.db as db_module
@@ -68,7 +72,12 @@ def test_fresh_database_uses_team_only_schema(tmp_path, monkeypatch):
         for table in GROUP_SCOPED_TABLES:
             columns = _columns(connection, table)
             assert "team_id" in columns, table
-            assert "group_id" not in columns, table
+            if table in ROUND9_GROUPED_TABLES:
+                assert "group_id" in columns, table
+            else:
+                assert "group_id" not in columns, table
+        assert {"team_groups", "team_settings"} <= tables
+        assert "planned_date" in _columns(connection, "works")
         assert "status" not in _columns(connection, "members")
         assert "avatar_url" in _columns(connection, "members")
         assert "group_ids" not in _columns(connection, "users")
@@ -82,11 +91,23 @@ def test_legacy_database_migrates_to_teams(tmp_path, monkeypatch):
     db_module.init_db()
 
     with _connect(path) as connection:
-        # 1. The group structure is gone from every business table.
+        # 1. The legacy group structure is gone from every business table; the round-9
+        #    team-group columns exist but stay empty (legacy ids are never carried over).
         for table in GROUP_SCOPED_TABLES:
             columns = _columns(connection, table)
             assert "team_id" in columns, table
-            assert "group_id" not in columns, table
+            if table in ROUND9_GROUPED_TABLES:
+                assert "group_id" in columns, table
+            else:
+                assert "group_id" not in columns, table
+        for table in ROUND9_GROUPED_TABLES:
+            assert (
+                connection.execute(
+                    f'SELECT COUNT(*) FROM "{table}" WHERE group_id<>\'\''
+                ).fetchone()[0]
+                == 0
+            ), table
+        assert "planned_date" in _columns(connection, "works")
         assert "status" not in _columns(connection, "members")
 
         # 2. Business rows are preserved with their ids and mapped to the group's team.

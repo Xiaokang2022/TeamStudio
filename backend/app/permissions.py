@@ -16,12 +16,13 @@ from __future__ import annotations
 import sqlite3
 from typing import Any, Callable
 
-from fastapi import Depends
+from fastapi import Depends, Request
 
 from .auth import CurrentUser, get_current_user
 from .config import settings_service
-from .db import log_audit
+from .db import db, log_audit
 from .http import fail
+from .services.team_settings import get_stored as get_team_settings
 
 # Module names accepted by :func:`require_read_module` (contract §2.3).
 READ_MODULES: tuple[str, ...] = (
@@ -107,18 +108,44 @@ def _module_enabled_for_guests(module: str) -> bool:
     return bool(getattr(config.guestModules, module, False))
 
 
+def _team_stored_modules(team_id: str) -> dict[str, dict[str, bool]] | None:
+    """Stored module switches for the team in the request path, if any."""
+    if not team_id:
+        return None
+    with db() as conn:
+        return get_team_settings(conn, team_id)
+
+
 def require_read_module(module: str) -> Callable[..., CurrentUser]:
     """Dependency factory: read access plus the guest module allow-list.
 
     Usage: ``Depends(require_read_module("tasks"))``. Guests are rejected with
     ``403 guest_module_disabled`` when the administrator disabled that module for guests
-    or the module itself is switched off.
+    or the module itself is switched off. The ``{team_id}`` path parameter, when the
+    router declares one, adds the team-level switches: a module disabled for the team is
+    hidden from everyone, and guests additionally need the team guest switch (round 9).
     """
 
-    def dependency(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    def dependency(
+        request: Request,
+        user: CurrentUser = Depends(get_current_user),
+    ) -> CurrentUser:
         require_read_access(user)
-        if not user.authenticated and not _module_enabled_for_guests(module):
-            raise fail(403, "该模块未对访客开放", "guest_module_disabled")
+        config = settings_service.get()
+        site_enabled = bool(getattr(config.modules, module, False))
+        if not user.authenticated:
+            if not site_enabled or not _module_enabled_for_guests(module):
+                raise fail(403, "该模块未对访客开放", "guest_module_disabled")
+        elif not site_enabled:
+            raise fail(403, "该模块已被系统管理员关闭", "module_disabled")
+        team_id = str(request.path_params.get("team_id") or "").strip()
+        stored = _team_stored_modules(team_id)
+        if stored is not None:
+            if not stored["modules"].get(module, True):
+                code = "module_disabled" if user.authenticated else "guest_module_disabled"
+                raise fail(403, "该模块已被团队管理员关闭", code)
+            if not user.authenticated and not stored["guestModules"].get(module, False):
+                raise fail(403, "该模块未对访客开放", "guest_module_disabled")
         return user
 
     dependency.__name__ = f"require_read_module_{module}"

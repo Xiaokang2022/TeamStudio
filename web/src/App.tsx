@@ -176,11 +176,24 @@ function PageFallback() {
 }
 
 export default function App() {
-  const { data, config, loading, error, route, reload, isAdmin, moduleVisible } = useApp();
+  const { data, config, loading, error, route, reload, isAdmin, moduleVisible, navigate } = useApp();
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, [route]);
+
+  // Round 9: every page belongs to a module, so a hidden module must not stay addressable
+  // through the hash. Redirect to the overview when that page is reachable as well —
+  // otherwise fall through to the "module hidden" screen instead of looping.
+  useEffect(() => {
+    if (!data || !config || route === "login" || route === "profile") return;
+    const normalized = PAGES[route] ? route : "overview";
+    if (normalized === "settings") return;
+    const guarded = PAGE_MODULES[normalized];
+    if (!guarded) return;
+    if (moduleVisible(guarded)) return;
+    if (normalized !== "overview" && moduleVisible("overview")) navigate("overview");
+  }, [config, data, moduleVisible, navigate, route]);
 
   if (loading && !data) return <PageLoading />;
   if (error && !data) return <ErrorScreen message={error} onRetry={() => void reload()} />;
@@ -197,7 +210,10 @@ export default function App() {
   const normalizedRoute = PAGES[route] ? route : "overview";
   const module = PAGE_MODULES[normalizedRoute];
   const isSettingsRoute = normalizedRoute === "settings";
-  const moduleEnabled = !isSettingsRoute && module ? Boolean(config.modules[module]) : true;
+  const teamModuleFlags = data.active.moduleFlags ?? null;
+  // Site switches only help telling "not open to guests" apart from "switched off".
+  const siteModuleEnabled = module ? Boolean(config.modules[module]) : true;
+  const teamModuleOff = Boolean(module && teamModuleFlags && !teamModuleFlags[module]);
   // Round 9: the settings entry is permission-based (super / team admins) and can never be
   // hidden by a module switch — the backend also pins `modules.settings` to true.
   const visible = isSettingsRoute ? true : module ? moduleVisible(module) : true;
@@ -208,10 +224,10 @@ export default function App() {
   if (requiresAdmin) {
     content = <AccessDenied />;
   } else if (!visible) {
-    // A guest is blocked by guestModules while the module itself is enabled;
-    // otherwise the module was switched off site-wide.
+    // A guest is blocked by guest switches while the module itself is enabled for the
+    // team; otherwise the module was switched off (site level or by the team).
     content =
-      isGuest && moduleEnabled && module ? (
+      isGuest && module && siteModuleEnabled && !teamModuleOff ? (
         <GuestModuleBlocked module={module} />
       ) : (
         <HiddenModule module={normalizedRoute} />

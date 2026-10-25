@@ -25,9 +25,9 @@ from .routers import users as users_router
 from .routers import workspaces as workspaces_router
 
 try:  # Feature routers are developed in parallel; keep API bootable during scaffolding.
-    from .routers import boards, calendar, tasks, workspace
+    from .routers import boards, calendar, groups, tasks, workspace
 except ImportError as exc:  # pragma: no cover - only during initial scaffolding
-    boards = calendar = tasks = workspace = None  # type: ignore[assignment]
+    boards = calendar = groups = tasks = workspace = None  # type: ignore[assignment]
     _FEATURE_IMPORT_ERROR = exc
 else:
     _FEATURE_IMPORT_ERROR = None
@@ -126,15 +126,17 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 app.include_router(auth_router.router)
 app.include_router(bootstrap_router.router)
 app.include_router(settings_router.router)
+app.include_router(settings_router.team_router)
 app.include_router(email_router.router)
 app.include_router(users_router.router)
 app.include_router(profile_router.router)
 app.include_router(workspaces_router.router)
 app.include_router(system_router.router)
-if workspace and calendar and boards and tasks:
+if workspace and calendar and boards and groups and tasks:
     app.include_router(workspace.router)
     app.include_router(calendar.router)
     app.include_router(boards.router)
+    app.include_router(groups.router)
     app.include_router(tasks.router)
 elif _FEATURE_IMPORT_ERROR:
     logger.warning("Feature routers unavailable: %s", _FEATURE_IMPORT_ERROR)

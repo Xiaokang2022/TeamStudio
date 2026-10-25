@@ -5,6 +5,7 @@ import {
   CalendarDays,
   CheckCheck,
   Flag,
+  Folder,
   Gauge,
   Layers,
   Tags,
@@ -24,10 +25,11 @@ import {
   PRIORITIES,
   PRIORITY_META,
   PROGRESS_STATUSES,
+  TASK_CAPACITY_POINTS,
   TASK_HEALTH_META,
+  TASK_MAX_POINTS,
   TASK_PROGRESS_META,
   formatPercent,
-  formatPoints,
   taskLoadPoints,
 } from "../lib/taskMeta";
 import type {
@@ -36,6 +38,7 @@ import type {
   TaskHealthStatus,
   TaskPriority,
   TaskProgressStatus,
+  TeamGroup,
 } from "../types";
 
 export interface TaskMemberOption {
@@ -58,6 +61,8 @@ export interface TaskDialogProps {
   canAssignOthers: boolean;
   selfMemberId: string | null;
   defaultMemberId: string | null;
+  /** 可选的任务组（kind="task"），提交时带 groupId；空值 = 未分组。 */
+  groups?: TeamGroup[];
   onClose: () => void;
   onSaved: (task: MemberTask) => void;
 }
@@ -77,6 +82,7 @@ export function TaskDialog({
   canAssignOthers,
   selfMemberId,
   defaultMemberId,
+  groups = [],
   onClose,
   onSaved,
 }: TaskDialogProps) {
@@ -89,6 +95,7 @@ export function TaskDialog({
   const [priority, setPriority] = useState<TaskPriority>(DEFAULT_PRIORITY);
   const [difficulty, setDifficulty] = useState<TaskDifficulty>(DEFAULT_DIFFICULTY);
   const [expectedDate, setExpectedDate] = useState("");
+  const [groupId, setGroupId] = useState("");
   const [tagIds, setTagIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -106,6 +113,7 @@ export function TaskDialog({
       setHealthStatus(task.healthStatus);
       setPriority(task.priority ?? DEFAULT_PRIORITY);
       setDifficulty(task.difficulty ?? DEFAULT_DIFFICULTY);
+      setGroupId(task.groupId ?? "");
       setExpectedDate(task.expectedDate || "");
       setTagIds(task.tagIds ?? task.tags?.map((tag) => tag.id) ?? []);
     } else {
@@ -119,6 +127,7 @@ export function TaskDialog({
       setHealthStatus("normal");
       setPriority(DEFAULT_PRIORITY);
       setDifficulty(DEFAULT_DIFFICULTY);
+      setGroupId("");
       setExpectedDate("");
       setTagIds([]);
     }
@@ -136,7 +145,21 @@ export function TaskDialog({
   const priorityMeta = PRIORITY_META[priority];
   const difficultyMeta = DIFFICULTY_META[difficulty];
   const loadPoints = taskLoadPoints(priority, difficulty);
-  const capacityPercent = Math.round((loadPoints / 15) * 100);
+  const capacityPercent = Math.round((loadPoints / TASK_CAPACITY_POINTS) * 100);
+
+  const taskGroups = useMemo(
+    () => groups.filter((group) => group.kind === "task"),
+    [groups],
+  );
+  // 选中的组可能已被管理员删除：回退为「未分组」，避免提交失效的 groupId。
+  const groupValue = taskGroups.some((group) => group.id === groupId) ? groupId : "";
+  const groupOptions = useMemo(
+    () => [
+      { value: "", label: "未分组" },
+      ...taskGroups.map((group) => ({ value: group.id, label: group.name, color: group.color })),
+    ],
+    [taskGroups],
+  );
 
   const closeSafely = () => {
     if (saving) return;
@@ -180,6 +203,7 @@ export function TaskDialog({
       priority,
       difficulty,
       expectedDate: expectedDate || "",
+      groupId: groupValue,
       tagIds,
     };
     try {
@@ -316,6 +340,23 @@ export function TaskDialog({
         </div>
 
         <div className="field">
+          <label htmlFor="tasks-group">
+            <Folder size={12} /> 任务分组
+          </label>
+          <Select
+            id="tasks-group"
+            value={groupValue}
+            onChange={setGroupId}
+            ariaLabel="任务分组"
+            disabled={saving}
+            options={groupOptions}
+          />
+          <span className="field-hint">
+            分组用于任务总览的筛选与分区显示；留空即为未分组，可在任务总览中管理分组。
+          </span>
+        </div>
+
+        <div className="field">
           <span className="field-label">
             <Gauge size={12} /> 进度状态
           </span>
@@ -391,7 +432,7 @@ export function TaskDialog({
                   >
                     <i className="tasks-dialog-dot" />
                     <span>{meta.label}</span>
-                    <small>+{meta.weight}</small>
+                    <small>{meta.score} 分</small>
                   </button>
                 );
               })}
@@ -418,7 +459,7 @@ export function TaskDialog({
                   >
                     <i className="tasks-dialog-dot" />
                     <span>{meta.label}</span>
-                    <small>+{meta.weight}</small>
+                    <small>{meta.score} 分</small>
                   </button>
                 );
               })}
@@ -431,15 +472,17 @@ export function TaskDialog({
             <Gauge size={15} />
           </span>
           <div className="tasks-dialog-points-copy">
-            <strong id="tasks-points-value">预计负载 {formatPoints(loadPoints)}</strong>
+            <strong id="tasks-points-value">
+              预计负载 {loadPoints} / {TASK_MAX_POINTS} 分
+            </strong>
             <small>
-              基础 1 分 + 优先级 {priorityMeta.label}（+{priorityMeta.weight}）+ 难度{" "}
-              {difficultyMeta.label}（+{difficultyMeta.weight}）· 约占周容量{" "}
-              {formatPercent(capacityPercent)}
+              负载分 = 优先级分（1-3）× 难度分（1-3），满分 {TASK_MAX_POINTS}；当前{" "}
+              {priorityMeta.label} {priorityMeta.score} 分 × {difficultyMeta.label}{" "}
+              {difficultyMeta.score} 分 · 约占周容量 {formatPercent(capacityPercent)}
             </small>
           </div>
           <span className="tasks-dialog-points-meter" aria-hidden="true">
-            {Array.from({ length: 6 }, (_, index) => (
+            {Array.from({ length: TASK_MAX_POINTS }, (_, index) => (
               <i key={index} className={index < loadPoints ? "is-on" : undefined} />
             ))}
           </span>

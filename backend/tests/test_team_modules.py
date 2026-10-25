@@ -59,6 +59,29 @@ def test_overview_returns_team_members_works_and_workloads(client):
     for legacy in ("currentHours", "averageHours", "capacityHours"):
         assert legacy not in summary
 
+    # Round 9 requirement #3: members follow the manual sort_order, not the name.
+    ordered = payload["members"]
+    assert [member["sortOrder"] for member in ordered] == list(range(1, 13))
+    assert [member["id"] for member in ordered] == [
+        "m-lin",
+        "m-chen",
+        "m-su",
+        "m-he",
+        "m-tang",
+        "m-zhou",
+        "m-wu",
+        "m-xu",
+        "m-luo",
+        "m-yu",
+        "m-qin",
+        "m-shen",
+    ]
+    assert ordered[0]["groupId"] == ""
+    assert ordered[0]["groupName"] == ""
+    assert payload["memberGroups"] == []
+    # Round 9 requirement #8: works expose plannedDate instead of the legacy period.
+    assert all("plannedDate" in work and "period" not in work for work in payload["works"])
+
 
 def test_unknown_team_and_member_return_404(client):
     payload = assert_error(client.get(_url("/overview", "team-missing")), 404, "team_not_found")
@@ -167,7 +190,7 @@ def test_member_work_crud_and_permissions(client, monkeypatch):
                     "title": "本人工作项",
                     "description": "自编辑",
                     "status": "current",
-                    "period": "2026 Q4",
+                    "plannedDate": "2026-12-31",
                     "category": "体验",
                     "progress": 30,
                 },
@@ -176,6 +199,8 @@ def test_member_work_crud_and_permissions(client, monkeypatch):
         assert created["memberId"] == chen["id"]
         assert created["teamId"] == TEAM_AURORA
         assert created["status"] == "current"
+        assert created["plannedDate"] == "2026-12-31"
+        assert "period" not in created
         assert "groupId" not in created
 
         updated = data(
@@ -330,13 +355,25 @@ def test_redblack_put_roundtrip_rollover_and_permissions(client):
     assert "2030-04" in rolled["availableMonths"]
 
 
-def test_member_and_guest_cannot_write_admin_boards(client, monkeypatch):
+def test_member_writes_links_but_not_admin_boards(client, monkeypatch):
+    """Round 9 requirement #6: any team member may maintain the link board."""
     lin = member_by_email(client, "lin.zhixia@corp.example")
     body = {"month": "2030-05", "theme": "", "red": [], "black": []}
     with remote_client("10.20.30.96", 51406) as browser:
         email_login(browser, lin["email"], monkeypatch)
         assert browser.put(_url("/redblack"), json=body).status_code == 403
-        assert browser.post(_url("/links"), json={"title": "x", "url": "https://example.com"}).status_code == 403
+        created = browser.post(
+            _url("/links"),
+            json={"title": "成员链接", "url": "https://example.com/member"},
+        )
+        assert created.status_code == 200, created.text
+        link = data(created)["link"]
+        assert link["teamId"] == TEAM_AURORA
+        assert (
+            browser.patch(_url(f"/links/{link['id']}"), json={"title": "成员链接 2"}).status_code
+            == 200
+        )
+        assert browser.delete(_url(f"/links/{link['id']}")).status_code == 200
         assert browser.post(_url("/announcements"), json={"title": "x", "content": "y"}).status_code == 403
         assert browser.post(_url("/matrix"), json={"area": "x"}).status_code == 403
         # The tag library is intentionally member-editable (only guests are rejected).
@@ -481,3 +518,132 @@ def test_cross_team_content_is_isolated(client):
         404,
         "member_not_found",
     )
+
+
+# ------------------------------------------------------- member order / groups (round 9)
+
+
+def test_work_planned_date_validation(client):
+    """Round 9 requirement #8: plannedDate replaces the free-form period label."""
+    chen = member_by_email(client, "chen.yu@corp.example")
+    for bad in ("2026 Q4", "2026-13-01", "2026-02-30", "31/12/2026"):
+        assert_error(
+            client.post(
+                _url(f"/members/{chen['id']}/works"),
+                json={"title": "校验工作", "plannedDate": bad},
+            ),
+            400,
+            "invalid_planned_date",
+        )
+    work = data(
+        client.post(
+            _url(f"/members/{chen['id']}/works"),
+            json={"title": "日期工作", "plannedDate": "2027-01-05"},
+        )
+    )["work"]
+    assert work["plannedDate"] == "2027-01-05"
+    cleared = data(
+        client.patch(_url(f"/members/{chen['id']}/works/{work['id']}"), json={"plannedDate": ""})
+    )["work"]
+    assert cleared["plannedDate"] == ""
+
+
+def test_team_admin_reorders_members(client):
+    """Round 9 requirement #3: the manual member order is persisted and honoured."""
+    payload = overview(client)
+    member_ids = [member["id"] for member in payload["members"]]
+    reversed_ids = list(reversed(member_ids))
+
+    reordered = data(client.patch(_url("/members/order"), json={"memberIds": reversed_ids}))
+    assert [member["id"] for member in reordered["members"]] == reversed_ids
+    assert [member["sortOrder"] for member in reordered["members"]] == list(range(12))
+
+    refreshed = overview(client)
+    assert [member["id"] for member in refreshed["members"]] == reversed_ids
+
+    # Restore the seeded order so later tests keep a stable fixture baseline.
+    data(client.patch(_url("/members/order"), json={"memberIds": member_ids}))
+    assert [member["id"] for member in overview(client)["members"]] == member_ids
+
+
+def test_member_order_validation(client):
+    member_ids = [member["id"] for member in overview(client)["members"]]
+    invalid_bodies = (
+        {},
+        {"memberIds": "m-lin"},
+        {"memberIds": []},
+        {"memberIds": member_ids[:-1]},
+        {"memberIds": member_ids[:-1] + ["m-gu"]},
+        {"memberIds": member_ids + [member_ids[0]]},
+        {"memberIds": member_ids[:-1] + [""]},
+        {"memberIds": member_ids[:-1] + [123]},
+    )
+    for body in invalid_bodies:
+        assert_error(
+            client.patch(_url("/members/order"), json=body), 400, "validation_error"
+        )
+    # A rejected request must not have altered any order.
+    assert [member["id"] for member in overview(client)["members"]] == member_ids
+
+
+def test_plain_member_cannot_reorder_or_regroup(client, monkeypatch):
+    lin = member_by_email(client, "lin.zhixia@corp.example")
+    member_ids = [member["id"] for member in overview(client)["members"]]
+    with remote_client("10.20.30.97", 51407) as browser:
+        email_login(browser, lin["email"], monkeypatch)
+        assert (
+            browser.patch(_url("/members/order"), json={"memberIds": member_ids}).status_code
+            == 403
+        )
+        assert (
+            browser.patch(_url(f"/members/{lin['id']}"), json={"groupId": ""}).status_code
+            == 403
+        )
+
+
+def test_members_can_be_grouped(client):
+    """Round 9 requirement #8: member groups live on the member profile."""
+    group = data(
+        client.post(
+            _url("/groups"),
+            json={"kind": "member", "name": "前端小组", "color": "#2563eb"},
+        )
+    )["group"]
+    assert group["kind"] == "member"
+    assert group["name"] == "前端小组"
+
+    chen = member_by_email(client, "chen.yu@corp.example")
+    updated = data(
+        client.patch(_url(f"/members/{chen['id']}"), json={"groupId": group["id"]})
+    )["member"]
+    assert updated["groupId"] == group["id"]
+    assert updated["groupName"] == "前端小组"
+
+    refreshed = overview(client)
+    listed = next(item for item in refreshed["memberGroups"] if item["id"] == group["id"])
+    assert listed["memberCount"] == 1
+    card = next(item for item in refreshed["members"] if item["id"] == chen["id"])
+    assert card["groupId"] == group["id"]
+    assert card["groupName"] == "前端小组"
+
+    # Unknown groups and groups of the wrong kind are rejected.
+    assert_error(
+        client.patch(_url(f"/members/{chen['id']}"), json={"groupId": "g-missing"}),
+        400,
+        "group_not_found",
+    )
+    task_group = data(
+        client.post(_url("/groups"), json={"kind": "task", "name": "任务小组"})
+    )["group"]
+    assert_error(
+        client.patch(_url(f"/members/{chen['id']}"), json={"groupId": task_group["id"]}),
+        400,
+        "group_not_found",
+    )
+
+    cleared = data(
+        client.patch(_url(f"/members/{chen['id']}"), json={"groupId": ""})
+    )["member"]
+    assert cleared["groupId"] == ""
+    assert cleared["groupName"] == ""
+

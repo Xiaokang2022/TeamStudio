@@ -1,13 +1,21 @@
-"""Team task ledger payload builders and weighted workload quantification (v3).
+"""Team task ledger payload builders and multiplicative workload quantification (round 9).
 
 Workload is expressed in load *points* rather than hours. Every task is worth::
 
-    loadPoints = 1 (base) + priority bonus + difficulty bonus
+    loadPoints = priorityScore * difficultyScore
 
-with priority bonus low/normal/high/urgent = 0/1/2/3 and difficulty bonus
-easy/medium/hard = 0/1/2, so a single task is worth 1-6 points. Capacity is a fixed
-``CAPACITY_POINTS = 15`` per member per week and the average window is the last 4 completed
-7-day periods (window 0 is the most recent one, ending at "now").
+with priority low/normal/high = 1/2/3 and difficulty easy/medium/hard = 1/2/3, so a
+single task is worth 1-9 points (TASK_MAX_POINTS = 9). The retired urgent priority is
+still read as high (3 points) for legacy rows but the API never writes it again.
+Capacity is a fixed CAPACITY_POINTS = 15 per member per week and the average window is
+the last 4 completed 7-day periods (window 0 is the most recent one, ending at "now").
+Windows that end before the earliest task creation / member join cannot carry points, so
+they are excluded from the divisor (effectiveWindowWeeks); a brand-new member is
+therefore averaged over 1 window instead of being diluted by a fixed 4-week denominator.
+
+Round 9: tasks may belong to a custom team group (team_groups, kind task). Every task
+payload carries groupId/groupName and the GET payload carries the task group list so the
+frontend can render group sections.
 
 Round 8 (team-only): tasks, member tasks and the shared tag library are scoped to **one
 team** (``team_id``); development groups and the browsing ``scope`` no longer exist. Every
@@ -49,19 +57,23 @@ from datetime import date, datetime, timedelta
 from typing import Any, Iterable
 
 from ..db import json_loads, rows
+from .groups_service import list_group_payloads
 from .member_identity import identity_fields, member_ids, team_members
 
 CAPACITY_POINTS = 15
+TASK_MAX_POINTS = 9
 WINDOW_WEEKS = 4
 WINDOW_LABEL = "近 4 周"
-BASE_LOAD_POINTS = 1
 
-PRIORITY_WEIGHTS = {"low": 0, "normal": 1, "high": 2, "urgent": 3}
-DIFFICULTY_WEIGHTS = {"easy": 0, "medium": 1, "hard": 2}
-PRIORITIES = tuple(PRIORITY_WEIGHTS)
+# Scores are multiplied (round 9): priority * difficulty, 1-9 points per task.
+# urgent stays in the read map only so legacy rows score like high; it is never an
+# accepted API value (PRIORITIES below is the validation whitelist).
+PRIORITY_WEIGHTS = {"low": 1, "normal": 2, "high": 3, "urgent": 3}
+DIFFICULTY_WEIGHTS = {"easy": 1, "medium": 2, "hard": 3}
+PRIORITIES = ("low", "normal", "high")
 DIFFICULTIES = tuple(DIFFICULTY_WEIGHTS)
 
-SCORING_LABEL = "任务基础 1 分 + 难度加成 + 优先级加成；每人每周容量 15 分"
+SCORING_LABEL = "负载分 = 优先级分（1-3）× 难度分（1-3），满分 9；每人每周容量 15 分"
 
 PROGRESS_STATUSES = ("pending", "in_progress", "completed")
 HEALTH_STATUSES = ("normal", "delayed", "blocked")
@@ -172,13 +184,23 @@ def parse_timestamp(value: Any) -> datetime | None:
     return parsed
 
 
+def normalize_priority(priority: Any) -> str:
+    """API priority value: the retired urgent alias reads as high."""
+    value = str(priority or "").strip()
+    if value == "urgent":
+        return "high"
+    if value in PRIORITIES:
+        return value
+    return "normal"
+
+
 def load_points(task: dict[str, Any]) -> int:
-    """Weighted load score in the 1-6 range for one task row."""
-    priority = task.get("priority")
-    difficulty = task.get("difficulty")
-    priority_bonus = PRIORITY_WEIGHTS.get(priority, PRIORITY_WEIGHTS["normal"])
-    difficulty_bonus = DIFFICULTY_WEIGHTS.get(difficulty, DIFFICULTY_WEIGHTS["medium"])
-    return BASE_LOAD_POINTS + priority_bonus + difficulty_bonus
+    """Multiplicative load score in the 1-9 range for one task row."""
+    priority = PRIORITY_WEIGHTS.get(str(task.get("priority") or ""), PRIORITY_WEIGHTS["normal"])
+    difficulty = DIFFICULTY_WEIGHTS.get(
+        str(task.get("difficulty") or ""), DIFFICULTY_WEIGHTS["medium"]
+    )
+    return int(priority) * int(difficulty)
 
 
 def _round_points(value: float) -> float:
@@ -224,13 +246,39 @@ def _windows(now: datetime) -> list[tuple[datetime, datetime]]:
     ]
 
 
+def _effective_window_weeks(
+    tasks: list[dict[str, Any]],
+    member: dict[str, Any],
+    windows: list[tuple[datetime, datetime]],
+) -> int:
+    """How many rolling windows actually had data: 1 to ``WINDOW_WEEKS``.
+
+    Windows ending before the earliest activity (the member join or the oldest task
+    creation) cannot carry any points, so they must not dilute the average. The divisor
+    is the number of windows whose end lies after that earliest moment.
+    """
+    reference = parse_timestamp(member.get("joined_at"))
+    for task in tasks:
+        created = parse_timestamp(task.get("created_at"))
+        if created is not None and (reference is None or created < reference):
+            reference = created
+    if reference is None:
+        return WINDOW_WEEKS
+    covered = sum(1 for _start, window_end in windows if window_end > reference)
+    return max(1, min(WINDOW_WEEKS, covered))
+
+
 def _average_points(
-    tasks: list[dict[str, Any]], windows: list[tuple[datetime, datetime]]
+    tasks: list[dict[str, Any]],
+    windows: list[tuple[datetime, datetime]],
+    effective_windows: int = WINDOW_WEEKS,
 ) -> float:
-    """Average active task points per window over exactly ``WINDOW_WEEKS`` windows.
+    """Average active task points per effective window.
 
     A task counts towards a window when it already existed at the window end and was not
-    completed before the window start, i.e. it was active at some point inside it.
+    completed before the window start, i.e. it was active at some point inside it. The sum
+    is divided by the effective window count (windows with data), never by more than
+    ``WINDOW_WEEKS`` and never by zero.
     """
     total = 0.0
     for window_start, window_end in windows:
@@ -242,7 +290,8 @@ def _average_points(
             if completed is not None and completed < window_start:
                 continue
             total += load_points(task)
-    return total / WINDOW_WEEKS
+    divisor = max(1, min(WINDOW_WEEKS, int(effective_windows)))
+    return total / divisor
 
 
 # --------------------------------------------------------------------------- task rows
@@ -253,9 +302,11 @@ TASK_SELECT = (
     "m.avatar_color AS member_avatar_color, m.sort_order AS member_sort_order, "
     "m.created_at AS member_created_at, "
     f"{member_avatar_sql('m')} AS member_avatar, "
-    "tm.name AS team_name, tm.color AS team_color "
+    "tm.name AS team_name, tm.color AS team_color, "
+    "g.name AS group_name "
     "FROM member_tasks t JOIN members m ON m.id=t.member_id "
     "JOIN teams tm ON tm.id=t.team_id "
+    "LEFT JOIN team_groups g ON g.id=t.group_id "
 )
 
 # Sorting contract: member sort order first, then blocked/delayed tasks, then expected
@@ -321,9 +372,11 @@ def task_payload(
         "description": task.get("description", ""),
         "progressStatus": task.get("progress_status", "pending"),
         "healthStatus": task.get("health_status", "normal"),
-        "priority": task.get("priority") or "normal",
+        "priority": normalize_priority(task.get("priority")),
         "difficulty": task.get("difficulty") or "medium",
         "loadPoints": load_points(task),
+        "groupId": task.get("group_id") or "",
+        "groupName": task.get("group_name") or "",
         "expectedDate": task.get("expected_date", "") or "",
         "tagIds": stored_tag_ids,
         "tags": hydrated_tags,
@@ -358,7 +411,8 @@ def _member_workload(
     open_tasks = [task for task in tasks if task.get("progress_status") in OPEN_PROGRESS_STATUSES]
     completed_tasks = [task for task in tasks if task.get("progress_status") == "completed"]
     current_points = sum(load_points(task) for task in open_tasks)
-    raw_average = _average_points(tasks, windows)
+    effective_windows = _effective_window_weeks(tasks, member, windows)
+    raw_average = _average_points(tasks, windows, effective_windows)
     average_percent = _round_percent(raw_average / CAPACITY_POINTS * 100)
     return {
         "memberId": member["id"],
@@ -399,9 +453,9 @@ def build_workload_section(conn: sqlite3.Connection, team_id: str) -> dict[str, 
 
     Every person in the team is included, even with zero tasks, ordered by member sort
     order. When one account owns several archive rows inside the team, the rows are merged
-    into a single workload record — points and counters are summed over every archive's
-    tasks and the average is recomputed from the merged task set over the same four
-    rolling windows.
+    into a single workload record: points and counters are summed over every archive's
+    tasks and the average is recomputed from the merged task set over the same rolling
+    windows, divided by the windows that actually have data (effectiveWindowWeeks).
     """
     members = team_member_rows(conn, team_id)
     task_rows = rows(
@@ -417,6 +471,7 @@ def build_workload_section(conn: sqlite3.Connection, team_id: str) -> dict[str, 
     today = now.date()
     windows = _windows(now)
     workloads: list[dict[str, Any]] = []
+    effective_counts: list[int] = []
     for person in team_members(members):
         person_archive_ids = member_ids(person)
         person_tasks: list[dict[str, Any]] = []
@@ -425,7 +480,9 @@ def build_workload_section(conn: sqlite3.Connection, team_id: str) -> dict[str, 
         workload = _member_workload(person["primary"], person_tasks, windows, today)
         workload.update(identity_fields(person))
         workloads.append(workload)
+        effective_counts.append(_effective_window_weeks(person_tasks, person["primary"], windows))
     member_count = len(workloads)
+    effective_window_weeks = max(effective_counts) if effective_counts else WINDOW_WEEKS
     total_current = int(sum(item["currentPoints"] for item in workloads))
     total_average = _round_points(sum(item["averagePoints"] for item in workloads))
     average_per_member = total_average / member_count if member_count else 0.0
@@ -448,6 +505,8 @@ def build_workload_section(conn: sqlite3.Connection, team_id: str) -> dict[str, 
         "meta": {
             "capacityPoints": CAPACITY_POINTS,
             "windowWeeks": WINDOW_WEEKS,
+            "effectiveWindowWeeks": effective_window_weeks,
+            "maxPoints": TASK_MAX_POINTS,
             "windowLabel": WINDOW_LABEL,
             "scoring": SCORING_LABEL,
         },
@@ -457,7 +516,7 @@ def build_workload_section(conn: sqlite3.Connection, team_id: str) -> dict[str, 
 def build_tasks_payload(
     conn: sqlite3.Connection, team_id: str
 ) -> dict[str, Any]:
-    """Full GET /tasks payload: tasks plus workload section plus meta."""
+    """Full GET /tasks payload: tasks, workload section, task groups and meta."""
     today = local_now().date()
     tag_map = load_tag_map(conn, team_id)
     tasks = [task_payload(task, today, tag_map) for task in list_tasks(conn, team_id)]
@@ -466,5 +525,6 @@ def build_tasks_payload(
         "tasks": tasks,
         "workloads": section["workloads"],
         "summary": section["summary"],
+        "groups": list_group_payloads(conn, team_id, "task"),
         "meta": section["meta"],
     }

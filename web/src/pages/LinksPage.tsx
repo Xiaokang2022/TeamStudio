@@ -3,6 +3,7 @@ import {
   ArrowUpRight,
   Copy,
   ExternalLink,
+  Eye,
   Layers,
   Link2,
   Pencil,
@@ -58,10 +59,14 @@ const linkMark = (title: string): string => {
 };
 
 export default function LinksPage() {
-  const { currentTeam, canManageActiveTeam, config } = useApp();
+  const { currentTeam, config, data, isGuest } = useApp();
   const { toast } = useToast();
 
   const teamId = currentTeam?.id ?? "";
+  // Round 9: every signed-in member of the team may add / edit / delete links. Team
+  // membership is verified by the backend (a 403 is surfaced as a toast); guests are
+  // read-only.
+  const canEditLinks = Boolean(data?.me?.authenticated) && !isGuest;
   const accent = config?.site.theme.accent || "#5865f2";
 
   const [links, setLinks] = useState<LinkItem[]>([]);
@@ -264,13 +269,20 @@ export default function LinksPage() {
               </button>
             ) : null}
           </label>
-          {canManageActiveTeam ? (
+          {canEditLinks ? (
             <button type="button" className="btn btn-primary" onClick={openCreate}>
               <Plus size={15} /> 添加链接
             </button>
           ) : null}
         </div>
       </header>
+
+      {!canEditLinks ? (
+        <p className="links-readonly-note">
+          <Eye size={14} />
+          访客为只读模式：登录并加入团队后，即可添加、编辑或删除常用链接。
+        </p>
+      ) : null}
 
       {error ? (
         <div className="inline-error">
@@ -321,13 +333,13 @@ export default function LinksPage() {
         <EmptyState
           title="还没有常用链接"
           description={
-            canManageActiveTeam
+            canEditLinks
               ? "把文档、看板、设计稿的入口添加到这里，团队就不用再到处找链接了。"
-              : "管理员还没有整理常用链接，稍后再来看看吧。"
+              : "团队还没有整理常用链接，登录并加入团队后即可添加。"
           }
           icon={<Link2 size={24} />}
           action={
-            canManageActiveTeam ? (
+            canEditLinks ? (
               <button type="button" className="btn btn-primary" onClick={openCreate}>
                 <Plus size={15} /> 添加第一个链接
               </button>
@@ -403,7 +415,7 @@ export default function LinksPage() {
                   >
                     <ExternalLink size={14} />
                   </a>
-                  {canManageActiveTeam ? (
+                  {canEditLinks ? (
                     <>
                       <button
                         type="button"
